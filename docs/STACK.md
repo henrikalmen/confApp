@@ -20,10 +20,11 @@
 ## Infrastructure
 | Service  | Purpose | Notes |
 |----------|---------|-------|
-| Azure Functions | Serverless API | Confirmed. Runtime/version TBD |
-| Azure Static Web Apps | SPA hosting | Recommended pairing – integrates a managed Functions API and built-in auth |
+| API container | Long-running HTTP server (ADR-004) | Confirmed. Node HTTP framework and version TBD. Supersedes Azure Functions |
+| SPA container | Static-file server for the built web assets (ADR-004) | Confirmed. Supersedes Azure Static Web Apps |
+| Container platform | Runs the images in the cloud | Undecided – Azure Container Apps is the front-runner (`docs/DECISIONS.md` → Pending) |
 | PostgreSQL | Database | Confirmed (ADR-003). Docker Compose in development; production hosting decided in phase 2 |
-| Azure Notification Hubs | Push fan-out to APNs + FCM | Recommended, not yet confirmed |
+| Azure Notification Hubs | Push fan-out to APNs + FCM | Recommended, not yet confirmed. Push is deferred out of the current plan |
 
 ## External Services
 | Service | Purpose | Docs |

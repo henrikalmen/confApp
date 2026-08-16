@@ -5,7 +5,7 @@ Last Updated: 2026-08-16 13:30
 ## Current Phase
 <!-- Active phase/milestone name and one-line status -->
 
-Phase: Definition – product vision clarified, platform and backend decided; no code yet
+Phase: Phase 1: Foundation
 Status: On Track
 
 ## Active Stories
@@ -33,8 +33,11 @@ Status: On Track
 ## Recent Decisions
 <!-- Key decisions made in the last 1-2 sessions. Keep max ~10. Move older items to ADRs. -->
 
+- Plan created: Conference setup & schedule (13 stories, 3 phases, all spec-ready) (2026-08-16).
+- FR7 split: post-publish schedule editing planned; push notification deferred pending REQ-005 and the push delivery service decision – in-app propagation is the primary channel (2026-08-16).
+- Foundation (scaffold, sign-in, Capacitor shells) planned inside the Conference setup & schedule bundle rather than a separate Phase 2 plan (2026-08-16).
 - React SPA targeting browser + Android + iOS, responsive across viewports (2026-08-16).
-- Backend: serverless on Azure – Azure Functions API, Static Web Apps hosting (2026-08-16).
+- Backend: API and SPA ship as container images, cloud-deployed; ADR-004 accepted, superseding serverless on Azure (2026-08-16). Removed the PRD's cold-start carve-out and pre-warm requirement outright.
 - Mobile packaging: Capacitor – ADR-001 accepted (2026-08-16).
 - Scope: internal company app; store presence and iOS push required; no hardware access beyond the basics (2026-08-16).
 - Product clarified: internal conference app – schedule, presentations and workshops, post-its, voting, leadership report (2026-08-16).

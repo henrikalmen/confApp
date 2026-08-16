@@ -1,0 +1,570 @@
+{
+  "schemaVersion": "1",
+  "prd": "docs/specs/conference-setup-and-schedule/prd.md",
+  "references": [
+    "docs/adrs/ADR-001-mobile-packaging-capacitor.md",
+    "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md",
+    "docs/adrs/ADR-003-postgresql-containerized-development.md",
+    "docs/adrs/ADR-004-containerized-api-and-spa.md",
+    "docs/ARCHITECTURE.md",
+    "docs/STACK.md",
+    "docs/UBIQUITOUS_LANGUAGE.md",
+    "docs/DECISIONS.md",
+    "docs/ROADMAP.md",
+    "docs/guidelines/CRITICAL-RULES-AND-GUARDRAILS.md"
+  ],
+  "overview": {
+    "summary": "Delivers the Conference Setup and Schedule theme from an empty repository. P1 stands the stack up as a containerized tracer bullet and adds Google Workspace sign-in, because no code exists yet and the PRD names both as dependencies. P2 builds the feature slices in a dependency chain rooted in the conference lifecycle: schedule composition, join-by-code access, the attendee schedule view, per-conference roles, membership management, post-publish editing, and offline reads. P3 delivers the Capacitor shells and the container deployment in W9, then validates performance against that deployed environment in W10.\n\nADR-004 landed mid-planning and supersedes serverless on Azure: the API and SPA ship as container images. It eliminated the PRD's cold-start carve-out and pre-warm requirement outright rather than deferring them, reshaped S01 and S12, and added S13 - which also gives the availability NFR row an owner it previously lacked.\n\nFR7 is deliberately split. The schedule-editing half is planned in full (S09), including optimistic concurrency, in-app near-live refresh, and an in-app banner naming what changed. Push fan-out is not planned here: REQ-005 does not exist and the push delivery service is still Pending. Attendees are expected to be online, so in-app propagation is the primary channel.\n\nFR9 is merged into S03 rather than standing alone - archiving is a lifecycle transition enforced by the same state machine.",
+    "phases": [
+      {
+        "id": "P1",
+        "name": "Foundation",
+        "waves": [
+          "W1",
+          "W2"
+        ]
+      },
+      {
+        "id": "P2",
+        "name": "Feature slices",
+        "waves": [
+          "W3",
+          "W4",
+          "W5",
+          "W6",
+          "W7",
+          "W8"
+        ]
+      },
+      {
+        "id": "P3",
+        "name": "Hardening",
+        "waves": [
+          "W9",
+          "W10"
+        ]
+      }
+    ]
+  },
+  "sharedDecisions": [
+    {
+      "title": "API route, handler and error envelope conventions",
+      "description": "S01 fixes the HTTP route layout of the containerized API (ADR-004 - a long-running HTTP server, not the Azure Functions programming model), the request validation entry point, and the JSON error envelope carrying a user-facing message and a machine code; every later API story emits refusals through it rather than inventing per-endpoint shapes. The PRD's error handling is user-facing prose ('naming the reason', 'stating the permitted range'), so the envelope must carry a displayable message, not just a status.",
+      "stories": [
+        "S01",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07",
+        "S08",
+        "S09"
+      ]
+    },
+    {
+      "title": "Authenticated caller context",
+      "description": "S02 defines how an API request handler obtains the verified caller - the validated `sub`, the verified `hd` claim, and the `withAuth(handler)` wrapper signature that rejects unauthenticated or wrong-domain requests before handler code runs. The expected `aud` is an allow-list of confApp own per-platform client IDs, since Google issues a distinct client ID per platform. `sub` is the foreign key to `app_user.sub` for every downstream story; nothing keys on email. Consumed unchanged by every API story; no story re-implements token validation.",
+      "stories": [
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07",
+        "S08",
+        "S09"
+      ]
+    },
+    {
+      "title": "Per-conference authorization primitive",
+      "description": "S07 owns the canonical role check (caller's role within a named conference, plus the Presenter/Facilitator session-scope check). S03, S04 and S05 land before it and must express their checks through a single provisional helper with that same signature – creator-is-Admin at first – so S07 generalizes one call site pattern instead of rewriting scattered inline checks. S03 produces the helper's seam; S07 produces its full implementation.",
+      "stories": [
+        "S03",
+        "S04",
+        "S05",
+        "S07",
+        "S08",
+        "S09"
+      ]
+    },
+    {
+      "title": "Naive wall-clock time representation",
+      "description": "Session day, start and end times are naive wall-clock values end to end – no timezone conversion at any layer. S04 fixes the PostgreSQL column types (date and time without time zone), the JSON wire format, and the client-side parsing that must not coerce through a Date with an implicit local offset. S06, S09 and S10 consume that representation; a UTC round-trip anywhere silently breaks the PRD constraint.",
+      "stories": [
+        "S04",
+        "S06",
+        "S09",
+        "S10"
+      ]
+    },
+    {
+      "title": "Conference and Session timestamps - three fields, four consumers",
+      "description": "The plan originally described one timestamp serving two roles; the cross-cutting review confirmed it must be three, and conflating them causes real defects. (1) Session `lastUpdatedAt` is the per-Session row version S09 uses as the optimistic-concurrency base. (2) Conference `lastUpdatedAt` is a whole-schedule watermark advanced by every Session insert, update AND delete - S10 uses it as the reconnect cursor, and it must advance on delete or removals are invisible to the offline diff. (3) Conference `updated_at` is the Conference row's own version, the concurrency base for a name or date-span edit; it must NOT advance on Session writes, or S09's conflict detection becomes as noisy as the watermark. S04 owns fields 1 and 2 and must guarantee field 3 is left alone by its trigger; S03 owns field 3 and must return it on the Conference read. Two near-identically named columns on one table is the trap here - name them so the distinction is visible.",
+      "stories": [
+        "S03",
+        "S04",
+        "S06",
+        "S09",
+        "S10"
+      ]
+    },
+    {
+      "title": "Schedule read model and cache envelope",
+      "description": "S06 defines the single schedule payload the attendee view renders – sessions for a conference grouped by day, with the server timestamp used to compute the server–device clock offset. S10 caches exactly that envelope, so the offline render path reuses the online component tree rather than a parallel shape. S09's near-live refresh replaces the same envelope.",
+      "stories": [
+        "S06",
+        "S09",
+        "S10"
+      ]
+    }
+  ],
+  "bindingConstraints": [
+    {
+      "featureId": "FR3",
+      "anchor": "prd.md#fr3-conference-access-via-join-code",
+      "verbatim": "Repeated failed attempts → rate-limited to deter enumeration, without locking a legitimate employee out on the morning of day one. The limiter is keyed on the authenticated `sub`, never on client IP: the venue presents ~100 employees behind one NAT egress address at exactly the moment of peak joining, so an IP-keyed limiter would lock out the scenario this rule exists to protect. The counter is server-side state, not in-process (`AGENTS.md`)."
+    },
+    {
+      "featureId": "FR3",
+      "anchor": "prd.md#fr3-conference-access-via-join-code",
+      "verbatim": "Codes are unique across all conferences, including archived ones. A code circulated for a past conference must fail rather than silently resolve to a different one."
+    },
+    {
+      "featureId": "FR5",
+      "anchor": "prd.md#fr5-per-conference-role-assignment",
+      "verbatim": "Roles are Admin, Presenter/Facilitator, and Attendee. **Presenter/Facilitator is one role**, not two – per REQ-025, ADR-002, and `docs/UBIQUITOUS_LANGUAGE.md`. The two words describe what the holder is doing, not different permissions. […] Assignment is keyed on the user's stable `sub` claim, not email."
+    },
+    {
+      "featureId": "FR5",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Roles are confApp's own per-conference data and are never derived from directory groups (ADR-002)."
+    },
+    {
+      "featureId": "FR4",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Session times are **naive wall-clock values** – stored and displayed without timezone conversion. A session at 09:00 reads as 09:00 on every device regardless of its timezone setting."
+    },
+    {
+      "featureId": "FR8",
+      "anchor": "prd.md#fr8-offline-schedule-access",
+      "verbatim": "Offline scope is read-only – no schedule editing, joining, or leaving offline. […] Cached data is cleared on sign-out and when a different user signs in on the same device."
+    },
+    {
+      "featureId": "NFR",
+      "anchor": "prd.md#non-functional-requirements",
+      "verbatim": "Security | Access restricted to the company Google Workspace domain | `hd` claim verified server-side on every request (ADR-002) […] Portability | Database features used | Plain PostgreSQL only, no provider-specific extensions (ADR-003)"
+    },
+    {
+      "featureId": "NFR",
+      "anchor": "prd.md#non-functional-requirements",
+      "verbatim": "Usability | Responsive across targets | Verified at 375px / 768px / 1280px per `AGENTS.md`"
+    },
+    {
+      "featureId": "NFR",
+      "anchor": "prd.md#non-functional-requirements",
+      "verbatim": "Durability | Conference data survives the container lifecycle | Stopping, replacing, or recreating any container loses no data. A conference resumes in exactly the state it was left in [...] Durability | Database storage is independent of the container writing to it | PostgreSQL data lives on a **named volume** (or, where a managed PostgreSQL is used, that service's durable storage) - never in a container's writable layer, which is destroyed with the container"
+    }
+  ],
+  "stories": [
+    {
+      "id": "S01",
+      "name": "Containerized tracer bullet",
+      "phase": "P1",
+      "wave": "W1",
+      "dependsOn": [],
+      "parallel": false,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s01-tracer-bullet-skeleton.md",
+      "owner": null,
+      "scope": "Stand the stack up as one thin end-to-end slice, packaged the way it will ship. A React + TypeScript single-page app with a responsive shell that rescales across phone, tablet and desktop, built to static assets and served from a static-file container; a long-running HTTP API server in its own container; and PostgreSQL storing its data on a named volume so it outlives the container, all composed together with Docker Compose and reversible migration tooling. One trivial request travels SPA container to API container to database and back, proving the wiring, and written data survives stopping and recreating the database container, proving the volume. Establishes the API route and error-envelope conventions, the test/lint/format/build commands, the Dockerfiles and Compose definition, and fills in docs/KEY_DEVELOPMENT_COMMANDS.md and the pinned versions in docs/STACK.md. Excludes authentication, any conference domain entity or table, cloud deployment (S13), and the Capacitor shells (S11).",
+      "sourceRefs": [
+        "prd.md#dependencies",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": "No PRD feature – enabler. The repository contains no code, and the PRD's Dependencies table names the PostgreSQL schema and access layer as a prerequisite for every entity it defines. Corresponds to docs/ROADMAP.md Phase 2 (Scaffold), which is unstarted. Included on the owner's explicit direction that foundation work is in this plan.",
+      "assetRefs": [
+        "docs/adrs/ADR-003-postgresql-containerized-development.md",
+        "docs/adrs/ADR-004-containerized-api-and-spa.md",
+        "docs/STACK.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "notes": "Enabler story: verified by build/test/lint passing and the round-trip slice, not by a user-facing demo. ADR-004 supersedes the earlier Azure Functions design - the API is a plain long-running HTTP server, never the Functions programming model. Plain PostgreSQL only, no provider-specific extensions (ADR-003). Handlers hold no in-process state between requests, now because the API scales across replicas rather than because instances are transient. One artifact: what runs in development is what deploys. Data durability starts here: PostgreSQL writes to a named volume, never the container's writable layer. The API and SPA containers get no volume and need none - they hold no state, which is what makes the database the only component requiring durable storage."
+    },
+    {
+      "id": "S02",
+      "name": "Google Workspace sign-in",
+      "phase": "P1",
+      "wave": "W2",
+      "dependsOn": [
+        "S01"
+      ],
+      "parallel": false,
+      "risk": "high",
+      "status": "spec-ready",
+      "fis": "s02-google-workspace-sign-in.md",
+      "owner": null,
+      "scope": "An employee signs in with their company Google account and the API trusts the result. Covers the OIDC authorization-code + PKCE flow from the SPA, server-side validation of the ID token on every request (signature, issuer, audience, expiry, and the hosted-domain `hd` claim), a confApp user record keyed on the stable `sub` claim, the authenticated-caller context every later handler consumes, and sign-out. Excludes per-conference roles and any authorization decision beyond 'is this a verified employee' – those are S07.",
+      "sourceRefs": [
+        "prd.md#dependencies",
+        "prd.md#constraints",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": "No PRD feature – enabler. The PRD's Dependencies table lists Google Workspace OIDC sign-in as a prerequisite that 'every requirement here assumes'. Delivers ADR-002 and REQ-006.",
+      "assetRefs": [
+        "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md"
+      ],
+      "notes": "Security-critical. The `hd` request parameter is a UI hint only – the `hd` claim must be verified server-side or any Google account gets in. Never key a user on email. The flow must run in the system browser, never an embedded WebView; on web this is a redirect, and S11 wires the mobile equivalent."
+    },
+    {
+      "id": "S03",
+      "name": "Conference lifecycle",
+      "phase": "P2",
+      "wave": "W3",
+      "dependsOn": [
+        "S02"
+      ],
+      "parallel": false,
+      "risk": "low",
+      "status": "spec-ready",
+      "fis": "s03-conference-lifecycle.md",
+      "owner": null,
+      "scope": "An Organizer creates a Conference with a name and a 1–4 consecutive-day span and moves it through draft → published → archived, with archived conferences staying readable and visually distinguished. Covers creation and validation, the creator becoming the conference's first Admin, the publish gate requiring at least one Session, the one-way draft → published transition, archiving restricted to published conferences past their end date, and refusal of edits and joins on an archived conference. Delivers FR1 and FR9 together, since archiving is a transition of this same state machine. Excludes Session content (S04), join-code generation and joining (S05), and role assignment beyond seeding the creator as Admin (S07).",
+      "sourceRefs": [
+        "FR1",
+        "FR9",
+        "prd.md#fr1-conference-creation--lifecycle",
+        "prd.md#fr9-conference-archive",
+        "prd.md#data-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "FR1 and FR9 merged in the Consolidation Pass: shared implementation surface (one lifecycle state machine and its guards) and FR9 alone is trivially small. The publish gate here has a mirror in S04 – deleting the last session of a published conference is refused. Introduces the provisional authorization helper seam that S07 generalizes."
+    },
+    {
+      "id": "S04",
+      "name": "Schedule composition",
+      "phase": "P2",
+      "wave": "W4",
+      "dependsOn": [
+        "S03"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s04-schedule-composition.md",
+      "owner": null,
+      "scope": "An Organizer adds, edits and removes Sessions within a Conference's Days and sees the resulting Schedule ordered by start time. Covers the Session record (title, optional description, kind Presentation or Workshop, conference day, start and end time, location as free text), all field and range validation, the rule that a Session falls within a day of its Conference and never spans midnight, the refusal to delete the last remaining Session of a published Conference, and a persistent recomputed overlap indicator on the Organizer's schedule view – overlap is a warning, never an error, because Parallel Tracks are supported. Fixes the naive wall-clock time representation and the `lastUpdatedAt` field that S09 and S10 depend on. Excludes the attendee-facing view (S06) and assigning Presenters/Facilitators to Sessions (S07).",
+      "sourceRefs": [
+        "FR2",
+        "prd.md#fr2-schedule-composition",
+        "prd.md#data-requirements",
+        "prd.md#constraints"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "The overlap indicator must be persistent and recomputed on the organizer's schedule view, not only a save-time toast – the pre-publish 'review overlap warnings' flow step depends on it. Session assignment of Presenters/Facilitators is referenced by FR2 but owned by S07; S04 leaves the seam."
+    },
+    {
+      "id": "S05",
+      "name": "Join code access",
+      "phase": "P2",
+      "wave": "W5",
+      "dependsOn": [
+        "S03",
+        "S04"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s05-join-code-access.md",
+      "owner": null,
+      "scope": "A signed-in employee joins a published Conference by entering its join code, creating an Attendee Membership. Covers code generation on publish using a case-insensitive alphabet free of visually ambiguous characters, uniqueness across all Conferences including archived ones, refusal of codes for draft, archived, or past-end-date Conferences with the reason named, re-entry of an already-joined code as a no-op, Organizer viewing and regeneration with immediate invalidation of the prior code and no loss of existing Attendees, and server-side rate limiting of failed attempts keyed on the authenticated `sub`. Excludes leaving and Admin removal (S08) and what the Attendee then sees (S06).",
+      "sourceRefs": [
+        "FR3",
+        "prd.md#fr3-conference-access-via-join-code",
+        "prd.md#data-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md"
+      ],
+      "notes": "Two constraints are easy to violate by reflex and are pinned in bindingConstraints: the limiter is keyed on `sub` and never on client IP (one NAT egress fronts the whole venue), and its counter is server-side state rather than in-process, because the API scales horizontally across replicas. Refusals deliberately disclose the reason – the code is not a security boundary."
+    },
+    {
+      "id": "S06",
+      "name": "Attendee schedule view",
+      "phase": "P2",
+      "wave": "W6",
+      "dependsOn": [
+        "S04",
+        "S05"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s06-attendee-schedule-view.md",
+      "owner": null,
+      "scope": "An Attendee opens a Conference they joined and sees its Schedule for a chosen Day. Covers the day-navigable list showing title, start and end time, location and kind in start-time order; conference selection when the Attendee has joined more than one, defaulting to the running conference or the most recently joined; current-day default during the conference and day 1 outside it; concurrent Sessions marked as running at the same time rather than stacked as a sequence; the currently-running Session highlighted using server time corrected by the server–device offset from the last sync; explicit empty and error states; and legibility one-handed at 375px, rescaling to 768px and 1280px. Defines the schedule read model and cache envelope S10 reuses. Excludes offline behaviour (S10) and organizer editing (S04, S09).",
+      "sourceRefs": [
+        "FR4",
+        "prd.md#fr4-attendee-schedule-view",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "Concurrent Sessions are shown as concurrent, never as a choice to record – attendance is untracked and there is no Personal Agenda at this level. Times render as authored with no timezone conversion, so a wrong device clock may mis-highlight the running session but must never change the times shown. Responsive validation at the three widths is an acceptance criterion, not a follow-up."
+    },
+    {
+      "id": "S07",
+      "name": "Per-conference roles",
+      "phase": "P2",
+      "wave": "W6",
+      "dependsOn": [
+        "S03",
+        "S04",
+        "S05"
+      ],
+      "parallel": true,
+      "risk": "high",
+      "status": "spec-ready",
+      "fis": "s07-per-conference-roles.md",
+      "owner": null,
+      "scope": "An Admin assigns and revokes roles within a single Conference, and the API enforces them. Covers the three roles – Admin, Presenter/Facilitator (one role, not two), and Attendee – each scoped to the Conference it was granted in, keyed on the user's `sub`; assignment of a Presenter/Facilitator to specific Sessions, with authority over only those Sessions; any authenticated employee being able to create a Conference and becoming its first Admin; an Admin granting or revoking either role for any member; the last-Admin rule refusing removal of the final Admin; refusal to assign a user who has never signed in or to change roles on an archived Conference; and generalizing the provisional authorization helper into the canonical per-conference role check applied across the endpoints S03, S04 and S05 introduced. Excludes membership creation and revocation (S05, S08).",
+      "sourceRefs": [
+        "FR5",
+        "prd.md#fr5-per-conference-role-assignment",
+        "prd.md#data-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md",
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "The authorization backbone: this story retrofits the canonical check across earlier endpoints, which is why S03–S05 must route every check through one provisional helper rather than inline conditionals. Roles are confApp's own data and never derived from Google Workspace directory groups. Presenter/Facilitator as two separate roles is a recurring misreading – it is one role with identical permissions."
+    },
+    {
+      "id": "S08",
+      "name": "Membership management",
+      "phase": "P2",
+      "wave": "W7",
+      "dependsOn": [
+        "S05",
+        "S07"
+      ],
+      "parallel": true,
+      "risk": "low",
+      "status": "spec-ready",
+      "fis": "s08-membership-management.md",
+      "owner": null,
+      "scope": "An Attendee leaves a Conference they joined, and an Admin removes a member from theirs. Covers confirmation before leaving takes effect so a mis-tap during a session cannot trigger it, revocation of schedule access on leave or removal, re-joining with the code unless the Conference is archived, removal restricted to Admins of that Conference, the last-Admin rule blocking an Admin from leaving or self-demoting while they are the last one, removal of a non-member treated as a no-op, refusal of membership changes on an archived Conference, and retention of historical records – only the Membership and its access end. Excludes joining itself (S05) and role assignment (S07).",
+      "sourceRefs": [
+        "FR6",
+        "prd.md#fr6-conference-membership-management",
+        "prd.md#edge-cases"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "Access ends at the next request – there is no live eviction of a member who is mid-session. Revoking a Membership must not cascade-delete anything the user produced."
+    },
+    {
+      "id": "S09",
+      "name": "Live schedule editing",
+      "phase": "P2",
+      "wave": "W7",
+      "dependsOn": [
+        "S04",
+        "S06",
+        "S07"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s09-live-schedule-editing.md",
+      "owner": null,
+      "scope": "An Organizer changes a published Conference and Attendees see the change without reloading. Covers post-publish editing of every Session field including day, addition and deletion of Sessions, editing of the Conference name and date span with shortening refused while Sessions fall outside the new span, refusal to move a Session outside the span, optimistic concurrency rejecting a second save whose base `lastUpdatedAt` has moved and showing the editor the newer version, a lifecycle transition winning over an in-flight edit with the new state named, recorded change timestamps, and the attendee schedule view reflecting changes within the near-live window of a few seconds. Delivers FR7 minus push fan-out. Excludes push notification delivery and the debounce/trivial-edit notification rules, which depend on push infrastructure that does not exist.",
+      "sourceRefs": [
+        "FR7",
+        "prd.md#fr7-live-schedule-changes--notification",
+        "prd.md#edge-cases",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "Deliberate narrowing, decided by the owner: FR7's own text states the schedule edit has no push dependency and can ship without notification, and REQ-005 plus the push delivery service remain open (docs/DECISIONS.md → Pending). In-app propagation is the primary channel for this release because attendees are expected to be online; push is a follow-on requirement, not silent scope loss. In-app visibility is what satisfies the PRD's ~5s propagation NFR row here."
+    },
+    {
+      "id": "S10",
+      "name": "Offline schedule access",
+      "phase": "P2",
+      "wave": "W8",
+      "dependsOn": [
+        "S06",
+        "S09"
+      ],
+      "parallel": false,
+      "risk": "high",
+      "status": "spec-ready",
+      "fis": "s10-offline-schedule-access.md",
+      "owner": null,
+      "scope": "A Schedule loaded once stays readable with no connection. Covers caching the schedule at join time so joining online is sufficient, rendering the cached schedule offline through the same view as online, stating that the data is cached and when it was last updated, an explicit 'not available offline' state for a Conference never loaded online, automatic refresh when connectivity returns, and a 'what changed' summary on reconnect built from the cached timestamp – the fallback channel for an Attendee who was offline while the schedule moved. Cache is scoped per Conference and per user and is cleared on sign-out and when a different user signs in on the same device. Offline scope is strictly read-only.",
+      "sourceRefs": [
+        "FR8",
+        "prd.md#fr8-offline-schedule-access",
+        "prd.md#edge-cases",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-001-mobile-packaging-capacitor.md"
+      ],
+      "notes": "Offline support must not widen beyond schedule reads – no editing, joining, or leaving offline, and no sync conflict resolution, which is a product anti-goal. Cache clearing on user switch is a privacy requirement, not a nicety: a shared device must never show one employee the previous signer's conference. The 'what changed' summary carries the load FR7's push would otherwise carry for an offline attendee."
+    },
+    {
+      "id": "S11",
+      "name": "Capacitor mobile shells",
+      "phase": "P3",
+      "wave": "W9",
+      "dependsOn": [
+        "S02",
+        "S06",
+        "S10"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s11-capacitor-mobile-shells.md",
+      "owner": null,
+      "scope": "The same built web assets run as native Android and iOS applications. Covers Capacitor project setup for both platforms, a working device build of each, the OIDC sign-in round trip through the system browser with the redirect returning into the app, offline schedule reads verified on device, and responsive verification on real phone and tablet form factors. Excludes push notification plumbing, which has no delivery service decided, and app-store distribution, whose channel is still Pending.",
+      "sourceRefs": [
+        "prd.md#constraints",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": "No PRD feature – enabler. ADR-001 makes Capacitor packaging binding and the PRD's constraints state all three surfaces share one codebase; REQ-002 requires Android and iOS from the same codebase. Not an acceptance criterion of any FR, so it is sequenced last where it validates the finished slice rather than blocking it.",
+      "assetRefs": [
+        "docs/adrs/ADR-001-mobile-packaging-capacitor.md"
+      ],
+      "notes": "The OIDC flow must use ASWebAuthenticationSession on iOS and Chrome Custom Tabs on Android – Google blocks embedded WebViews and they are a credential-interception risk. Distribution channel remains undecided (docs/DECISIONS.md → Pending); building the shells does not require closing it."
+    },
+    {
+      "id": "S12",
+      "name": "Performance validation",
+      "phase": "P3",
+      "wave": "W10",
+      "dependsOn": [
+        "S06",
+        "S10",
+        "S13"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s12-performance-hardening.md",
+      "owner": null,
+      "scope": "The schedule meets its stated numbers under conference conditions, measured against the deployed environment S13 produces. Covers a repeatable measurement of the attendee schedule render against the p95 under one second target, and a load check at 100 concurrent attendees at a session boundary still meeting that target. Produces the measurement harness and whatever indexing or payload shaping the measurements show is needed - baseline first, optimization only with a recorded before and after. Excludes the cold-start and pre-warm requirements, which ADR-004 eliminated rather than deferred, and the availability requirement, which S13 owns.",
+      "sourceRefs": [
+        "prd.md#non-functional-requirements",
+        "prd.md#executive-summary"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/ARCHITECTURE.md",
+        "docs/adrs/ADR-004-containerized-api-and-spa.md"
+      ],
+      "notes": "Enabler story: verified by measurement against the PRD's thresholds rather than a user-facing demo. ADR-004 removes the PRD's 'excluding serverless cold start' carve-out and its separate pre-warm row - a long-running container serves its first request as fast as its thousandth, so the p95 target becomes a single unqualified number. The PRD's NFR table is stale on this point and should be corrected when it is next revised. Measuring against S13's deployed environment is what makes these criteria falsifiable; a local-only harness cannot fail them."
+    },
+    {
+      "id": "S13",
+      "name": "Container build and deployment",
+      "phase": "P3",
+      "wave": "W9",
+      "dependsOn": [
+        "S01"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "spec-ready",
+      "fis": "s13-container-build-and-deployment.md",
+      "owner": null,
+      "scope": "The application reaches a running cloud environment as container images. Covers reproducible image builds for the API and SPA, image publication to a registry, deployment of both plus a reachable PostgreSQL to a cloud container platform, configuration and secret handling that keeps no credentials in the repository, a health and readiness signal per service, durable database storage that outlives any container so a conference resumes intact after a stop, replacement, or host reboot, and the availability posture for conference hours - no planned downtime across the conference date span, with a documented restart and rollback path. Produces the environment S12 measures against. Excludes choosing the production database host and the container platform where those remain open decisions; the deployment must work against a configured target without hard-coding either.",
+      "sourceRefs": [
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": "No PRD feature - enabler, added after the cross-cutting review found the PRD's availability NFR row ('No planned downtime across the conference date span') owned by no story, and S12's performance criteria unfalsifiable because nothing in the plan produced a deployed environment. ADR-004 makes container deployment the shipping model, so this story is where that lands.",
+      "assetRefs": [
+        "docs/adrs/ADR-004-containerized-api-and-spa.md",
+        "docs/adrs/ADR-003-postgresql-containerized-development.md"
+      ],
+      "notes": "Two decisions are still Pending in docs/DECISIONS.md - the container platform and production database hosting. This story must not close either by hard-coding a choice: deploy against a configured target so the platform stays replaceable, which is the portability property ADR-003 and ADR-004 both exist to protect. Never commit .env files or credentials. Durability is deployment-shaped, not code-shaped: where PostgreSQL runs as a container the data belongs on a named volume, and where a managed PostgreSQL is used the provider supplies the equivalent guarantee - satisfy the requirement either way without closing the hosting decision. A named volume survives the container, not the deletion of the volume or the loss of its host, so it is not a backup; ADR-003 makes backups an explicit responsibility and the restore path must be exercised rather than assumed."
+    }
+  ],
+  "riskSummary": [
+    {
+      "story": "S01",
+      "risk": "medium",
+      "mitigation": "Empty repository, unpinned versions in docs/STACK.md, and a container topology none of it has run in yet. Pin every version as part of this story and prove the SPA container to API container to PostgreSQL path with a running round trip before any feature story starts."
+    },
+    {
+      "story": "S02",
+      "risk": "high",
+      "mitigation": "Security-critical and unforgiving. Cover `hd`-claim verification, signature/issuer/audience/expiry validation, and `sub`-keyed identity with explicit negative tests – a token from a non-company Google account and a token with a tampered `hd` must both be refused."
+    },
+    {
+      "story": "S04",
+      "risk": "medium",
+      "mitigation": "The naive wall-clock representation and `lastUpdatedAt` are consumed by three later stories. Pin both in tests that assert no timezone coercion across the DB → API → client boundary before S06, S09 and S10 build on them."
+    },
+    {
+      "story": "S05",
+      "risk": "medium",
+      "mitigation": "The rate limiter is the trap: it must key on `sub` and hold its counter in server-side storage, not in an API process. Test it with many attempts from one apparent client and with concurrent attempts from distinct users."
+    },
+    {
+      "story": "S06",
+      "risk": "medium",
+      "mitigation": "Carries the responsive acceptance bar and the clock-offset logic. Capture screenshots at 375px, 768px and 1280px, and test the running-session highlight against a device clock deliberately skewed from server time."
+    },
+    {
+      "story": "S07",
+      "risk": "high",
+      "mitigation": "Retrofits authorization across endpoints written in three earlier stories. Enforce the shared provisional-helper decision in S03–S05 so this story replaces one implementation, and add negative authorization tests per endpoint – a Presenter/Facilitator must fail on a session not assigned to them."
+    },
+    {
+      "story": "S09",
+      "risk": "medium",
+      "mitigation": "Optimistic concurrency and near-live refresh are both easy to under-test. Drive the two-Admins-editing case and the lifecycle-transition-during-edit case explicitly, and assert the attendee view updates within the near-live window without a manual reload."
+    },
+    {
+      "story": "S10",
+      "risk": "high",
+      "mitigation": "Offline caching invites scope creep into sync and conflict resolution, an explicit product anti-goal. Hold the read-only boundary, and test cache clearing on sign-out and user switch as a privacy requirement rather than a cleanup detail."
+    },
+    {
+      "story": "S11",
+      "risk": "medium",
+      "mitigation": "First contact with native toolchains for both platforms. Keep the story to shell build, system-browser sign-in round trip, and on-device verification; anything requiring the undecided distribution channel is out."
+    },
+    {
+      "story": "S12",
+      "risk": "medium",
+      "mitigation": "Targets are meaningless without a repeatable measurement, and a local-only harness cannot fail them. Build the harness first, record a baseline against S13's deployed environment, and let measurements drive any indexing work rather than optimizing speculatively."
+    },
+    {
+      "story": "S13",
+      "risk": "medium",
+      "mitigation": "First deployment of the system, against two platform decisions that are still open. Keep every target configurable so neither the container platform nor the production database host is closed by implementation; verify the availability posture by an actual restart and rollback, not by assertion. Prove durability across an actual container replacement, and keep the named-volume path and the managed-database path both satisfiable so neither hosting option is foreclosed."
+    },
+    {
+      "story": "S01",
+      "risk": "medium",
+      "mitigation": "The durability guarantee is easy to write and easy to get silently wrong - an anonymous volume, a bind mount, or a missing volume declaration all look fine until data vanishes. Prove it by destroying and recreating the database container and reading the data back, not by inspecting the Compose file."
+    }
+  ],
+  "executionNotes": "Run P1 strictly in order - S01 then S02 - since every later story depends on the stack and the authenticated caller context. P2 is a dependency chain through W3-W5 (S03 -> S04 -> S05) with genuine parallelism only from W6 onward: S06 and S07 run together, then S08 and S09, then S10. P3 runs S11 and S13 in W9, then S12 in W10 once a deployed environment exists to measure against.\n\nARCHITECTURE CHANGE, mid-planning: ADR-004 supersedes the earlier serverless-on-Azure decision. The API and SPA ship as container images; Azure Functions and Static Web Apps are dropped. This eliminated the PRD's 'excluding serverless cold start' performance carve-out and its separate pre-warm requirement rather than deferring them, reshaped S01 and S12, and added S13. The PRD's non-functional-requirements table is stale on those two rows and should be corrected when it is next revised - the requirements were removed by a design change, not dropped.\n\nThree deliberate scope decisions, all made with the owner and recorded so they are not mistaken for drift. First, S01, S02, S11 and S13 have no PRD feature - they are enablers covering the empty repository, the PRD's own Dependencies table, and ADR-004's shipping model. Second, FR7 is split: S09 delivers post-publish schedule editing with optimistic concurrency and in-app near-live propagation, and push fan-out is excluded because REQ-005 does not exist and the push delivery service is still Pending in docs/DECISIONS.md; attendees are expected to be online and see changes when they open the schedule, so in-app propagation is the primary channel and push remains a follow-on requirement. Third, assigning a Presenter/Facilitator to a Session is not required before publish - the owner confirmed it may happen during the conference - so PRD User Flow 1's ordering is indicative, not binding.\n\nFR9 was merged into S03 during the Consolidation Pass - archiving is a transition of the same lifecycle state machine, and FR9 alone produced a barely-populated spec.\n\nA Durability requirement was added to the PRD by the owner after the bundle was first specced (see its Amendment (b) note): conference data must survive the container lifecycle, with PostgreSQL on a named volume, so a conference resumes intact after a container stops or is replaced. It is owned by S01 for the composed topology and S13 for the deployed one. No new story was created - both stories already own the surfaces involved, and a story whose whole content is one volume declaration would be over-granular.\n\nSeveral constraints are violated by reflex and are carried in bindingConstraints rather than left to memory: the join-code limiter keys on `sub` and never on client IP, and its counter must be atomic under concurrency; role assignment keys on `sub` and never on email; Presenter/Facilitator is one role, not two; session times never round-trip through a timezone; only plain PostgreSQL features are permitted; and the ID token's `aud` is validated against an allow-list of confApp's own per-platform client IDs, since Google issues a distinct client ID per platform."
+}

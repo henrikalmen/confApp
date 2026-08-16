@@ -22,10 +22,11 @@ _The rules in_ `docs/guidelines/CRITICAL-RULES-AND-GUARDRAILS.md` _must always b
 
 - **confApp** is a cross-platform application delivered as a **React single-page app** that runs in the browser and on **Android and iOS**.
 - The UI is **responsive** – layouts rescale to the viewport rather than targeting fixed breakpoints only. Treat "works from small phone to desktop" as a standing acceptance criterion, not a per-feature ask.
-- **Backend is serverless on Azure** – Azure Functions for the API, Azure Static Web Apps for hosting. Design stateless, cold-start-tolerant handlers.
+- **The API and SPA ship as container images** – the API is a long-running HTTP server, the SPA static assets behind a static-file container (ADR-004). Cloud is the target deployment; the same images run under Docker Compose locally. Supersedes the earlier Azure Functions / Static Web Apps position – do not write against the Functions programming model.
 - **The database is PostgreSQL**, run locally via Docker Compose (ADR-003). Production hosting is a deliberate phase-2 decision – write portable SQL and do not depend on a specific managed provider's extensions.
-- **Sign-in is Google Workspace via OIDC**, not Entra – the company runs on Google and Entra coverage is incomplete (ADR-002). Auth code + PKCE, system browser on mobile, bearer tokens validated by the Functions API.
+- **Sign-in is Google Workspace via OIDC**, not Entra – the company runs on Google and Entra coverage is incomplete (ADR-002). Auth code + PKCE, system browser on mobile, bearer tokens validated by the container API. The `aud` claim is checked against an allow-list of confApp's own per-platform client IDs – Google issues a distinct client ID per platform, so a single expected value would refuse every mobile sign-in.
 - **Mobile is packaged with Capacitor** – the same built web assets run in a native WebView shell on Android and iOS. See `docs/adrs/ADR-001-mobile-packaging-capacitor.md`.
+- **One artifact everywhere** – what runs in development is what deploys. Do not introduce a second runtime shape for production (ADR-004).
 - **Internal company app** – employees (under 100), not the public. Reused for a new conference each time.
 - **Near-live is enough** – a few seconds of latency is acceptable everywhere; hard real-time infrastructure is not warranted.
 - **Partial offline is required** – the schedule must be readable without a connection, and a typed post-it must survive a network blip and sync later. Everything else assumes connectivity.
@@ -116,7 +117,7 @@ _**TODO**: List project guideline files here, e.g.: **Read** `docs/guidelines/<T
 
 - **Never ship a fixed-width or desktop-only layout** – confApp targets browser, Android, and iOS from one codebase; a layout that does not rescale is a defect, not a follow-up.
 - **Never tie the schema to a managed provider's proprietary features** – production hosting is undecided (ADR-003) and portability is the reason PostgreSQL was chosen. Plain PostgreSQL only unless a dependency is argued for explicitly.
-- **Never rely on in-process state between requests** – the API is serverless; instances are transient and requests are not sticky.
+- **Never rely on in-process state between requests** – the API scales horizontally across replicas and requests are not sticky. This rule predates ADR-004 and survives it unchanged; only the reason moved from transient Function instances to multiple container replicas. Counters, rate limiters, and session-ish state belong in PostgreSQL.
 - **Never attribute a vote to a voter** – anonymity is a storage-level guarantee. Do not persist a link between voter identity and ballot "just in case"; a schema that could deanonymize is a defect even if no screen shows it.
 - **Never key a user on their email address** – use the OIDC `sub` claim. Emails change; `sub` doesn't.
 - **Never trust the `hd` request parameter as a domain restriction** – it is a hint to Google's sign-in UI. Verify the `hd` claim on the ID token server-side, or anyone with a Google account gets in.

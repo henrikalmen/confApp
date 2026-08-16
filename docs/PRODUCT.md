@@ -64,7 +64,7 @@ There is no incumbent tool to displace. The alternative today is email, slides, 
 
 - **Business**: internal tool for a company of under 100 employees. No external revenue, no hard deadline. Reused for a new conference each time rather than rebuilt.
 - **Regulatory**: employee data under GDPR. The anonymity guarantee on voting is a **hard** constraint, not a UI convention – votes must be genuinely unlinkable to the voter in storage, not merely hidden in the interface. Named post-its and anonymous votes therefore have different privacy and retention handling.
-- **Technical**: React SPA packaged with Capacitor for Android and iOS (ADR-001); serverless Azure backend (Functions + Static Web Apps); sign-in via Google Workspace OIDC (ADR-002) – the company runs on Google, so identity does not follow the cloud provider; near-live updates acceptable; partial offline support required (schedule reads, post-it queueing).
+- **Technical**: React SPA packaged with Capacitor for Android and iOS (ADR-001); containerized backend and SPA, cloud-deployed (ADR-004); sign-in via Google Workspace OIDC (ADR-002) – the company runs on Google, so identity does not follow the cloud provider; near-live updates acceptable; partial offline support required (schedule reads, post-it queueing).
 
 ## Roadmap Themes
 

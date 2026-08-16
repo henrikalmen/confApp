@@ -8,7 +8,7 @@
 
 **Success Criteria:**
 - [x] `docs/PRODUCT.md` states confApp's purpose, target users, and key capabilities
-- [x] Backend decision settled – serverless on Azure (`docs/DECISIONS.md`)
+- [x] Backend decision settled – containerized API + SPA, cloud-deployed (ADR-004, superseding the earlier serverless-on-Azure position)
 - [x] Mobile packaging strategy settled – Capacitor (ADR-001)
 - [x] Auth settled – Google Workspace OIDC (ADR-002)
 - [x] Database engine chosen – PostgreSQL (ADR-003)

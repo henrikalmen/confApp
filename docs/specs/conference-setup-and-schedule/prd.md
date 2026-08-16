@@ -2,7 +2,11 @@
 
 > **Source Trust**: trusted-local
 > **Context**: Roadmap theme "Conference setup & schedule" (`docs/ROADMAP.md`, Phase 3 MVP). Requirements REQ-007, REQ-008, REQ-009, REQ-025, REQ-026, REQ-027, REQ-029, REQ-033 (`docs/PRODUCT-BACKLOG.md`).
-> **Related Assets**: ADR-001 (Capacitor packaging), ADR-002 (Google Workspace OIDC, per-conference roles), ADR-003 (PostgreSQL). Domain terms per `docs/UBIQUITOUS_LANGUAGE.md`.
+> **Related Assets**: ADR-001 (Capacitor packaging), ADR-002 (Google Workspace OIDC, per-conference roles), ADR-003 (PostgreSQL), ADR-004 (containerized API + SPA, superseding serverless on Azure). Domain terms per `docs/UBIQUITOUS_LANGUAGE.md`.
+>
+> **Amendment 2026-08-16 (b)**: added Durability non-functional requirements, four Edge Cases rows, and a Constraints entry covering data survival across the container lifecycle – named volumes for PostgreSQL, and a conference resuming intact after a container stops or is replaced. Raised by the owner once the backend became containerized; it makes explicit a guarantee FR9 and the no-retention-limit constraint already depended on.
+>
+> **Amendment 2026-08-16 (a)**: ADR-004 was accepted during planning and supersedes the serverless-on-Azure backend this PRD was written against. Two Non-Functional Requirements rows – the "excluding serverless cold start" carve-out on the p95 target, and the "API is warm during conference hours" pre-warm row – were **eliminated by that design change, not deferred**, and have been struck. The corresponding Decisions Log row is marked superseded. No other requirement is affected.
 
 
 ## Executive Summary
@@ -393,12 +397,14 @@ The smallest release that solves the problem: an organizer creates a conference,
 
 | Category | Requirement | Threshold / Target |
 |----------|-------------|--------------------|
-| Performance | Schedule view renders on a phone over venue wifi | p95 < 1s, **excluding serverless cold start** |
-| Performance | API is warm during conference hours | No attendee-facing request pays a cold start across the conference date span (pre-warm or equivalent) |
+| Performance | Schedule view renders on a phone over venue wifi | p95 < 1s |
 | Performance | Published schedule changes reach attendee devices | Within ~5s (near-live per `docs/DECISIONS.md`) |
 | Capacity | Concurrent attendees during a session boundary | 100 concurrent, still meeting the p95 < 1s render target |
 | Reliability | Schedule readable when the venue network is unavailable | A schedule loaded at least once always renders (FR8; a never-loaded conference is explicitly out) |
 | Reliability | Availability during conference hours | No planned downtime across the conference date span |
+| Durability | Conference data survives the container lifecycle | Stopping, replacing, or recreating any container loses no data. A conference resumes in exactly the state it was left in – lifecycle state, sessions, memberships, and role assignments all intact |
+| Durability | Database storage is independent of the container writing to it | PostgreSQL data lives on a **named volume** (or, where a managed PostgreSQL is used, that service's durable storage) – never in a container's writable layer, which is destroyed with the container |
+| Durability | Application containers hold nothing that needs saving | The API and SPA containers are destroyable and recreatable at any time. This is a consequence of the standing no-in-process-state rule, and it is what makes the database the only component needing durable storage |
 | Security | Access restricted to the company Google Workspace domain | `hd` claim verified server-side on every request (ADR-002) |
 | Security | Join code resists enumeration | Rate-limited attempts; code is not the security boundary |
 | Usability | Schedule legible one-handed on a phone | Readable at 375px width without horizontal scroll |
@@ -431,6 +437,10 @@ Rows sourced from a P1 requirement (the ~5s propagation row and the offline-read
 | Two Admins edit the same session at once | The second save is refused when the session's last-updated timestamp has moved; the editor is shown the newer version | Re-apply the edit on top of the current version |
 | One Admin archives or publishes while another is mid-edit | The lifecycle transition wins; the in-flight edit is refused with the new state named | Re-open the conference in its current state |
 | Attendee is offline for the whole window in which a session moves | Push is undeliverable; on reconnect the change appears in the "what changed" summary (FR8) | None needed – the summary is the fallback channel |
+| The database container stops, is replaced, or the host reboots mid-conference | Data is intact on the named volume. The API reconnects and the schedule is unchanged; the conference resumes where it was | Attendees may see a transient error and retry – no data is re-entered |
+| An API or SPA container is destroyed and recreated | Returns identically – neither holds state. Only the database's volume carries data | None needed |
+| A past conference is opened long after the event, on infrastructure since restarted many times | The archived conference reads exactly as it did on the day (FR9) | None needed – this is the archive's purpose, and it depends on the durability rows above |
+| The **named volume itself** is deleted, or its host is lost | Data is gone. A named volume protects against container loss, **not** against volume or host loss, and is not a backup | Restore from a backup – which is why the restore path must be exercised, not assumed (ADR-003 makes backups an explicit responsibility) |
 
 
 ## Constraints & Assumptions
@@ -442,8 +452,9 @@ Rows sourced from a P1 requirement (the ~5s propagation row and the offline-read
 - The client is a React SPA packaged with Capacitor for Android and iOS (ADR-001); all three surfaces share one codebase.
 - Persistence is plain PostgreSQL with no provider-specific features, because production hosting is a deferred phase-2 decision (ADR-003).
 - Updates are near-live – a few seconds of latency is acceptable, and hard real-time infrastructure is out of scope (`docs/DECISIONS.md`).
-- The conference is a fixed-date offsite event; venue wifi is assumed unreliable.
+- The conference is a fixed-date offsite event; venue wifi is assumed unreliable. **"Fixed-date" describes the event, not the schedule**: the days are committed and cannot be postponed, which is why reliability on the day matters. The schedule *within* those days is expressly mutable – sessions move, get prolonged, are added and deleted mid-event (FR7), and even the conference's own date span is editable after publish, subject only to not orphaning sessions outside it.
 - Employee data falls under GDPR (`docs/PRODUCT.md` → Strategic Constraints). This theme's personal data is limited to Membership and Role Assignment – who joined a conference and what they were allowed to do in it. Because attendance is not tracked (FR6), no record exists of which sessions an individual attended, which keeps this theme's privacy surface small.
+- **Data durability is a storage property, not an application one.** The database's data lives on a named volume, decoupled from the lifecycle of the container serving it, so a conference survives restarts, replacements, and shutdowns. This is what makes the archive (FR9) and the no-retention-limit rule below mean anything: a promise to keep records indefinitely is empty if the records live in a container's writable layer. **A named volume is not a backup** – it survives the container, not the deletion of the volume or the loss of its host (ADR-003).
 - **No retention limit is set.** Conference records are kept indefinitely; nothing expires or is auto-deleted. This is a deliberate decision – the archive's value is that it does not decay. Note that this governs *automatic* deletion only: GDPR erasure rights are unaffected, so the data must still be deletable on request even though nothing deletes it on a schedule.
 - Session times are **naive wall-clock values** – stored and displayed without timezone conversion. A session at 09:00 reads as 09:00 on every device regardless of its timezone setting.
 
@@ -483,7 +494,7 @@ Rows sourced from a P1 requirement (the ~5s propagation row and the offline-read
 | Any employee may create a conference and becomes its first Admin | Under 100 people, internal, and drafts are invisible until published, so a stray conference harms nobody. Avoids inventing an instance-level permission that would itself need seeding | An app-level Organizer group; creation rights inherited from holding Admin elsewhere |
 | An Admin may promote members to Admin or Presenter/Facilitator | Keeps the organizer from being a bottleneck without introducing any authority above the conference | Only the creator may assign roles |
 | Attendees may leave and Admins may remove members | Two conferences can be joinable at once, so joining the wrong one is reachable; without removal it was a permanent dead end | Attendee self-service only; deferring removal entirely |
-| The p95 render target excludes serverless cold start, with the API kept warm during the conference | The first attendee each morning would otherwise absorb a cold Function and see the app as slow at the worst moment | Counting cold start in the p95; accepting cold starts unmitigated |
+| ~~The p95 render target excludes serverless cold start, with the API kept warm during the conference~~ **Superseded 2026-08-16 by [ADR-004](../../adrs/ADR-004-containerized-api-and-spa.md)** | The concern was real under Azure Functions – the first attendee each morning would absorb a cold start at the worst moment. ADR-004 replaced Functions with a long-running containerized API, which serves its first request as fast as its thousandth. The carve-out and the pre-warm requirement are **eliminated, not deferred**: the p95 is now a single unqualified number | Counting cold start in the p95; accepting cold starts unmitigated; keeping Functions and implementing a timer-based pre-warm |
 | No data retention limit | The archive is meant to persist; an expiry would erode the record confApp exists to create. Personal data here is only membership and role, and erasure on request remains available regardless | A fixed retention window with automatic deletion |
 | Live edits permitted, with attendees notified | Conferences slip; a schedule that cannot change is wrong by mid-morning of day one | Frozen after publish; live edits without notification |
 | Notification volume is controlled by debouncing and by ignoring trivial edits, not by targeting | Every attendee is notified since attendance is untracked, so restraint has to come from *what* triggers a notification rather than *who* receives it | Targeting by agenda membership; notifying on every field change |

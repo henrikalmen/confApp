@@ -17,6 +17,7 @@
 | [ADR-001](adrs/ADR-001-mobile-packaging-capacitor.md) | Package the React SPA with Capacitor for mobile distribution | Accepted | Client delivery – web, Android, iOS |
 | [ADR-002](adrs/ADR-002-authenticate-with-google-workspace-oidc.md) | Authenticate with Google Workspace via OIDC | Accepted | Identity and access |
 | [ADR-003](adrs/ADR-003-postgresql-containerized-development.md) | PostgreSQL as the database, containerized for development | Accepted | Data persistence |
+| [ADR-004](adrs/ADR-004-containerized-api-and-spa.md) | Package the API and SPA as containers, superseding serverless on Azure | Accepted | Backend runtime and hosting |
 
 ## Superseded
 
@@ -25,7 +26,7 @@
 
 | Prior Decision | Superseded By | Notes |
 |----------------|---------------|-------|
-| ... | ... | ... |
+| **Backend: serverless on Azure** – Azure Functions for the API, Azure Static Web Apps hosting the SPA _(2026-08-16)_ | [ADR-004](adrs/ADR-004-containerized-api-and-spa.md) | Dropped in favour of container images for both API and SPA. Cold start had forced an exception into the PRD's own performance target and a story whose only job was keeping instances warm; containers remove the requirement rather than satisfy it. Cloud remains the deployment target. |
 
 ## Still Current
 
@@ -36,7 +37,8 @@
 - **Responsiveness**: layout rescales to viewport across phone/tablet/desktop rather than targeting a single form factor – it is a product property, not a per-feature nicety _(2026-08-16)_.
 - **Issue tracker**: GitHub – agent issue workflows read and publish there _(2026-08-16)_. See `docs/ISSUE-TRACKER.md`.
 - **Agent instruction layout**: `AGENTS.md` holds shared content; `CLAUDE.md` is a thin `@AGENTS.md` import – keeps one authored home while staying portable across Claude Code and Codex/generic agents _(2026-08-16)_.
-- **Backend**: serverless on **Azure** – Azure Functions for the API, with Azure Static Web Apps the natural host for the React SPA (it integrates a managed Functions API and built-in auth). Chosen for fit with existing Azure tooling and to avoid owning always-on infrastructure _(2026-08-16)_. Warrants promotion to a full ADR once the database and auth choices land alongside it.
+- **Backend**: the API and SPA ship as **container images** – the API a long-running HTTP server, the SPA static assets behind a static-file container _(2026-08-16, ADR-004)_. Cloud is the target deployment (Azure Container Apps the natural fit); local-server deployment is a retained capability, not a supported path, because Google Workspace OIDC needs internet reachability at sign-in. Supersedes the earlier serverless-on-Azure position.
+- **Statelessness**: handlers hold no state between requests _(2026-08-16)_. The rule predates ADR-004 and survives it – the reason changed from transient Function instances to horizontal scaling across replicas, but the constraint is identical and still binding.
 - **Audience**: internal – company employees, not the public _(2026-08-16)_. Shapes auth (Google Workspace, ADR-002), distribution (managed distribution over public store listing), and lowers the bar on public-facing polish and SEO.
 - **Offline support**: **partial** – the schedule is readable offline and post-its queue through a network blip; everything else assumes connectivity _(2026-08-16)_. Supersedes the earlier "offline not a requirement" position, reversed during clarification once conference-venue wifi conditions were considered.
 - **Update latency**: near-live – a few seconds is acceptable for post-its and poll results _(2026-08-16)_. Rules out the cost of hard real-time; polling or a lightweight push is sufficient.
@@ -55,5 +57,6 @@
      recommendation hasn't yet been accepted as an ADR. -->
 
 - **Production database hosting** – deferred to phase 2 by ADR-003. Candidates: managed Azure Database for PostgreSQL Flexible Server, a container on Azure Container Apps or a VM, or Neon. Engine is settled (PostgreSQL), so migration between them is a dump and restore. Must be closed before the first real conference.
+- **Container platform** – undecided. ADR-004 settles that the API and SPA are containers and that cloud is the target; *which* platform runs them is open. Azure Container Apps is the front-runner given the existing Azure footprint. Must be closed alongside production database hosting before the first real conference.
 - **Mobile distribution channel** – undecided. Internal audience means public App Store listing is likely wrong. Google Endpoint Management (included with Workspace) plus managed Google Play for Android, and Apple Business Manager for iOS, is the current front-runner – see ADR-001's distribution note and its amendment. Settle before the first mobile release, not before scaffolding.
 - **Push delivery service** – undecided. Azure Notification Hubs recommended as the Azure-native front for APNs + FCM.
