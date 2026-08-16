@@ -82,7 +82,6 @@ There is no incumbent tool to displace. The alternative today is email, slides, 
 - What format does the report take – exportable PDF, a shareable in-app link, or both?
 - Are post-it categories defined during conference setup, or created ad hoc by the organizer while sorting?
 - Do self-selected workshop groups have capacity limits, and what happens when an attendee picks a full group?
-- How does an employee gain access to a conference – automatically for anyone with a company Google account, or by explicit invitation?
 - Can attendees see poll results themselves, or only the facilitator and the report?
 - Area to revisit: how far confApp follows an action point after the conference – what would sharpen it is knowing whether leadership tracks follow-ups inside the app or exports them into an existing process.
 
@@ -103,3 +102,7 @@ There is no incumbent tool to displace. The alternative today is email, slides, 
 | A projected facilitator/big-screen view is in scope | Sorting post-its into categories is a group activity visible to the room | 2026-08-16 |
 | Partial offline: schedule readable offline, post-its queue through a network blip | Reverses the earlier blanket "offline not important"; conference venue wifi is unreliable and a lost idea is unrecoverable | 2026-08-16 |
 | MVP is a thin end-to-end slice | Proves the whole loop at one real conference before deepening any part | 2026-08-16 |
+| Employees join a conference by entering a join code | Chosen over automatic access for every company account and over explicit invitation lists. Low admin overhead; the code selects a conference rather than granting authority, since Google sign-in already restricts to employees | 2026-08-16 |
+| Sessions carry a location | "Where am I supposed to be" is the core attendee question, unanswerable once sessions or workshop groups run in parallel | 2026-08-16 |
+| Conferences have a draft → published → archived lifecycle | Stops attendees seeing half-built agendas and asking about sessions that get deleted | 2026-08-16 |
+| Published schedules stay editable, notifying only affected attendees | Conferences slip; notifying everyone about every change trains people to ignore notifications | 2026-08-16 |

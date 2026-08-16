@@ -66,6 +66,10 @@
 
 **Success Criteria:**
 - [ ] Multi-conference archive with past reports accessible
+      <!-- Boundary: Phase 3 already delivers archiving itself and read access to an archived
+           conference's own schedule (Conference setup & schedule PRD, FR1/FR9). What remains
+           here is browsing ACROSS conferences and reaching past reports. -->
+
 - [ ] Parallel-track scheduling exercised in practice
 - [ ] Session feedback/rating loop closed into the report
 

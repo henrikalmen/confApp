@@ -15,7 +15,7 @@
 | **Presentation** | A Session kind: someone presents to the room. May contain Voting Rounds. | talk, lecture, keynote | Conference Setup |
 | **Workshop** | A Session kind: participatory work, usually split into Groups. May contain Voting Rounds and Post-it Rounds. | breakout (reserve for Group), lab | Conference Setup |
 | **Group** | A subdivision of a Workshop that attendees self-select into. Groups run in parallel. | team, breakout, table, room | Participation |
-| **Personal Agenda** | An Attendee's own view of the Sessions and Groups they are attending. | my schedule, itinerary | Participation |
+| **Personal Agenda** | An Attendee's own view, differing from the Schedule only by the Workshop **Groups** they joined. Sessions are open – attendance is neither chosen nor recorded – so there is no per-session personalization. | my schedule, itinerary; "my sessions" (implies a selection that does not exist) | Participation |
 | **Parallel Track** | Two or more Sessions scheduled at the same time. Supported but uncommon. | stream, strand | Conference Setup |
 
 ## Session Activities
@@ -38,8 +38,7 @@
 | Term | Definition | Avoid (synonyms) | Bounded Context |
 |------|-----------|-------------------|-----------------|
 | **Admin** | Also *Organizer*. Sets up the Conference, sorts Post-its, produces the Report. Conference-wide authority. | owner (reserve for the company owner), superuser | Identity |
-| **Presenter** | Runs a Presentation. May start Voting Rounds within their own Session. | speaker, host | Identity |
-| **Facilitator** | Runs a Workshop, its Groups and Activities, and drives the Board View. | moderator, leader | Identity |
+| **Presenter/Facilitator** | One role, two words for what the holder is doing: *presenting* a Presentation (and may start Voting Rounds in it) or *facilitating* a Workshop (its Groups, Activities, and the Board View). Permissions are identical – authority over their own Sessions only. | speaker, host, moderator, leader; also "Presenter" or "Facilitator" as if they were separate roles | Identity |
 | **Attendee** | An employee participating in the Conference. | user, participant, delegate, guest | Identity |
 | **Leadership** | The company owner and managers who consume the Report. Not app users in the participation sense. | management, stakeholders, execs | Insight |
 

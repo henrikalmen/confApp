@@ -37,6 +37,10 @@
 | REQ-027 | The schedule is readable without a network connection | Should | – | Planned |
 | REQ-028 | A typed post-it survives a network blip and syncs when connectivity returns | Should | – | Planned |
 | REQ-029 | Sessions may optionally run in parallel tracks | Should | – | Planned |
+| REQ-033 | Employees join a conference by entering its join code | Must | – | Planned |
+| REQ-035 | Sessions have a location | Must | – | Planned |
+| REQ-036 | A conference moves through draft → published → archived | Must | – | Planned |
+| REQ-037 | A published schedule can be edited, notifying affected attendees | Should | – | Planned |
 
 ## Active (Under Discussion)
 <!-- Requirements being refined or awaiting validation. -->
@@ -46,7 +50,6 @@
 | REQ-030 | Report export format | Should | PDF, shareable in-app link, or both? |
 | REQ-031 | Post-it category definition | Must | Defined at conference setup, or created ad hoc while sorting? |
 | REQ-032 | Workshop group capacity | Could | Do groups have size limits, and what happens when one is full? |
-| REQ-033 | Conference access | Must | Automatic for anyone with a company Google account, or by explicit invitation? |
 | REQ-034 | Poll result visibility | Should | Can attendees see results, or only the facilitator and the report? |
 
 ## Out of Scope
