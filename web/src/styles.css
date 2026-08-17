@@ -23,6 +23,16 @@
   --danger-border: #e3b7b7;
   --danger-text: #8c2b2b;
 
+  /*
+   * Parallel tracks and the notices that report them. Deliberately its own hue rather than the
+   * danger palette: an overlap is a supported option and reading as an error would tell an
+   * Organizer to undo something that is perfectly fine (FR2).
+   */
+  --overlap: #7a4b12;
+  --notice-bg: #fdf7ec;
+  --notice-border: #e0cba4;
+  --notice-text: #6b4210;
+
   --gap: clamp(0.75rem, 2.5vw, 1.5rem);
   --radius: 0.6rem;
 
@@ -40,6 +50,11 @@
     --danger-bg: #2c1b1b;
     --danger-border: #6b3a3a;
     --danger-text: #f0b4b4;
+
+    --overlap: #e0b070;
+    --notice-bg: #2a2318;
+    --notice-border: #5f4c2c;
+    --notice-text: #ecd3a8;
   }
 }
 
@@ -444,7 +459,194 @@ body {
   gap: 0.5rem;
 }
 
+/* ---------- schedule composition (S04) ---------- */
+
+/*
+ * Day navigation. It wraps rather than scrolling sideways: a four-day conference has four of
+ * these and they must all be reachable at 375px without the page moving horizontally.
+ */
+.schedule__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: var(--gap);
+}
+
+.schedule__day {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.schedule__day:hover {
+  border-color: var(--accent);
+}
+
+.schedule__day:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.schedule__day--current {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--gap);
+}
+
+/*
+ * Time, session, actions — one row where there is room, stacked where there is not, with no
+ * breakpoint anywhere.
+ *
+ * The mechanism is the flex basis on `__what`: it asks for 16rem, so as soon as the time column
+ * and it cannot both fit, it wraps to its own line and the actions follow. `auto-fit` was tried
+ * here and is wrong for this shape — it keeps filling the row with tracks, so at 1280px the
+ * session title ends up in a 9rem column with the rest of the card empty beside it.
+ */
+.session-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem var(--gap);
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.session-card__when {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  /* Wide enough for "09:00–10:30" and its kind badge without the two ever splitting. */
+  min-width: 7.5rem;
+}
+
+.session-card__time {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Takes the rest of the row, and is what decides when the card stacks. See `.session-card`. */
+.session-card__what {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.session-card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.session-card__location,
+.session-card__description {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The persistent overlap indicator (FR2). A parallel track is a supported option, not a problem,
+ * so the treatment is a distinct accent rather than the danger palette – and the marker is stated
+ * in words as well as colour, because colour alone would exclude anyone who cannot see it.
+ */
+.session-card--overlapping {
+  border-left-style: double;
+  border-left-width: 6px;
+  border-left-color: var(--overlap);
+}
+
+.session-card__overlap {
+  margin: 0.35rem 0 0;
+  color: var(--overlap);
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Sits at the end of the row on a desktop, and drops onto its own line on a phone. */
+.session-card__actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.badge--overlap,
+.badge--workshop {
+  color: var(--overlap);
+}
+
+.badge--presentation {
+  color: var(--accent);
+}
+
+/* A save that succeeded and has something to say. Never the danger palette – nothing is wrong. */
+.notice {
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+  color: var(--notice-text);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  margin-bottom: var(--gap);
+}
+
 /* ---------- forms ---------- */
+
+.session-form {
+  display: grid;
+  gap: var(--gap);
+  margin-top: var(--gap);
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+
+.session-form__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.session-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+
+.field__optional {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.field__input--multiline {
+  min-height: 3.5rem;
+  resize: vertical;
+}
 
 .conference-form {
   display: grid;

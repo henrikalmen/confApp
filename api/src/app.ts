@@ -9,10 +9,12 @@ import { registerHealthRoute } from './routes/health.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerMeRoute } from './routes/me.ts';
 import { registerConferenceRoutes } from './routes/conferences.ts';
+import { registerSessionRoutes } from './routes/sessions.ts';
 import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
 import { createConferenceAuthorization } from './conferences/authorization.ts';
 import { createConferenceRepository } from './conferences/conference-repository.ts';
 import { createScheduleGate, type ScheduleGate } from './conferences/schedule-gate.ts';
+import { createSessionRepository } from './sessions/session-repository.ts';
 import { systemClock, type Clock } from './conferences/calendar-date.ts';
 import type { Verifier } from './auth/verify-id-token.ts';
 import type { UserRepository } from './auth/users.ts';
@@ -66,8 +68,9 @@ export interface BuildAppOptions {
   db: Database;
   auth: AuthDependencies;
   /**
-   * Whether a Conference has a Session yet. Production binds the port that answers `false` until
-   * S04 supplies a real count; a test stubs it to prove the publish success path (S03 TI08).
+   * Whether a Conference has a Session yet. Production binds the real count over the `sessions`
+   * table (S04 TI11); a test may still state the answer where the subject is the lifecycle rule
+   * rather than the count itself.
    */
   scheduleGate?: ScheduleGate;
   /** The server's calendar date. Pinned by tests so the archive boundary can be stated. */
@@ -99,12 +102,22 @@ export function buildApp({
     users: auth.users,
   });
   registerMeRoute(app, withAuth);
+
+  const conferences = createConferenceRepository(db);
+  const authorization = createConferenceAuthorization(db);
+
   registerConferenceRoutes(app, {
     withAuth,
-    repository: createConferenceRepository(db),
-    authorization: createConferenceAuthorization(db),
+    repository: conferences,
+    authorization,
     scheduleGate: scheduleGate ?? createScheduleGate(db),
     clock,
+  });
+  registerSessionRoutes(app, {
+    withAuth,
+    conferences,
+    sessions: createSessionRepository(db),
+    authorization,
   });
 
   return app;

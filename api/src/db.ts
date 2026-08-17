@@ -14,6 +14,18 @@ import { databaseUnavailable } from './errors.ts';
 pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
 
 /**
+ * A PostgreSQL `time without time zone` reaches JS as the string it is, for the same reason.
+ *
+ * The current driver already hands oid 1083 back as text, so this line changes no behaviour today
+ * – it *pins* it. A wall-clock time has no day and no zone; the only way a driver could build a
+ * `Date` from one is by inventing both, and a Session authored at 09:00 would then read 09:00 only
+ * on machines that happen to share the API process's timezone (S04 Structural Criteria). Stating
+ * the parser here means a driver upgrade that changed the default would be a no-op rather than a
+ * silent day-boundary shift discovered by an attendee.
+ */
+pg.types.setTypeParser(pg.types.builtins.TIME, (value) => value);
+
+/**
  * The one pooled data-access seam every handler reaches PostgreSQL through.
  *
  * The pool is created once at startup and reused for the life of the process. That is a

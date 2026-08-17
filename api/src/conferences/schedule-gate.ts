@@ -3,26 +3,31 @@ import type { Queryable } from '../db.ts';
 /**
  * "Does this Conference have at least one Session yet?" – the publish gate's only question.
  *
- * It is a port because Sessions do not exist yet. S04 owns the Session table, and until it lands
- * there is nothing to count. Rather than block this story on that one, publishing asks through
- * this seam: the refusal path is proved against the real binding below (which answers `false`,
- * truthfully – a Conference cannot have a Session when no Session can exist), and the success
- * path is proved against a stubbed gate.
+ * S03 introduced this as a port because Sessions did not exist yet, and bound it to an
+ * implementation that answered `false`: truthfully, since a Conference cannot have a Session when
+ * no Session can exist. **S04 discharges that binding obligation** – the body below is the real
+ * count over the `sessions` table, and there is no stub, constant or feature flag left anywhere in
+ * the publish path.
  *
- * **Binding obligation on S04**: replace the body of `createScheduleGate` with a real count over
- * the Session table, and re-run S03's publish scenario end to end. Nothing else about publishing
- * changes – the state machine, the authorization check and the endpoint all stay as they are.
+ * Nothing else about publishing changed. The state machine, the authorization check, the endpoint
+ * and the refusal message are S03's, untouched; only the implementation behind the port is new,
+ * which is what lets S03's publish scenario be re-run against it unmodified.
  */
 
 export interface ScheduleGate {
   hasAtLeastOneSession(conferenceId: string): Promise<boolean>;
 }
 
-export function createScheduleGate(_db: Queryable): ScheduleGate {
+export function createScheduleGate(db: Queryable): ScheduleGate {
   return {
-    async hasAtLeastOneSession(_conferenceId: string): Promise<boolean> {
-      // Not a stub standing in for a missing answer – this *is* the answer until S04 exists.
-      return false;
+    async hasAtLeastOneSession(conferenceId: string): Promise<boolean> {
+      // `exists` rather than `count(*)`: the question is whether there is one, and PostgreSQL can
+      // stop at the first row instead of walking a schedule that may hold a hundred Sessions.
+      const rows = await db.query<{ present: boolean }>(
+        'select exists (select 1 from sessions where conference_id = $1) as present',
+        [conferenceId],
+      );
+      return rows[0]?.present === true;
     },
   };
 }

@@ -39,47 +39,47 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01] [TI01,TI03,TI06,TI09] Sessions added out of order render in start-time order within their Conference Day**
+- [x] **S01 [OC01] [TI01,TI03,TI06,TI09] Sessions added out of order render in start-time order within their Conference Day**
   - **Given** the published Conference "Autumn Offsite" spans 2026-09-15 to 2026-09-16
   - **When** an Admin adds "Retrospective" 15:00–16:00 on 2026-09-16, then "Opening Keynote" 09:00–10:30 on 2026-09-16
   - **Then** the Organizer's schedule view lists 2026-09-16 as "Opening Keynote" first, "Retrospective" second, and the day 2026-09-15 renders as an explicit empty state
 
-- [ ] **S02 [OC01] [TI03,TI04,TI06,TI09] Editing a Session moves it to another Conference Day and it re-sorts there**
+- [x] **S02 [OC01] [TI03,TI04,TI06,TI09] Editing a Session moves it to another Conference Day and it re-sorts there**
   - **Given** "Retrospective" 15:00–16:00 sits on 2026-09-16 alongside "Opening Keynote" 09:00–10:30
   - **When** an Admin edits "Retrospective" to 08:00–09:00 on 2026-09-15
   - **Then** it disappears from 2026-09-16, appears on 2026-09-15, and 2026-09-16 now lists only "Opening Keynote"
 
-- [ ] **S03 [OC02] [TI05] Deleting the last remaining Session of a published Conference is refused**
+- [x] **S03 [OC02] [TI05] Deleting the last remaining Session of a published Conference is refused**
   - **Given** the published Conference "Autumn Offsite" has exactly one Session, "Opening Keynote"
   - **When** an Admin deletes "Opening Keynote"
   - **Then** the deletion is refused with a reason stating a published Conference must keep at least one Session, the Session still exists, and after a second Session is added the same delete succeeds
 
-- [ ] **S04 [OC02] [TI01,TI04] A Session whose end time is not after its start time is refused**
+- [x] **S04 [OC02] [TI01,TI04] A Session whose end time is not after its start time is refused**
   - **Given** the Conference "Autumn Offsite" spans 2026-09-15 to 2026-09-16
   - **When** an Admin saves a Session 23:15–00:45 on 2026-09-15 (a Session that would span midnight), or 10:00–10:00
   - **Then** both are refused with a reason naming that the end time must be after the start time on the same Conference Day, and nothing is persisted in either case
 
-- [ ] **S05 [OC02] [TI04] A Session placed outside the Conference date span is refused, naming the valid days**
+- [x] **S05 [OC02] [TI04] A Session placed outside the Conference date span is refused, naming the valid days**
   - **Given** the Conference "Autumn Offsite" spans 2026-09-15 to 2026-09-16
   - **When** an Admin saves a Session on 2026-09-17
   - **Then** the save is refused and the message names the permitted days (2026-09-15 and 2026-09-16)
 
-- [ ] **S06 [OC03] [TI01,TI08,TI10] A Session authored at 09:00 reads 09:00 on devices in three different timezones**
+- [x] **S06 [OC03] [TI01,TI08,TI10] A Session authored at 09:00 reads 09:00 on devices in three different timezones**
   - **Given** "Opening Keynote" was authored as 09:00–10:30 on 2026-09-15 from a device set to Europe/Stockholm (UTC+2)
   - **When** the same Session is read on a device set to America/Los_Angeles (UTC-7) and on one set to Asia/Tokyo (UTC+9)
   - **Then** both show 2026-09-15, 09:00–10:30 – identical to the authored values; the stored row holds date `2026-09-15` and time `09:00:00` with no offset, and the API response carries `"day": "2026-09-15"`, `"startTime": "09:00"`, `"endTime": "10:30"` with no `Z`, no offset suffix and no instant anywhere in the chain
 
-- [ ] **S07 [OC04] [TI07,TI09] Overlapping Sessions save with a non-blocking warning and stay marked after reload**
+- [x] **S07 [OC04] [TI07,TI09] Overlapping Sessions save with a non-blocking warning and stay marked after reload**
   - **Given** "Opening Keynote" runs 09:00–10:30 on 2026-09-15
   - **When** an Admin saves "Design Workshop" 10:00–11:00 on 2026-09-15
   - **Then** the save succeeds, a non-blocking warning names "Opening Keynote" as the overlapped Session, both Sessions carry an overlap indicator on the Organizer's schedule view, and the indicator is still on both after a full page reload by a different Admin
 
-- [ ] **S08 [OC05] [TI11] A draft Conference publishes once it has a real Session, and is still refused while it has none**
+- [x] **S08 [OC05] [TI11] A draft Conference publishes once it has a real Session, and is still refused while it has none**
   - **Given** the draft Conference "Autumn Offsite" has no Sessions, and S03's publish gate is bound to the real Session count with no stub in the path
   - **When** an Admin publishes it, then adds "Opening Keynote" 09:00–10:30 on 2026-09-15 and publishes again
   - **Then** the first attempt is refused with S03's message about needing a schedule with at least one Session and the Conference stays draft, and the second attempt moves it to **published**
 
-- [ ] **S09 [OC01] [TI02] A Session write advances the schedule watermark without touching the Conference's own row version**
+- [x] **S09 [OC01] [TI02] A Session write advances the schedule watermark without touching the Conference's own row version**
   - **Given** the Conference "Autumn Offsite" holds "Opening Keynote", and both `schedule_watermark_at` and `updated_at` are read from the Conference row
   - **When** an Admin edits "Opening Keynote" and then deletes it, and separately renames the Conference
   - **Then** each Session write advances `schedule_watermark_at` (the delete included) while `updated_at` is byte-identical to its value before those writes, and only the rename advances `updated_at`
@@ -87,17 +87,17 @@
 
 ## Structural Criteria
 
-- [ ] Session day, start time and end time are stored as PostgreSQL `date` and `time without time zone`; no `timestamp`, `timestamptz`, timezone column, or offset is used for authored Session times anywhere in schema, API or client.
-- [ ] The database driver returns `date` and `time` columns as strings, never as JavaScript `Date` objects, and no schedule time value is ever passed through `new Date(...)`, `Date.parse`, `toLocaleTimeString`, `Intl.DateTimeFormat` or a timezone-conversion library.
-- [ ] `session.last_updated_at` and `conference.schedule_watermark_at` both exist, are microsecond-granular, and are strictly monotonic per row – two consecutive writes to the same row never produce an equal or decreasing value, and the value is serialized to the wire without truncation.
-- [ ] `conference.schedule_watermark_at` advances on any Conference field change **and** on any Session insert, update or delete within that Conference, so it is a complete schedule watermark even for deletions.
-- [ ] `conference.updated_at` (S03 TI01) advances **only** on a change to a Conference's own fields and is left untouched by every Session insert, update and delete – no row-level "touch on any update" trigger may reach it, or story S09's Conference-edit concurrency base inherits the watermark's noise.
-- [ ] The wire field S06's envelope names `conference.lastUpdatedAt` is serialized from `conference.schedule_watermark_at`, never from `conference.updated_at` – the rename is a column-naming change only and must not alter the payload S06, S09 and S10 were specified against.
-- [ ] The production binding of S03's `hasAtLeastOneSession(conferenceId)` port queries the real Session count; no stub, constant or feature flag remains in the publish path, and S03's publish scenario passes against it unmodified.
-- [ ] Migrations are reversible and use plain PostgreSQL only – no provider-specific extensions (ADR-003).
-- [ ] Every Session write endpoint obtains its caller through S02's authenticated-caller context and its authorization through S03's single provisional per-conference helper – no inline role check and no in-process state between requests.
-- [ ] Refusals are emitted through S01's JSON error envelope carrying both a displayable message and a machine code.
-- [ ] The Organizer's schedule view is legible and usable at 375px, 768px and 1280px.
+- [x] Session day, start time and end time are stored as PostgreSQL `date` and `time without time zone`; no `timestamp`, `timestamptz`, timezone column, or offset is used for authored Session times anywhere in schema, API or client.
+- [x] The database driver returns `date` and `time` columns as strings, never as JavaScript `Date` objects, and no schedule time value is ever passed through `new Date(...)`, `Date.parse`, `toLocaleTimeString`, `Intl.DateTimeFormat` or a timezone-conversion library.
+- [x] `session.last_updated_at` and `conference.schedule_watermark_at` both exist, are microsecond-granular, and are strictly monotonic per row – two consecutive writes to the same row never produce an equal or decreasing value, and the value is serialized to the wire without truncation.
+- [x] `conference.schedule_watermark_at` advances on any Conference field change **and** on any Session insert, update or delete within that Conference, so it is a complete schedule watermark even for deletions.
+- [x] `conference.updated_at` (S03 TI01) advances **only** on a change to a Conference's own fields and is left untouched by every Session insert, update and delete – no row-level "touch on any update" trigger may reach it, or story S09's Conference-edit concurrency base inherits the watermark's noise.
+- [x] The wire field S06's envelope names `conference.lastUpdatedAt` is serialized from `conference.schedule_watermark_at`, never from `conference.updated_at` – the rename is a column-naming change only and must not alter the payload S06, S09 and S10 were specified against.
+- [x] The production binding of S03's `hasAtLeastOneSession(conferenceId)` port queries the real Session count; no stub, constant or feature flag remains in the publish path, and S03's publish scenario passes against it unmodified.
+- [x] Migrations are reversible and use plain PostgreSQL only – no provider-specific extensions (ADR-003).
+- [x] Every Session write endpoint obtains its caller through S02's authenticated-caller context and its authorization through S03's single provisional per-conference helper – no inline role check and no in-process state between requests.
+- [x] Refusals are emitted through S01's JSON error envelope carrying both a displayable message and a machine code.
+- [x] The Organizer's schedule view is legible and usable at 375px, 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -162,48 +162,48 @@ _No source files exist yet – S01 creates the API, migration and SPA scaffoldin
 
 ### Implementation Tasks
 
-- [ ] **TI01** Session schema exists with naive wall-clock columns and a reversible migration
+- [x] **TI01** Session schema exists with naive wall-clock columns and a reversible migration
   - `sessions` table: id, conference_id (FK), `title`, `description` (nullable), `kind` (constrained to `Presentation` | `Workshop`), `day date`, `start_time time without time zone`, `end_time time without time zone`, `location`, plus a `CHECK (end_time > start_time)`. Plain PostgreSQL only (ADR-003); follow the migration tooling S01 establishes.
   - **Verify**: `Test: migration applies and rolls back cleanly; column types report date and time without time zone; an insert with end_time <= start_time is rejected by the database`
 
-- [ ] **TI02** The Session row version and the Conference schedule watermark are strictly monotonic, and the Conference's own row version is untouched by Session writes
+- [x] **TI02** The Session row version and the Conference schedule watermark are strictly monotonic, and the Conference's own row version is untouched by Session writes
   - Add `session.last_updated_at timestamptz` (the per-Session row version S09 uses as its concurrency base) and `conference.schedule_watermark_at timestamptz` (the whole-schedule watermark S10 uses as its reconnect cursor). A trigger sets each to `GREATEST(clock_timestamp(), OLD.<column> + interval '1 microsecond')` on write, and any Session insert/update/delete also advances its parent Conference's `schedule_watermark_at` so deletions are observable to a cursor. **`conference.updated_at` (S03 TI01) is a third, separate field and must not move on a Session write** – see Constraints & Gotchas for why an unconditional row-level touch trigger breaks S09. On the wire the watermark is serialized as S06's `conference.lastUpdatedAt`; only the column name changes.
   - **Verify**: `Test: two consecutive updates to one Session yield strictly increasing session.last_updated_at; two writes inside a single transaction still differ; inserting, updating and deleting a Session each advance conference.schedule_watermark_at`
   - **Verify**: `Test: conference.updated_at is byte-identical before and after a Session insert, update and delete, and advances only when a Conference field itself changes – the test fails if a Session write bumps it`
 
-- [ ] **TI03** Session create, edit and delete endpoints exist behind the authenticated caller context and the provisional authorization helper
+- [x] **TI03** Session create, edit and delete endpoints exist behind the authenticated caller context and the provisional authorization helper
   - Route shape and JSON error envelope per S01; caller per S02; authorization via the single provisional per-conference helper from S03 (S07 generalizes that one call-site pattern) and the same lifecycle guard that refuses writes on an archived Conference. Handlers hold no in-process state.
   - **Verify**: `Test: an unauthenticated request is rejected before handler logic runs; a non-Admin of that Conference is refused; a write to an archived Conference is refused with the reason named`
 
-- [ ] **TI04** Invalid Session input is refused with a user-facing reason naming what is permitted
+- [x] **TI04** Invalid Session input is refused with a user-facing reason naming what is permitted
   - Title non-empty ≤200 chars; location non-empty ≤100 chars; kind exactly Presentation or Workshop; end after start; `day` within the Conference date span with the refusal naming the valid days. Emit through S01's envelope (displayable message + machine code). Covers S04 and S05.
   - **Verify**: `Test: each invalid field yields a 4xx whose envelope message names the violated rule; the out-of-span case lists the Conference's permitted days; nothing is persisted`
 
-- [ ] **TI05** Deleting the last remaining Session of a published Conference is refused
+- [x] **TI05** Deleting the last remaining Session of a published Conference is refused
   - Holds the invariant TI11 binds S03's publish gate to (a published Conference always has ≥1 Session), so publishing cannot be undone by a later delete. Draft Conferences are unaffected. Depends on TI03's delete endpoint.
   - **Verify**: `Test: deleting the sole Session of a published Conference is refused and the row survives; deleting one of two succeeds; deleting the sole Session of a draft Conference succeeds`
 
-- [ ] **TI06** `GET /conferences/{conferenceId}/schedule/organizer` returns Sessions grouped by Conference Day in start-time order
+- [x] **TI06** `GET /conferences/{conferenceId}/schedule/organizer` returns Sessions grouped by Conference Day in start-time order
   - Route pinned explicitly to keep it distinct from S06's attendee read `GET /conferences/{conferenceId}/schedule` – same resource, two audiences: this one is Admin-only, carries composition data (overlap pairs, per-Session `lastUpdatedAt`) and has no membership/clock-offset envelope. Register it without an `api/` prefix per S01's convention. Conference Days are derived from the Conference date span, so a day with no Sessions is still present and empty. Payload carries wall-clock strings per TI08, each Session's `lastUpdatedAt`, and the Conference watermark serialized as `lastUpdatedAt`. This is the Organizer payload only – S06 owns the attendee read model.
   - **Verify**: `Test: GET /conferences/{conferenceId}/schedule/organizer returns Sessions start-time ascending within each day when inserted out of order; every day in the span appears, including empty ones; a non-Admin member of that Conference is refused on this route`
 
-- [ ] **TI07** Overlap pairs are recomputed on every schedule read and returned with the payload
+- [x] **TI07** Overlap pairs are recomputed on every schedule read and returned with the payload
   - Two Sessions on the same day overlap when `start < otherEnd AND end > otherStart` (touching boundaries do not overlap). Computed per read, never stored, so it cannot go stale. Overlap is warning data – no write path may reject on it.
   - **Verify**: `Test: 09:00–10:30 and 10:00–11:00 on one day are returned as an overlapping pair; 09:00–10:00 and 10:00–11:00 are not; the pair is present on a fresh read by a different caller with no prior save in that session`
 
-- [ ] **TI08** A single wall-clock time representation is used from database to screen
+- [x] **TI08** A single wall-clock time representation is used from database to screen
   - Wire format: `"day": "YYYY-MM-DD"`, `"startTime": "HH:mm"`, `"endTime": "HH:mm"` – 24-hour, zero-padded, no seconds, no offset, no `Z`. Driver type parsers return `date`/`time` as strings (see Constraints & Gotchas); client helpers parse/format/compare as strings or `{hour, minute}` and never construct a `Date`. `lastUpdatedAt` is the explicit exception and stays an ISO-8601 UTC instant.
   - **Verify**: `Test: round-tripping a 09:00 Session through create then read returns exactly "09:00" with the test process TZ set to UTC, UTC-7 and UTC+9`
 
-- [ ] **TI09** The Organizer's schedule view composes the Schedule and marks overlaps persistently
+- [x] **TI09** The Organizer's schedule view composes the Schedule and marks overlaps persistently
   - Day navigation across the Conference span, Sessions in start-time order with title, kind, time range and location; add/edit/delete forms surfacing TI04's messages inline; a persistent overlap indicator driven by TI07's payload (not a save-time toast only) plus the non-blocking save warning naming the overlapped Session. Consumes TI08's helpers for all time rendering. Responsive at 375px / 768px / 1280px.
   - **Verify**: `Test: overlap indicator is present after a fresh load with no prior save; screenshots at 375px, 768px and 1280px show no clipped or horizontally scrolling content`
 
-- [ ] **TI10** A contract test suite pins the two produced shared decisions for S06, S09 and S10
+- [x] **TI10** A contract test suite pins the two produced shared decisions for S06, S09 and S10
   - One suite asserting the full DB → API → client path performs no timezone coercion under at least two non-UTC process timezones, and one asserting timestamp granularity, per-row monotonicity, `conference.schedule_watermark_at` watermark behaviour on insert/update/delete, and that `conference.updated_at` is unmoved by Session writes. These are the guard rails the risk summary calls for; they must fail if a later story introduces a UTC round-trip.
   - **Verify**: `Test: the suite fails when a schedule time is deliberately routed through a Date, and fails when a timestamp is truncated to second granularity, and fails when conference.updated_at is made to advance on a Session write`
 
-- [ ] **TI11** S03's schedule-gate port is bound to the real Session count and its publish scenario passes end to end
+- [x] **TI11** S03's schedule-gate port is bound to the real Session count and its publish scenario passes end to end
   - Replace the production binding of `hasAtLeastOneSession(conferenceId)` (S03 TI08), which returns `false` until this story lands, with a query over the `sessions` table for that Conference. Nothing else about S03's publish path changes – the port, its call site and its refusal message stay as S03 wrote them; only the implementation behind the port is supplied. No stub, constant or flag may remain in the production path. Then re-run S03's publish acceptance scenario (S03 **S03**) against the real gate and real Sessions rather than a stubbed port. **This discharges the binding obligation S03's Execution Contract leaves on this story; without it every downstream story needing a published Conference (S05's join code, S06, S08, S09, S10, S12's fixture) is unreachable.** Depends on TI01 and TI03.
   - **Verify**: `Test: S03's publish scenario passes unmodified with the port's production binding in place – zero Sessions refuses and the Conference stays draft, one real Session publishes; grep of the publish path finds no stub or hard-coded gate result`
 
@@ -223,4 +223,23 @@ _No source files exist yet – S01 creates the API, migration and SPA scaffoldin
 
 ## Implementation Observations
 
-_No observations recorded yet._
+### Run: 2026-08-17 11:50 UTC – discovered-requirements
+
+#### DISCOVERED REQUIREMENTS
+
+- **A Session whose day falls outside the Conference's current date span must still appear on the Organizer's schedule.** TI06 derives Conference Days from the span, which is correct for showing an unfilled day, but a Session can legitimately sit outside that span: S03 permits a Conference's dates to be shortened past its Sessions, and records that as a deliberate sequencing gap left to S09. Grouping strictly by the derived days therefore drops such a Session from the payload while it still exists, still counts toward the publish gate, and still blocks the last-Session delete — invisible to the only surface that could fix it. The Organizer read now emits every day in the span **plus** any further day that holds Sessions, all in date order, so the payload is total over the Conference's Sessions. Discovered during S04 execution; the alternative (refusing the span change) belongs to S09, which owns that edit.
+
+### Run: 2026-08-17 11:54 UTC – observations
+
+#### NOTICED BUT NOT TOUCHING
+
+- `visual/conferences.spec.ts` – pre-existing Prettier drift; `npm run format:check` reports it and S04 did not modify the file. Every file S04 touched is formatted.
+- `visual/shell.spec.ts` – its 3 tests fail locally because the API refuses to start: `.env` carries an unconfigured `GOOGLE_AUDIENCE_ALLOWLIST` placeholder (`<paste client ID>`) and S02's startup guard rejects it (`WildcardAudienceError`). Local developer setup, unrelated to S04; the other 18 Playwright tests pass. Fixing it means configuring Google sign-in per `docs/KEY_DEVELOPMENT_COMMANDS.md`.
+- `api/test/conference.integration.test.ts` – the test named 'is refused by the production schedule gate, which reports no session until S04' still passes, and for the right reason (a Conference with no Sessions). Only its title is dated now that TI11 has bound the real count. Left unmodified deliberately: the FIS requires S03's publish scenario to be re-run unmodified, and the assertion needs no change.
+- `docs/specs/conference-setup-and-schedule/plan.json` – S03 is recorded as `spec-ready` although its code is committed and its suite is green. Pre-existing status drift; S04 changed only its own story's entry.
+
+#### ASSUMPTIONS
+
+- **Route prefix.** TI06 says to register the organizer read 'without an `api/` prefix per S01's convention'. S01's actual convention – visible in `api/src/routes/*` and asserted by S03's own structural test (`expect(urls).toContain('POST /api/conferences')`) – registers every route under `/api`, while the SPA resolves an `/api` base URL so client paths are written without it. The convention was followed over the literal example: the route is registered as `GET /api/conferences/:conferenceId/schedule/organizer`, and the client calls `/conferences/{conferenceId}/schedule/organizer`, which is the FIS's literal path exactly as the client writes it. Registering outside `/api` would have broken the SPA's base-URL resolution and the container's reverse proxy.
+- **Table name.** The table is `sessions` (plural), as the FIS names it in TI01, TI11 and the Structural Criteria, although S01/S03's tables are singular (`conference`, `membership`, `role_assignment`). FIS-as-source-of-truth was taken over the implicit local convention, because S06, S09 and S10 were specified against the same name.
+- **One S03 test was updated.** `conference.integration.test.ts` → "is the conference table's only version column – the watermark is S04's" asserted `schedule_watermark_at` was absent, and its own comment said S04 adds it. It now asserts the invariant that outlives both stories: `updated_at` and `schedule_watermark_at` exist as separate, deliberately unalike-named columns, and `last_updated_at` is still absent from `conference` because that field belongs to `sessions`. No scenario or acceptance contract was changed.

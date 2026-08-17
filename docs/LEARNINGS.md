@@ -26,6 +26,17 @@
 - **jsdom 30 has `crypto.subtle` but no Web Storage** – `localStorage`/`sessionStorage` are `undefined`; polyfill a minimal `Storage` in `web/test/setup.ts`, don't design it out.
 - **StrictMode double-mount races a one-shot OIDC redirect handler** – guard with a `useRef`; make the liveness flag a ref too, as cleanup clears a `let active` before the first call resolves.
 
+## PostgreSQL Date/Time via node-postgres
+
+- **`timestamptz` loses microseconds through node-postgres** – oid 1184 parses to a JS `Date` (ms only). Format in SQL instead; see `instantExpression` in `api/src/sessions/wall-clock-time.ts`.
+- **pg `date` (oid 1082) parses to *local* midnight** – shifts the day east of UTC; `time` (1083) is a string today. Pin type parsers for both in `api/src/db.ts`.
+- **`now()` is transaction-start time, not statement time** – two writes in one tx get identical stamps. Use `clock_timestamp()` + `GREATEST(…, OLD.col + interval '1 microsecond')`.
+- **A timezone guarantee needs a real process, not a mock** – Node reads `TZ` once at start-up; spawn `api/test/wall-clock-probe.ts` per TZ and assert the raw response body.
+
+## CSS / Responsive Layout
+
+- **`auto-fit` is wrong for "sidebar + main that stacks"** – it keeps filling the row with tracks, crushing content at wide widths. Use `flex-wrap` with a flex-basis on the main pane instead.
+
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.
      Infrastructure errors (timeout, rate limit) → log, no conclusion until pattern emerges.

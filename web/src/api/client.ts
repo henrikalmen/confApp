@@ -198,3 +198,119 @@ export async function publishConference(id: string): Promise<Conference> {
 export async function archiveConference(id: string): Promise<Conference> {
   return apiRequest<Conference>(`/conferences/${id}/archive`, { method: 'POST' });
 }
+
+// ---------- schedule composition (S04) ----------
+
+export type SessionKind = 'Presentation' | 'Workshop';
+
+export interface Session {
+  id: string;
+  conferenceId: string;
+  title: string;
+  description: string | null;
+  kind: SessionKind;
+  /**
+   * Naive wall-clock values: a calendar day and two 24-hour times, exactly as authored. Never
+   * parsed through `new Date` – see `../schedule/wall-clock-time.ts` for why that would move a
+   * 09:00 session for anyone whose browser is not in the API's timezone.
+   */
+  day: string;
+  startTime: string;
+  endTime: string;
+  location: string;
+  /** The row version S09 will send back as the base of an edit. This one *is* an instant. */
+  lastUpdatedAt: string;
+}
+
+export interface SessionDetailsInput {
+  title: string;
+  description?: string | null;
+  kind: SessionKind;
+  day: string;
+  startTime: string;
+  endTime: string;
+  location: string;
+}
+
+/** A Conference Day and the Sessions on it, in start-time order. Empty days are present. */
+export interface ScheduleDay {
+  day: string;
+  sessions: Session[];
+}
+
+/** Two Sessions that run at the same time – a Parallel Track, not a problem. */
+export interface OverlapPair {
+  sessionIds: [string, string];
+}
+
+export interface OrganizerSchedule {
+  conference: {
+    id: string;
+    name: string;
+    startDate: string;
+    endDate: string;
+    lifecycleState: LifecycleState;
+    /** The whole-schedule watermark. S10 will use it as a cache cursor. */
+    lastUpdatedAt: string | null;
+  };
+  days: ScheduleDay[];
+  overlaps: OverlapPair[];
+}
+
+/**
+ * The warning that accompanies a **successful** save of an overlapping session.
+ *
+ * Never a refusal: parallel tracks are a supported option, so an overlapping session saves and is
+ * reported, rather than being rejected (FR2).
+ */
+export interface OverlapWarning {
+  code: string;
+  message: string;
+  sessions: { id: string; title: string; startTime: string; endTime: string }[];
+}
+
+export interface SavedSession {
+  session: Session;
+  overlapWarning: OverlapWarning | null;
+}
+
+/**
+ * The **Organizer's** composition view. S06 owns the attendee read at `/conferences/{id}/schedule`
+ * – same resource, two audiences, two intended endpoints.
+ */
+export async function fetchOrganizerSchedule(
+  conferenceId: string,
+  signal?: AbortSignal,
+): Promise<OrganizerSchedule> {
+  return apiRequest<OrganizerSchedule>(
+    `/conferences/${conferenceId}/schedule/organizer`,
+    signal ? { signal } : {},
+  );
+}
+
+export async function createSession(
+  conferenceId: string,
+  details: SessionDetailsInput,
+): Promise<SavedSession> {
+  return apiRequest<SavedSession>(`/conferences/${conferenceId}/sessions`, {
+    method: 'POST',
+    body: details,
+  });
+}
+
+export async function updateSession(
+  conferenceId: string,
+  sessionId: string,
+  details: SessionDetailsInput,
+): Promise<SavedSession> {
+  return apiRequest<SavedSession>(`/conferences/${conferenceId}/sessions/${sessionId}`, {
+    method: 'PATCH',
+    body: details,
+  });
+}
+
+export async function deleteSession(conferenceId: string, sessionId: string): Promise<void> {
+  await apiRequest<{ deleted: string }>(`/conferences/${conferenceId}/sessions/${sessionId}`, {
+    method: 'DELETE',
+  });
+}

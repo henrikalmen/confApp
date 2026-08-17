@@ -345,17 +345,23 @@ describe.skipIf(!reachable)('conference lifecycle against a real PostgreSQL', ()
     });
 
     /**
-     * The schema half of the "three fields, four consumers" decision: exactly one timestamp
-     * column that is a row version, and no watermark. S04 adds the second one, separately named.
+     * The schema half of the "three fields, four consumers" decision.
+     *
+     * S03 wrote this assertion when `updated_at` was the only timestamp on the table and S04's
+     * watermark did not exist yet. S04 has since added it, which is what this story anticipated –
+     * so the assertion now states the invariant that outlives both stories: the two are **separate
+     * columns with visibly different names**. `last_updated_at` is still absent here because that
+     * one is the per-Session row version and lives on `sessions`; a column by that name appearing
+     * on `conference` would mean somebody had started merging the three fields back into two.
      */
-    it("is the conference table's only version column – the watermark is S04's", async () => {
+    it('keeps its own row version and the schedule watermark as separate, unalike columns', async () => {
       const columns = await client.query(
         "select column_name from information_schema.columns where table_name = 'conference'",
       );
       const names = columns.rows.map((row) => row.column_name);
 
       expect(names).toContain('updated_at');
-      expect(names).not.toContain('schedule_watermark_at');
+      expect(names).toContain('schedule_watermark_at');
       expect(names).not.toContain('last_updated_at');
     });
   });

@@ -59,6 +59,26 @@ export const ERROR_CODES = {
   CONFERENCE_ARCHIVE_TOO_EARLY: 'CONFERENCE_ARCHIVE_TOO_EARLY',
   /** An edit was attempted on an archived Conference, which is read-only. */
   CONFERENCE_NOT_EDITABLE: 'CONFERENCE_NOT_EDITABLE',
+
+  // ---------- schedule composition (S04) ----------
+  // One code per rule, so the composition form can attach each message to the control it is
+  // about and a test can assert which rule refused. There is deliberately no code for an
+  // overlapping Session: overlap is a supported product option (Parallel Tracks) and is
+  // reported as a non-blocking warning on a *successful* save, never as a refusal.
+  /** The title is blank after trimming, or longer than 200 characters. */
+  SESSION_TITLE_INVALID: 'SESSION_TITLE_INVALID',
+  /** The location is blank after trimming, or longer than 100 characters. */
+  SESSION_LOCATION_INVALID: 'SESSION_LOCATION_INVALID',
+  /** The kind is something other than Presentation or Workshop. */
+  SESSION_KIND_INVALID: 'SESSION_KIND_INVALID',
+  /** The times are unreadable, or the end time is not after the start time. */
+  SESSION_TIME_RANGE_INVALID: 'SESSION_TIME_RANGE_INVALID',
+  /** The day is unreadable, or falls outside the Conference's date span. */
+  SESSION_DAY_OUT_OF_SPAN: 'SESSION_DAY_OUT_OF_SPAN',
+  /** No Session with that id in this Conference, asked by someone entitled to know that. */
+  SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  /** Deleting the sole Session of a published Conference, which must keep a schedule. */
+  SESSION_LAST_IN_PUBLISHED_CONFERENCE: 'SESSION_LAST_IN_PUBLISHED_CONFERENCE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

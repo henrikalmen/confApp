@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError, archiveConference, publishConference, type Conference } from '../api/client.ts';
 import { LifecycleBadge, formatSpan } from './lifecycle-display.tsx';
+import { SchedulePanel } from '../schedule/SchedulePanel.tsx';
 
 /**
  * One conference, with the lifecycle actions an Admin can take on it.
@@ -52,78 +53,87 @@ export function ConferenceDetail({
   }
 
   return (
-    <section
-      className={`panel conference-detail${archived ? ' conference--archived' : ''}`}
-      aria-labelledby="conference-detail-title"
-      data-testid="conference-detail"
-      data-lifecycle-state={conference.lifecycleState}
-    >
-      <p className="panel__actions">
-        <button className="button" type="button" onClick={onBack} data-testid="back-to-list">
-          ← All conferences
-        </button>
-      </p>
-
-      <div className="panel__header">
-        <h2 className="panel__title" id="conference-detail-title">
-          {conference.name}
-        </h2>
-        <LifecycleBadge state={conference.lifecycleState} />
-      </div>
-
-      <dl className="facts">
-        <div className="fact">
-          <dt className="fact__label">Dates</dt>
-          <dd className="fact__value" data-testid="detail-span">
-            {formatSpan(conference)}
-          </dd>
-        </div>
-        <div className="fact">
-          <dt className="fact__label">Lifecycle</dt>
-          <dd className="fact__value" data-testid="detail-state">
-            {conference.lifecycleState}
-          </dd>
-        </div>
-      </dl>
-
-      {archived ? (
-        <p className="panel__hint" data-testid="archived-note">
-          This conference is archived. It stays readable, and nothing has been deleted, but it can
-          no longer be changed or joined.
+    <>
+      <section
+        className={`panel conference-detail${archived ? ' conference--archived' : ''}`}
+        aria-labelledby="conference-detail-title"
+        data-testid="conference-detail"
+        data-lifecycle-state={conference.lifecycleState}
+      >
+        <p className="panel__actions">
+          <button className="button" type="button" onClick={onBack} data-testid="back-to-list">
+            ← All conferences
+          </button>
         </p>
-      ) : null}
 
-      {refusal !== null ? (
-        <div className="alert" role="alert" data-testid="lifecycle-refusal">
-          {refusal}
+        <div className="panel__header">
+          <h2 className="panel__title" id="conference-detail-title">
+            {conference.name}
+          </h2>
+          <LifecycleBadge state={conference.lifecycleState} />
         </div>
-      ) : null}
+
+        <dl className="facts">
+          <div className="fact">
+            <dt className="fact__label">Dates</dt>
+            <dd className="fact__value" data-testid="detail-span">
+              {formatSpan(conference)}
+            </dd>
+          </div>
+          <div className="fact">
+            <dt className="fact__label">Lifecycle</dt>
+            <dd className="fact__value" data-testid="detail-state">
+              {conference.lifecycleState}
+            </dd>
+          </div>
+        </dl>
+
+        {archived ? (
+          <p className="panel__hint" data-testid="archived-note">
+            This conference is archived. It stays readable, and nothing has been deleted, but it can
+            no longer be changed or joined.
+          </p>
+        ) : null}
+
+        {refusal !== null ? (
+          <div className="alert" role="alert" data-testid="lifecycle-refusal">
+            {refusal}
+          </div>
+        ) : null}
+
+        {/*
+         * Disabled where the transition is not one the state machine offers – an affordance that
+         * cannot work should not look like it can. The server refuses independently regardless.
+         */}
+        <p className="panel__actions conference-detail__actions">
+          <button
+            className="button button--primary"
+            type="button"
+            data-testid="publish"
+            disabled={busy !== null || conference.lifecycleState !== 'draft'}
+            onClick={() => void act('publish')}
+          >
+            {busy === 'publish' ? 'Publishing…' : 'Publish'}
+          </button>
+
+          <button
+            className="button"
+            type="button"
+            data-testid="archive"
+            disabled={busy !== null || conference.lifecycleState !== 'published'}
+            onClick={() => void act('archive')}
+          >
+            {busy === 'archive' ? 'Archiving…' : 'Archive'}
+          </button>
+        </p>
+      </section>
 
       {/*
-       * Disabled where the transition is not one the state machine offers – an affordance that
-       * cannot work should not look like it can. The server refuses independently regardless.
+       * The composition surface itself. It sits below the lifecycle actions because that is the
+       * order the work happens in: a conference is created, its schedule is composed, and only then
+       * can it be published – the Publish button above is refused until this panel holds a session.
        */}
-      <p className="panel__actions conference-detail__actions">
-        <button
-          className="button button--primary"
-          type="button"
-          data-testid="publish"
-          disabled={busy !== null || conference.lifecycleState !== 'draft'}
-          onClick={() => void act('publish')}
-        >
-          {busy === 'publish' ? 'Publishing…' : 'Publish'}
-        </button>
-
-        <button
-          className="button"
-          type="button"
-          data-testid="archive"
-          disabled={busy !== null || conference.lifecycleState !== 'published'}
-          onClick={() => void act('archive')}
-        >
-          {busy === 'archive' ? 'Archiving…' : 'Archive'}
-        </button>
-      </p>
-    </section>
+      <SchedulePanel conferenceId={conference.id} readOnly={archived} />
+    </>
   );
 }

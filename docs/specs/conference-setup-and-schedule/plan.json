@@ -253,7 +253,7 @@
       ],
       "parallel": false,
       "risk": "medium",
-      "status": "spec-ready",
+      "status": "done",
       "fis": "s04-schedule-composition.md",
       "owner": null,
       "scope": "An Organizer adds, edits and removes Sessions within a Conference's Days and sees the resulting Schedule ordered by start time. Covers the Session record (title, optional description, kind Presentation or Workshop, conference day, start and end time, location as free text), all field and range validation, the rule that a Session falls within a day of its Conference and never spans midnight, the refusal to delete the last remaining Session of a published Conference, and a persistent recomputed overlap indicator on the Organizer's schedule view – overlap is a warning, never an error, because Parallel Tracks are supported. Fixes the naive wall-clock time representation and the `lastUpdatedAt` field that S09 and S10 depend on. Excludes the attendee-facing view (S06) and assigning Presenters/Facilitators to Sessions (S07).",
