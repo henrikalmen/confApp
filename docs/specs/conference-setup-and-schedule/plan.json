@@ -280,7 +280,7 @@
       ],
       "parallel": false,
       "risk": "medium",
-      "status": "spec-ready",
+      "status": "done",
       "fis": "s05-join-code-access.md",
       "owner": null,
       "scope": "A signed-in employee joins a published Conference by entering its join code, creating an Attendee Membership. Covers code generation on publish using a case-insensitive alphabet free of visually ambiguous characters, uniqueness across all Conferences including archived ones, refusal of codes for draft, archived, or past-end-date Conferences with the reason named, re-entry of an already-joined code as a no-op, Organizer viewing and regeneration with immediate invalidation of the prior code and no loss of existing Attendees, and server-side rate limiting of failed attempts keyed on the authenticated `sub`. Excludes leaving and Admin removal (S08) and what the Attendee then sees (S06).",

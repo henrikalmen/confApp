@@ -69,6 +69,11 @@ const RECORD_AND_PRUNE = `
  * is the one whose expiry frees an allowance. It is computed here rather than in JavaScript so the
  * whole comparison happens against one clock – and because node-postgres hands a `timestamptz`
  * back as a millisecond-precision `Date`, which is not a value to do window arithmetic on.
+ *
+ * With no attempts in the window `min(attempted_at)` is NULL, and `greatest` **ignores** NULL
+ * arguments rather than propagating them – so the value is `0`, never NULL. That is the honest
+ * answer to "how long until an allowance frees up" when none is spent, and it is why the type below
+ * is a plain number: a nullable one would carry a branch that can never be taken.
  */
 const WINDOW_STATE = `
   select count(*)::int as attempts,
@@ -86,8 +91,8 @@ const WINDOW_STATE = `
 export interface FailedAttemptWindow {
   /** Failures by this `sub` inside the rolling window. */
   attempts: number;
-  /** Seconds until the oldest of them leaves the window, or `null` when there are none. */
-  retryAfterSeconds: number | null;
+  /** Seconds until the oldest of them leaves the window; `0` when there are none. */
+  retryAfterSeconds: number;
 }
 
 export interface FailedJoinAttempts {
@@ -99,14 +104,19 @@ export interface FailedJoinAttempts {
   assertWithinLimit(sub: string): Promise<void>;
 }
 
-/** "in about 3 minutes" – the granularity a person can act on, and never "in 0 minutes". */
-function whenToRetry(retryAfterSeconds: number | null): string {
-  const seconds = retryAfterSeconds ?? FAILED_ATTEMPT_WINDOW_MINUTES * 60;
-  const minutes = Math.max(1, Math.ceil(seconds / 60));
+/**
+ * "in about 3 minutes" – the granularity a person can act on.
+ *
+ * Floored at one minute rather than reporting the true remainder. This is only ever built for a
+ * caller who has just been refused, so "try again in 0 minutes" would read as an invitation to press
+ * the button again immediately, which would fail.
+ */
+function whenToRetry(retryAfterSeconds: number): string {
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
   return minutes === 1 ? 'in about a minute' : `in about ${minutes} minutes`;
 }
 
-export function rateLimited(retryAfterSeconds: number | null): AppError {
+export function rateLimited(retryAfterSeconds: number): AppError {
   return new AppError(
     ERROR_CODES.JOIN_ATTEMPTS_RATE_LIMITED,
     429,
@@ -122,8 +132,10 @@ export interface FailedJoinAttemptOptions {
 
 export function createFailedJoinAttempts(
   db: Queryable,
-  { limit = FAILED_ATTEMPT_LIMIT, windowMinutes = FAILED_ATTEMPT_WINDOW_MINUTES }:
-    FailedJoinAttemptOptions = {},
+  {
+    limit = FAILED_ATTEMPT_LIMIT,
+    windowMinutes = FAILED_ATTEMPT_WINDOW_MINUTES,
+  }: FailedJoinAttemptOptions = {},
 ): FailedJoinAttempts {
   const store: FailedJoinAttempts = {
     async record(sub: string): Promise<void> {
@@ -131,10 +143,10 @@ export function createFailedJoinAttempts(
     },
 
     async window(sub: string): Promise<FailedAttemptWindow> {
-      const rows = await db.query<{ attempts: number; retry_after_seconds: number | null }>(
-        WINDOW_STATE,
-        [sub, windowMinutes],
-      );
+      const rows = await db.query<{ attempts: number; retry_after_seconds: number }>(WINDOW_STATE, [
+        sub,
+        windowMinutes,
+      ]);
       const row = rows[0];
       // `count(*)` over an empty set is a row holding 0, so there is always one.
       if (row === undefined) throw new Error('The failed-attempt window query returned no row.');

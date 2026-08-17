@@ -25,6 +25,7 @@
 
 - **jsdom 30 has `crypto.subtle` but no Web Storage** – `localStorage`/`sessionStorage` are `undefined`; polyfill a minimal `Storage` in `web/test/setup.ts`, don't design it out.
 - **StrictMode double-mount races a one-shot OIDC redirect handler** – guard with a `useRef`; make the liveness flag a ref too, as cleanup clears a `let active` before the first call resolves.
+- **No jest-dom in the web workspace** – `.toBeDisabled()`/`.toBeInTheDocument()` throw "not a function"; assert plain DOM props (`.disabled`, `.value`, `queryByTestId() === null`).
 
 ## PostgreSQL Date/Time via node-postgres
 
@@ -50,3 +51,4 @@
 <!-- Non-code knowledge: deploy steps, test prerequisites, CI quirks, agent workflow patterns. -->
 
 - ...
+- **Git Bash mangles `/api` env values into Windows paths** – `API_BASE_URL=/api` becomes `C:/Program Files/Git/api`, so fetches fail as `file:///…`. Set `MSYS_NO_PATHCONV=1` or drop the override.

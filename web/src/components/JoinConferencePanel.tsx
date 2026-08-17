@@ -48,6 +48,29 @@ export function JoinConferencePanel(): React.JSX.Element {
   // Nothing to submit while the box is empty, and nothing worth submitting while paused.
   const canSubmit = !busy && code.trim() !== '' && !rateLimited;
 
+  /**
+   * Editing the code lifts a rate-limit pause.
+   *
+   * This is load-bearing, not a convenience. The pause is the one state that disables the submit
+   * control, so without something outside `submit()` clearing it the screen would be a dead end –
+   * and the allowance draining server-side would not bring the button back, because nothing would
+   * ask the server again. OC04 is explicit that the allowance returns by itself with no unlock step,
+   * and on the Capacitor shell there is no address bar to reload from, so "reload the app" is not an
+   * escape hatch that exists.
+   *
+   * Retyping the code is also exactly the gesture the refusal asks for ("check the code with the
+   * organizer"), so the recovery is the action the employee was already going to take. The server
+   * stays the authority: if the window has not in fact drained, the next submission is refused again
+   * with a freshly computed wait.
+   *
+   * Other refusals are deliberately left on screen while the code is edited – they name a reason the
+   * employee is reading as they correct it, and they never disable anything.
+   */
+  function updateCode(next: string): void {
+    setCode(next);
+    if (rateLimited) setRefusal(null);
+  }
+
   async function submit(): Promise<void> {
     setBusy(true);
     // Cleared before the attempt, not after it: one refusal at a time, and never a stale one
@@ -104,7 +127,7 @@ export function JoinConferencePanel(): React.JSX.Element {
             spellCheck={false}
             inputMode="text"
             value={code}
-            onChange={(event) => setCode(event.target.value)}
+            onChange={(event) => updateCode(event.target.value)}
             /*
              * Never disabled – not while a request is in flight and not while the limiter is
              * counting down. The employee's next action is to check the code against the slide, and

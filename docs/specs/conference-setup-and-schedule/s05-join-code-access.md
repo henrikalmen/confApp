@@ -36,40 +36,40 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01] [TI02,TI03,TI04] An employee joins a running published Conference by typing its code in lowercase**
+- [x] **S01 [OC01] [TI02,TI03,TI04] An employee joins a running published Conference by typing its code in lowercase**
   - **Given** Conference "Kickoff 2026" is published, runs 2026-09-14 to 2026-09-16, and its generated join code is `K7RM4P`
   - **And** Nadia is signed in with a verified company Google Workspace account and is not yet a member of any Conference
   - **When** Nadia submits ` k7rm4p ` (lowercase, with surrounding whitespace)
   - **Then** an Attendee Membership linking Nadia's `sub` to "Kickoff 2026" exists, and the response identifies "Kickoff 2026" as the conference joined
 
-- [ ] **S02 [OC01] [TI04] Re-entering an already-joined code is a no-op, not an error**
+- [x] **S02 [OC01] [TI04] Re-entering an already-joined code is a no-op, not an error**
   - **Given** Nadia is already an Attendee of "Kickoff 2026" via code `K7RM4P`
   - **When** Nadia submits `K7RM4P` again
   - **Then** the request succeeds and identifies "Kickoff 2026", and Nadia still has exactly one Membership for that Conference – no duplicate row, no refusal
 
-- [ ] **S03 [OC02] [TI05] An unknown code is refused with the message naming that no conference matched**
+- [x] **S03 [OC02] [TI05] An unknown code is refused with the message naming that no conference matched**
   - **Given** no Conference in the database holds the code `ZZZ999`
   - **When** a signed-in employee submits `ZZZ999`
   - **Then** the request is refused through the shared error envelope with the user-facing message "No conference found with that code." and no Membership is created
 
-- [ ] **S04 [OC02] [TI05] Each non-joinable Conference state refuses the join and names its own reason**
+- [x] **S04 [OC02] [TI05] Each non-joinable Conference state refuses the join and names its own reason**
   - **Given** three Conferences exist: "Draft Days" in `draft` with code `AB23CD`; "Retro 2025" `archived` with code `EF45GH`; and "Summer Jam" still in `published` state but whose end date was yesterday, with code `JK67MN`
   - **When** a signed-in employee submits each of `AB23CD`, `EF45GH` and `JK67MN` in turn
   - **Then** each is refused with a distinct machine code and a user-facing message naming its own reason – not yet published, archived, and already ended respectively – and no Membership is created in any of the three cases
   - **And** "Summer Jam" is refused despite never having been archived: joinability ends with the Conference's end date, not with the manual archiving step
   - **And** all three refusals are decided by S03's exported joinability predicate – the join endpoint carries no second implementation of the rule
 
-- [ ] **S05 [OC02] [TI01,TI02] A code issued for an archived Conference is never reused and never resolves to a different Conference**
+- [x] **S05 [OC02] [TI01,TI02] A code issued for an archived Conference is never reused and never resolves to a different Conference**
   - **Given** archived Conference "Retro 2025" holds code `EF45GH`
   - **When** further Conferences are published and generate codes
   - **Then** no newly published Conference is ever assigned `EF45GH` – the uniqueness constraint spans archived rows – and an employee submitting `EF45GH` is refused as archived rather than joined to any other Conference
 
-- [ ] **S06 [OC03] [TI07,TI08] Regenerating the code invalidates the old one immediately and keeps every existing Attendee**
+- [x] **S06 [OC03] [TI07,TI08] Regenerating the code invalidates the old one immediately and keeps every existing Attendee**
   - **Given** "Kickoff 2026" has code `K7RM4P` and 40 Attendees, and Priya is an Admin of it
   - **When** Priya views the code and then regenerates it, yielding `Q4XT8B`
   - **Then** the very next submission of `K7RM4P` is refused as an unknown code, a submission of `Q4XT8B` joins successfully, and all 40 existing Memberships are intact
 
-- [ ] **S07 [OC04] [TI06] Failed attempts throttle the individual employee, not the venue, and the counter survives across API replicas**
+- [x] **S07 [OC04] [TI06] Failed attempts throttle the individual employee, not the venue, and the counter survives across API replicas**
   - **Given** ~100 signed-in employees are on the venue network, so every request arrives from one shared NAT egress IP address
   - **And** each of the 100 employees makes one failed attempt with a mistyped code
   - **When** an employee whose distinct `sub` has made only that one failed attempt submits the correct code
@@ -77,13 +77,13 @@
   - **And** when one single `sub` exceeds the failed-attempt threshold within the window, that `sub` alone is refused as rate-limited while the other 99 continue to join normally
   - **And** that `sub`'s accumulated attempts are counted from shared server-side storage: attempts served by a different API replica, or after a process restart, still add to the same total rather than resetting
 
-- [ ] **S08 [OC04] [TI06] Concurrent failed attempts by one `sub` are all counted – none is lost to a lost update**
+- [x] **S08 [OC04] [TI06] Concurrent failed attempts by one `sub` are all counted – none is lost to a lost update**
   - **Given** the threshold is 10 failed attempts per `sub` per rolling window and one `sub` has made none
   - **When** that same `sub` issues 10 failed attempts concurrently rather than one after another
   - **Then** the recorded attempt total for that `sub` is exactly 10 – no increment is lost to a read-modify-write race – and the 11th attempt is refused as rate-limited
   - **And** attempts landing either side of a window boundary are attributed to their own window, with none double-counted and none dropped
 
-- [ ] **S09 [OC02] [TI10] A refused employee can correct the code and retry immediately**
+- [x] **S09 [OC02] [TI10] A refused employee can correct the code and retry immediately**
   - **Given** Nadia mistypes the code and receives the "No conference found with that code." refusal on the join screen
   - **When** she corrects the code and submits again without reloading the app or signing out
   - **Then** the retry is accepted and she joins – the refusal left the entry field usable, the submit control enabled, and the previously typed value available to edit rather than silently cleared
@@ -92,16 +92,16 @@
 
 ## Structural Criteria
 
-- [ ] Join-code uniqueness is enforced by the database across every Conference row, archived included – the constraint carries no lifecycle-state predicate that would exclude archived or ended Conferences.
-- [ ] Every authorization check this story introduces resolves through the single provisional per-conference authorization helper S03 established; no join-code endpoint contains an inline role comparison.
-- [ ] Joinability has exactly one definition in the codebase – S03's exported predicate. This story calls it and defines no second lifecycle-state or end-date test of its own.
-- [ ] This story adds no migration creating the Membership table; S03 owns that table's creation and the creator's seed row. S05's migrations touch only the Conference join code and the failed-attempt store.
-- [ ] The failed-attempt counter is updated by a single atomic statement per attempt – no read-then-write sequence over a counter row anywhere in the path.
-- [ ] The failed-attempt store does not grow without bound – rows outside the rolling window are pruned by the system itself, with no manual operational step.
-- [ ] Every refusal in this story is emitted through the shared JSON error envelope with both a user-facing message and a distinct machine code – no endpoint-local error shape.
-- [ ] Schema and limiter store use plain PostgreSQL only – no provider-specific extension and no managed cache service is introduced (ADR-003).
-- [ ] No handler retains join-attempt or rate-limit state in module, global, or other in-process scope between requests.
-- [ ] The join-code entry screen and the Organizer code panel are legible with no horizontal body scroll at 375px, 768px and 1280px.
+- [x] Join-code uniqueness is enforced by the database across every Conference row, archived included – the constraint carries no lifecycle-state predicate that would exclude archived or ended Conferences.
+- [x] Every authorization check this story introduces resolves through the single provisional per-conference authorization helper S03 established; no join-code endpoint contains an inline role comparison.
+- [x] Joinability has exactly one definition in the codebase – S03's exported predicate. This story calls it and defines no second lifecycle-state or end-date test of its own.
+- [x] This story adds no migration creating the Membership table; S03 owns that table's creation and the creator's seed row. S05's migrations touch only the Conference join code and the failed-attempt store.
+- [x] The failed-attempt counter is updated by a single atomic statement per attempt – no read-then-write sequence over a counter row anywhere in the path.
+- [x] The failed-attempt store does not grow without bound – rows outside the rolling window are pruned by the system itself, with no manual operational step.
+- [x] Every refusal in this story is emitted through the shared JSON error envelope with both a user-facing message and a distinct machine code – no endpoint-local error shape.
+- [x] Schema and limiter store use plain PostgreSQL only – no provider-specific extension and no managed cache service is introduced (ADR-003).
+- [x] No handler retains join-attempt or rate-limit state in module, global, or other in-process scope between requests.
+- [x] The join-code entry screen and the Organizer code panel are legible with no horizontal body scroll at 375px, 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -162,47 +162,47 @@ url    | https://www.crockford.com/base32.html                                  
 
 ### Implementation Tasks
 
-- [ ] **TI01** Conference carries a join code that is unique across every Conference row, archived ones included
+- [x] **TI01** Conference carries a join code that is unique across every Conference row, archived ones included
   - Nullable `join_code` column (absent until published, per `prd.md#data-requirements`) storing the canonical uppercase form, with a database-level unique constraint carrying **no** lifecycle-state predicate. Plain PostgreSQL only (ADR-003); migration is reversible per the S01 tooling.
   - **Verify**: `Test: inserting a second Conference whose join_code equals an archived Conference's join_code is rejected by the database constraint, not only by application code`
 
-- [ ] **TI02** Publishing a Conference generates its join code from the ambiguity-free alphabet
+- [x] **TI02** Publishing a Conference generates its join code from the ambiguity-free alphabet
   - Hooks into the S03 draft → published transition; draws from `23456789ABCDEFGHJKMNPQRSTVWXYZ` at length 6 and retries generation on the TI01 uniqueness violation. Republishing is not a code-changing event – regeneration is TI08.
   - **Verify**: `Test: publishing many Conferences yields codes composed only of that alphabet (no 0, 1, I, L, O, U), all distinct, and each Conference has no code before publish`
 
-- [ ] **TI03** Code lookup resolves regardless of the case and incidental formatting the employee typed
+- [x] **TI03** Code lookup resolves regardless of the case and incidental formatting the employee typed
   - Normalize submitted input – trim, strip internal whitespace and hyphens, uppercase – before comparing against the canonical stored form from TI01. One normalization function shared by the join, re-join and refusal paths.
   - **Verify**: `Test: " k7rm4p ", "k7rm4p", "K7RM-4P" and "K7RM4P" all resolve to the same Conference`
 
-- [ ] **TI04** A signed-in employee joining a joinable Conference gains exactly one Attendee Membership, keyed on `sub`
+- [x] **TI04** A signed-in employee joining a joinable Conference gains exactly one Attendee Membership, keyed on `sub`
   - Writes into the Membership table **created by S03's migration** – S05 adds no migration for it and does not redefine its shape. Membership links the caller's validated `sub` from the S02 caller context to the Conference – never the email address. Re-submitting a code for a Conference the caller already belongs to succeeds without creating a second Membership, including for a caller who already holds a Membership from another path (the creator's seed from S03, an Admin opening the attendee view of their own Conference). Uses the TI03 normalization and the TI05 refusal path.
   - **Verify**: `Test: a valid join creates one Membership row for that sub and conference; an immediately repeated call returns success and leaves the row count unchanged; a Conference creator (who already holds a Membership seeded by S03) submitting their own code succeeds as a no-op and gains no second Membership; this story's migrations contain no CREATE TABLE for Membership`
 
-- [ ] **TI05** Non-joinable and unknown codes are refused with the reason named, decided by S03's joinability predicate
+- [x] **TI05** Non-joinable and unknown codes are refused with the reason named, decided by S03's joinability predicate
   - Joinability is **not** defined here: the join endpoint calls the predicate S03 exports (S03 TI02/TI10), which is the single definition and carries both the lifecycle-state rule and the end-date rule. Distinct machine codes and user-facing messages for unknown ("No conference found with that code."), draft, archived, and ended; all emitted through the S01 error envelope (`plan.json#sharedDecisions`). No Membership is written on any refusal.
   - **Verify**: `Test: the unknown, draft, archived and past-end-date cases each return their own machine code and a message naming that reason – no two return the same envelope, and none is a generic refusal; a grep of this story's modules finds no lifecycle-state or end-date comparison outside the call to S03's predicate`
 
-- [ ] **TI06** Failed join attempts are throttled per authenticated `sub` from a shared, atomically-updated server-side store
+- [x] **TI06** Failed join attempts are throttled per authenticated `sub` from a shared, atomically-updated server-side store
   - Plain PostgreSQL store recording failed attempts against `sub`. Recording is **one atomic statement per attempt** – an appended row carrying `sub` and an attempt timestamp, with the limiter deciding by `COUNT(*)` over the rolling window; `INSERT ... ON CONFLICT DO UPDATE SET count = count + 1` on a `(sub, window)` row is the permitted alternative. A `SELECT` then `UPDATE`, or a handler-reset window field, is a defect. Recorded only on refusal (TI05), never on success. The client address is not read at any point in this path, and no attempt state is held in module, global, or static scope – the API scales across replicas (ADR-004, `AGENTS.md`).
   - **Verify**: `Test: one sub exceeding the threshold is refused as rate-limited while other subs on the same client address join normally; N concurrent failed attempts by a single sub record exactly N attempts with none lost, and the (N+1)th is refused; the accumulated total is readable from the database and attempts recorded by a separate API process add to the same total rather than restarting it`
 
-- [ ] **TI07** An Admin of a Conference can view its current join code
+- [x] **TI07** An Admin of a Conference can view its current join code
   - Authorization goes through the provisional per-conference authorization helper S03 established (`plan.json#sharedDecisions` → Per-conference authorization primitive) – no inline role comparison at this or any other join-code endpoint.
   - **Verify**: `Test: an Admin of the Conference receives the code; a member without Admin and a non-member are each refused through the shared error envelope – and the join-code endpoints contain no role check that bypasses the provisional helper`
 
-- [ ] **TI08** Regenerating a Conference's code replaces it immediately and removes no Attendee
+- [x] **TI08** Regenerating a Conference's code replaces it immediately and removes no Attendee
   - Same generation rules and uniqueness constraint as TI01/TI02, same authorization path as TI07. The previous code is not retained anywhere, so it thereafter refuses exactly like an unknown code. Existing Memberships are untouched.
   - **Verify**: `Test: after regeneration the previous code is refused as unknown on the next request, the new code joins successfully, and the Conference's Membership count is unchanged`
 
-- [ ] **TI09** The join-code entry screen and the Organizer code panel are legible across the three target widths
+- [x] **TI09** The join-code entry screen and the Organizer code panel are legible across the three target widths
   - Fluid layout per `AGENTS.md`; the code input, the current code, the regenerate control and the refusal message all remain fully visible and non-clipped.
   - **Verify**: `Screenshots at 375px, 768px and 1280px show the code input, the displayed code and a refusal message fully visible with no horizontal body scroll`
 
-- [ ] **TI10** A refused join leaves the employee able to retry without leaving the screen
+- [x] **TI10** A refused join leaves the employee able to retry without leaving the screen
   - Per PRD User Flow 5 ("refused with a clear message **and the option to retry**"): after any refusal the entry field stays enabled with the submitted value available to correct, the submit control is re-enabled, and the refusal message is replaced rather than stacked on the next attempt. The rate-limit refusal is the one case that does not invite an immediate retry – it states when the employee may try again instead of offering a control that is certain to fail.
   - **Verify**: `Test: after an unknown-code refusal the input and submit control are enabled and retain the typed value, and a corrected resubmission from the same screen joins successfully; after a rate-limit refusal the message states when to retry`
 
-- [ ] **TI11** Failed-attempt rows do not accumulate without bound
+- [x] **TI11** Failed-attempt rows do not accumulate without bound
   - Attempts older than the rolling window are pruned automatically – a sweep performed alongside recording, or a scheduled prune running inside the API container. Pruning never removes attempts still inside a live window, and never depends on a manual operational step.
   - **Verify**: `Test: after attempts age past the window the store no longer retains their rows, while attempts inside the current window survive the prune and still count toward the threshold`
 
@@ -224,4 +224,12 @@ url    | https://www.crockford.com/base32.html                                  
 
 > _Managed by exec-spec post-implementation – append-only._
 
-_No observations recorded yet._
+### Run: 2026-08-17 16:11 UTC – observations
+
+#### NOTICED BUT NOT TOUCHING
+- `docs/specs/conference-setup-and-schedule/plan.json` records S03 as `spec-ready` although S03's code has landed (membership table, `isJoinable`, `createConferenceAuthorization` all present and consumed by S04/S05) and S04 is `done`. Plan-status drift only; left untouched as outside S05's scope. Will mislead the next exec-plan run.
+- Commit `fc97fa7` carries all 19 S05 implementation files under the message "checkin files for S04", duplicating the previous commit's subject. Made outside the exec-spec run; no remote exists, so a reword would fix it. Not amended without authorisation.
+- `docs/LEARNINGS.md` retains template placeholder bullets (`- ...`) under `## [Topic Area 1]` and `## Process & Tooling`. The ops `add` form is not authorised to prune them.
+- Review finding F3 (LOW, accepted): the limiter's *decision* is check-then-act, so a burst of concurrent attempts can overshoot the threshold by roughly the connection-pool concurrency before the pause engages. The counter itself is atomic (Structural Criterion 5 holds). Inherent to the design the FIS's Architecture Decision specifies (`the limiter decides by a windowed COUNT(*)`, i.e. a read) combined with the required check-before-lookup ordering. The Join Code is not a security boundary, so a deterrent that overshoots slightly is acceptable; tightening it would need the check and the record merged into one statement, which the required ordering forbids.
+- Review finding F4 (LOW, accepted): `JOIN_CONFERENCE_NOT_PUBLISHED` carries two meanings - a join refused because the conference is a draft, and a regenerate refused because no code has been minted yet. Status code plus endpoint disambiguate them; a dedicated code would be a contract addition the FIS did not ask for.
+- Visual validation on this machine cannot use `npm run screenshots` against the composed stack after a source change: the SPA container serves a stale build and `docker` is not on PATH (WSL-only). Run `npm run dev:web` and pass `WEB_URL` instead - and note Vite binds IPv6-only here, so the URL must be `http://[::1]:<port>`, not `127.0.0.1`.

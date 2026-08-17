@@ -208,9 +208,10 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
   async function membershipCount(conferenceId: string, sub?: string): Promise<number> {
     const rows =
       sub === undefined
-        ? await client.query('select count(*)::int as count from membership where conference_id = $1', [
-            conferenceId,
-          ])
+        ? await client.query(
+            'select count(*)::int as count from membership where conference_id = $1',
+            [conferenceId],
+          )
         : await client.query(
             'select count(*)::int as count from membership where conference_id = $1 and user_sub = $2',
             [conferenceId, sub],
@@ -326,9 +327,10 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
   it('refuses an unknown code with the exact message, and creates no Membership', async () => {
     const { app } = await publishedWithCode('K7RM4P');
 
-    const unknown = await client.query('select count(*)::int as count from conference where join_code = $1', [
-      'ZZZ999',
-    ]);
+    const unknown = await client.query(
+      'select count(*)::int as count from conference where join_code = $1',
+      ['ZZZ999'],
+    );
     expect(unknown.rows[0].count).toBe(0);
 
     const response = await submit(app, NADIA, 'ZZZ999');
@@ -337,9 +339,10 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
     expect(response.json().error.code).toBe('JOIN_CODE_UNKNOWN');
     expect(response.json().error.message).toBe('No conference found with that code.');
 
-    const memberships = await client.query('select count(*)::int as count from membership where user_sub = $1', [
-      NADIA,
-    ]);
+    const memberships = await client.query(
+      'select count(*)::int as count from membership where user_sub = $1',
+      [NADIA],
+    );
     expect(memberships.rows[0].count).toBe(0);
   });
 
@@ -354,7 +357,11 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       // Codes are minted on publish, in publish order: Retro first, then Summer Jam.
       const app = appWith({ today: '2026-09-15', codes: ['EF45GH', 'JK67MN'] });
 
-      await createConference(app, { name: 'Draft Days', startDate: '2026-10-01', endDate: '2026-10-02' });
+      await createConference(app, {
+        name: 'Draft Days',
+        startDate: '2026-10-01',
+        endDate: '2026-10-02',
+      });
 
       const retro = await createConference(app, {
         name: 'Retro 2025',
@@ -414,7 +421,9 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
     it('refuses "Summer Jam" although it was never archived', async () => {
       const app = await threeNonJoinable();
 
-      const state = await client.query("select lifecycle_state from conference where name = 'Summer Jam'");
+      const state = await client.query(
+        "select lifecycle_state from conference where name = 'Summer Jam'",
+      );
       expect(state.rows[0].lifecycle_state).toBe('published');
 
       const response = await submit(app, NADIA, 'JK67MN');
@@ -441,9 +450,10 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       const { app, conferenceId } = await publishedWithCode('EF45GH', { today: '2026-09-17' });
       await archive(app, conferenceId);
 
-      const archivedRow = await client.query('select lifecycle_state, join_code from conference where id = $1', [
-        conferenceId,
-      ]);
+      const archivedRow = await client.query(
+        'select lifecycle_state, join_code from conference where id = $1',
+        [conferenceId],
+      );
       expect(archivedRow.rows[0]).toEqual({ lifecycle_state: 'archived', join_code: 'EF45GH' });
 
       // Straight at the table, bypassing every application-level guard: the constraint is what
@@ -474,9 +484,10 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
         published.push(id);
       }
 
-      const codes = await client.query('select join_code from conference where id = any($1::uuid[])', [
-        published,
-      ]);
+      const codes = await client.query(
+        'select join_code from conference where id = any($1::uuid[])',
+        [published],
+      );
       const minted = codes.rows.map((row) => row.join_code as string);
       expect(minted).not.toContain('EF45GH');
       expect(new Set(minted).size).toBe(minted.length);
@@ -494,12 +505,16 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       const app = appWith();
       const conferenceId = await createConference(app);
 
-      const draft = await client.query('select join_code from conference where id = $1', [conferenceId]);
+      const draft = await client.query('select join_code from conference where id = $1', [
+        conferenceId,
+      ]);
       expect(draft.rows[0].join_code).toBeNull();
 
       await publish(app, conferenceId);
 
-      const afterwards = await client.query('select join_code from conference where id = $1', [conferenceId]);
+      const afterwards = await client.query('select join_code from conference where id = $1', [
+        conferenceId,
+      ]);
       expect(afterwards.rows[0].join_code).toMatch(/^[23456789ABCDEFGHJKMNPQRSTVWXYZ]{6}$/);
     });
 
@@ -601,7 +616,9 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       expect(response.statusCode).toBe(409);
       expect(response.json().error.code).toBe('JOIN_CONFERENCE_NOT_PUBLISHED');
 
-      const row = await client.query('select join_code from conference where id = $1', [conferenceId]);
+      const row = await client.query('select join_code from conference where id = $1', [
+        conferenceId,
+      ]);
       expect(row.rows[0].join_code).toBeNull();
     });
 
@@ -618,7 +635,9 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       expect(response.statusCode).toBe(403);
       expect(response.json().error.code).toBe('CONFERENCE_ROLE_REQUIRED');
 
-      const row = await client.query('select join_code from conference where id = $1', [conferenceId]);
+      const row = await client.query('select join_code from conference where id = $1', [
+        conferenceId,
+      ]);
       expect(row.rows[0].join_code).toBe('K7RM4P');
     });
   });
@@ -668,7 +687,9 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
 
       const response = await submit(app, OSCAR, 'ZZZ999');
       expect(response.statusCode).toBe(429);
-      expect(response.json().error.message).toMatch(/try again in about \d+ minutes?|in about a minute/i);
+      expect(response.json().error.message).toMatch(
+        /try again in about \d+ minutes?|in about a minute/i,
+      );
     });
 
     /** A refusal that is already rate-limited must not record yet another attempt. */
@@ -728,6 +749,27 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
       expect(stored.rows[0].count).toBe(4);
     });
 
+    /**
+     * `greatest()` ignores NULL arguments rather than propagating them, so an empty window reports
+     * `0` seconds and not NULL. Asserted because the opposite assumption would put a branch in the
+     * message builder that could never be taken, and nothing else would ever reveal it.
+     */
+    it('reports a zero wait and no attempts for a sub that has never failed', async () => {
+      const empty = await createFailedJoinAttempts(db).window(NADIA);
+      expect(empty).toEqual({ attempts: 0, retryAfterSeconds: 0 });
+    });
+
+    /** With attempts in the window the wait is a real remainder, bounded by the window length. */
+    it('reports a wait inside the window once an attempt has been recorded', async () => {
+      const { app } = await publishedWithCode('K7RM4P');
+      await submit(app, OSCAR, 'ZZZ999');
+
+      const state = await createFailedJoinAttempts(db).window(OSCAR);
+      expect(state.attempts).toBe(1);
+      expect(state.retryAfterSeconds).toBeGreaterThan(0);
+      expect(state.retryAfterSeconds).toBeLessThanOrEqual(FAILED_ATTEMPT_WINDOW_MINUTES * 60);
+    });
+
     /** The path never reads a request address – asserted at the schema, where a column would be. */
     it('stores no client address alongside an attempt', async () => {
       const columns = await client.query(
@@ -762,7 +804,9 @@ describe.skipIf(!reachable)('join code access against a real PostgreSQL', () => 
         [OSCAR],
       );
       expect(rows.rows[0].count).toBe(FAILED_ATTEMPT_LIMIT);
-      expect((await createFailedJoinAttempts(db).window(OSCAR)).attempts).toBe(FAILED_ATTEMPT_LIMIT);
+      expect((await createFailedJoinAttempts(db).window(OSCAR)).attempts).toBe(
+        FAILED_ATTEMPT_LIMIT,
+      );
 
       const eleventh = await submit(app, OSCAR, 'ZZZ999');
       expect(eleventh.statusCode).toBe(429);
