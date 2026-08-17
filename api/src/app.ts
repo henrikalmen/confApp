@@ -6,6 +6,12 @@ import Fastify, {
 import { AppError, internalError, routeNotFound } from './errors.ts';
 import { toValidationError } from './validation.ts';
 import { registerHealthRoute } from './routes/health.ts';
+import { registerAuthRoutes } from './routes/auth.ts';
+import { registerMeRoute } from './routes/me.ts';
+import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
+import type { Verifier } from './auth/verify-id-token.ts';
+import type { UserRepository } from './auth/users.ts';
+import type { CodeExchange } from './auth/code-exchange.ts';
 import type { Database } from './db.ts';
 
 /**
@@ -41,16 +47,40 @@ export function installErrorHandling(app: FastifyInstance): void {
   });
 }
 
+/**
+ * Everything the API needs to answer "who is calling". Injected rather than constructed here
+ * so a test can drive the wrapper with locally-signed fixtures instead of reaching Google.
+ */
+export interface AuthDependencies {
+  verifier: Verifier;
+  users: UserRepository;
+  codeExchange: CodeExchange;
+}
+
 export interface BuildAppOptions {
   db: Database;
+  auth: AuthDependencies;
   loggerOptions?: FastifyServerOptions['logger'];
 }
 
-export function buildApp({ db, loggerOptions = false }: BuildAppOptions): FastifyInstance {
+export function buildApp({ db, auth, loggerOptions = false }: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: loggerOptions });
 
   installErrorHandling(app);
+  // Before any route is registered: the audit refuses startup for a route that is neither
+  // wrapped nor on the written anonymous allow-list, so a later story cannot add an
+  // unauthenticated route by forgetting the wrapper.
+  installRouteAudit(app);
+
+  const withAuth = createWithAuth({ verifier: auth.verifier, users: auth.users });
+
   registerHealthRoute(app, db);
+  registerAuthRoutes(app, {
+    codeExchange: auth.codeExchange,
+    verifier: auth.verifier,
+    users: auth.users,
+  });
+  registerMeRoute(app, withAuth);
 
   return app;
 }

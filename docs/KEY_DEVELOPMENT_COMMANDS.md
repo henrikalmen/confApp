@@ -10,10 +10,15 @@ a `.env` file – `cp .env.example .env` and adjust. `.env` is never committed.
 
 ```sh
 npm ci
-cp .env.example .env        # then edit the password
+cp .env.example .env        # then edit the password and the Google sign-in settings
 docker compose up -d        # builds the images on first run
 npm run migrate:up          # creates the schema; required before the API is healthy
 ```
+
+The API **refuses to start** until `GOOGLE_HOSTED_DOMAIN` and `GOOGLE_AUDIENCE_ALLOWLIST` are
+set, and says which one is missing. That is deliberate: defaulting either of them would mean
+serving with the domain or audience check effectively disabled. See *Google sign-in setup*
+below.
 
 Then open the application URL below. Until `migrate:up` has run, `GET /api/health` answers
 `503 DATABASE_UNAVAILABLE` and the app shows that message – that is the expected empty-database
@@ -38,6 +43,47 @@ API directly (composed stack): `http://localhost:8081/api/health`
 Host ports come from `.env` (`WEB_HOST_PORT`, `API_HOST_PORT`, `POSTGRES_HOST_PORT`). The
 database defaults to **5434** rather than 5432 so it does not collide with a natively
 installed PostgreSQL.
+
+## Google Sign-In Setup (S02)
+
+One-time, per developer. Everything below lives in `.env`, which is never committed.
+
+1. In **Google Cloud Console → APIs & Services → Credentials**, create an **OAuth client ID**
+   of type *Web application*.
+2. Add `http://localhost:8082/auth/callback` as an **Authorized redirect URI** (add
+   `http://localhost:5173/auth/callback` too if you use `npm run dev:web`). The value must
+   match `GOOGLE_REDIRECT_URI` exactly – Google compares it character for character.
+3. Copy the client ID and client secret into `.env`.
+
+| Variable | What it is |
+|----------|------------|
+| `GOOGLE_HOSTED_DOMAIN` | The Workspace domain allowed to sign in. Verified server-side on the ID token's `hd` claim; the `hd` request parameter restricts nobody. **No default – the API refuses to start without it.** |
+| `GOOGLE_AUDIENCE_ALLOWLIST` | Comma-separated list of confApp's **own** OAuth client IDs, one per platform. S11 appends its Android and iOS IDs here and changes no code. Literal IDs only – a wildcard entry is refused at startup. **No default.** |
+| `GOOGLE_WEB_CLIENT_ID` | The web client ID. Public; also served to the browser. |
+| `GOOGLE_WEB_CLIENT_SECRET` | The web client secret. **API only** – Google's token endpoint requires it for a web client, which is why the API brokers the code exchange and the SPA never sees it. |
+| `GOOGLE_REDIRECT_URI` | Must match a redirect URI registered on the OAuth client. |
+
+Startup failures are named, so the message says which setting is wrong:
+
+| Error | Cause |
+|-------|-------|
+| `MissingHostedDomainError` | `GOOGLE_HOSTED_DOMAIN` unset |
+| `EmptyAudienceAllowListError` | `GOOGLE_AUDIENCE_ALLOWLIST` unset or empty |
+| `WildcardAudienceError` | An allow-list entry is a wildcard or pattern rather than a literal client ID |
+| `MissingAuthSettingError` | `GOOGLE_REDIRECT_URI`, `GOOGLE_WEB_CLIENT_ID` or `GOOGLE_WEB_CLIENT_SECRET` unset |
+
+Verifying it end to end:
+
+```sh
+curl -i http://localhost:8081/api/me                          # 401 AUTH_CREDENTIAL_MISSING
+curl -i -H 'Authorization: Bearer not-a-token' \
+     http://localhost:8081/api/me                             # 401 AUTH_TOKEN_MALFORMED
+```
+
+Signing in through the browser at `http://localhost:8082` and then calling `/api/me` with the
+resulting token returns your `sub`, email and display name. A Google account outside
+`GOOGLE_HOSTED_DOMAIN` is refused with `403 AUTH_DOMAIN_NOT_ALLOWED`, and a consumer
+`@gmail.com` account with `403 AUTH_DOMAIN_CLAIM_MISSING`.
 
 ## Code Quality (Formatting, Linting, Type Checking)
 | Command | Description |

@@ -12,6 +12,20 @@
 
 - _No learnings recorded yet._
 
+## Google OIDC / Auth
+
+- **Google's token endpoint needs `client_secret` even with PKCE** – Web-app clients get no PKCE exception, so browser-only code exchange is impossible; broker it via `POST /api/auth/token`.
+- **Validate `aud` against an allow-list, never one client ID** – Google issues one per platform, so a single-value check refuses every mobile sign-in, failing in S11 not where it was written.
+
+## JWKS / Key Rotation
+
+- **jose `createRemoteJWKSet` 30s cooldown blocks rotation refetch** – `set.reload()` on an unknown `kid`, rate-limited by your own interval; test N unknown kids cause under 3 fetches.
+
+## Browser Testing / jsdom
+
+- **jsdom 30 has `crypto.subtle` but no Web Storage** – `localStorage`/`sessionStorage` are `undefined`; polyfill a minimal `Storage` in `web/test/setup.ts`, don't design it out.
+- **StrictMode double-mount races a one-shot OIDC redirect handler** – guard with a `useRef`; make the liveness flag a ref too, as cleanup clears a `let active` before the first call resolves.
+
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.
      Infrastructure errors (timeout, rate limit) → log, no conclusion until pattern emerges.

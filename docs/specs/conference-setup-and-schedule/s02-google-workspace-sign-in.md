@@ -38,37 +38,37 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01] [TI07,TI08] Employee signs in with their company Google account and returns to confApp signed in**
+- [x] **S01 [OC01] [TI07,TI08] Employee signs in with their company Google account and returns to confApp signed in**
   - **Given** Anna (`anna@<company-domain>`) opens confApp signed out
   - **When** she chooses Sign in and completes Google's consent screen in the top-level system browser
   - **Then** she is returned to confApp showing her name and email as signed in, and the next API call carries her ID token and is accepted
 
-- [ ] **S02 [OC02,OC03] [TI03,TI05,TI06] A structurally valid Google ID token from a non-company domain is refused and creates no user**
+- [x] **S02 [OC02,OC03] [TI03,TI05,TI06] A structurally valid Google ID token from a non-company domain is refused and creates no user**
   - **Given** a token that passes signature, issuer, audience and expiry validation but whose `hd` claim is `othercompany.example` (or is absent entirely, as on a consumer `@gmail.com` account)
   - **When** it is presented as the bearer credential on any API route
   - **Then** the request is refused with the shared error envelope and a machine code naming a domain refusal, the handler body never runs, and no row is created in the user table for that `sub`
 
-- [ ] **S03 [OC02] [TI03] A token failing any of signature, issuer, audience or expiry is refused**
+- [x] **S03 [OC02] [TI03] A token failing any of signature, issuer, audience or expiry is refused**
   - **Given** four tokens, each otherwise valid and each carrying the correct `hd`: one re-signed with an attacker key, one with `iss` set to a non-Google issuer, one with `aud` set to an OAuth client ID that is **not on confApp's configured audience allow-list** (a third party's client ID – not merely a different one of confApp's own platform IDs), one whose `exp` has passed
   - **When** each is presented in turn
   - **Then** every one is refused, each with its own machine code, and none reaches handler code – in particular an `alg: none` or otherwise unsigned token is refused rather than accepted as unverified; and a fifth token whose `aud` is a *different* entry on the same allow-list (the Android client ID rather than the web one) is **accepted**, so the allow-list is proven to admit every confApp platform and only those
 
-- [ ] **S04 [OC03] [TI02,TI06] Identity is keyed on `sub`, so a changed email keeps one user**
+- [x] **S04 [OC03] [TI02,TI06] Identity is keyed on `sub`, so a changed email keeps one user**
   - **Given** Anna signed in once as `anna.smith@<company-domain>`, and later signs in with the same `sub` after her address changed to `anna.jones@<company-domain>`
   - **When** the second sign-in is verified
   - **Then** exactly one user row exists for that `sub`, its stored email now reads `anna.jones@…`, and a different employee whose token carries a different `sub` but a recycled address gets a separate user row
 
-- [ ] **S05 [OC04] [TI05] A wrapped handler never executes without a verified caller**
+- [x] **S05 [OC04] [TI05] A wrapped handler never executes without a verified caller**
   - **Given** an HTTP route wrapped with the shared auth wrapper
   - **When** it is called with no `Authorization` header, with a malformed bearer value, and with a token that fails validation
   - **Then** each call is refused before the handler body runs (the handler records no invocation), and each refusal uses the S01 error envelope carrying a user-facing message and a machine code
 
-- [ ] **S06 [OC01] [TI09] The session survives token expiry, and a renewal Google refuses ends it**
+- [x] **S06 [OC01] [TI09] The session survives token expiry, and a renewal Google refuses ends it**
   - **Given** Anna is signed in on day 2 of the conference and her ID token has passed its expiry
   - **When** she opens the app and it makes an API call
   - **Then** a fresh token is obtained without her re-entering credentials and the call succeeds; and when Google refuses the renewal because her account was deprovisioned, she is signed out with the reason shown rather than left on a silently failing screen
 
-- [ ] **S07 [OC01] [TI10] Sign-out ends API access and fires the user-switch hook S10's cache clears through**
+- [x] **S07 [OC01] [TI10] Sign-out ends API access and fires the user-switch hook S10's cache clears through**
   - **Given** Anna is signed in on a shared tablet, and a probe is registered on the sign-out / user-switch hook (standing in for the schedule cache S10 will register there)
   - **When** she signs out and Björn then signs in on the same device
   - **Then** the stored token is gone and any API call made with it is refused, confApp shows the signed-out state, the hook fires exactly once on sign-out and once on the switch to a different `sub` – carrying the identity being cleared – and Björn's session starts from his own identity. *Whether any cached schedule data actually exists to be cleared is S10's concern, not this story's.*
@@ -76,16 +76,16 @@
 
 ## Structural Criteria
 
-- [ ] ID-token validation exists in exactly one module; no route handler and no client code parses a JWT to make a trust decision.
-- [ ] The OIDC callback refuses a response whose `state` or `nonce` does not match the initiating request, and stores no token in that case.
-- [ ] Signing keys are read from Google's published JWKS via the OIDC discovery document and refreshed on an unknown `kid`; correctness never depends on an in-process cache surviving between requests or being shared across replicas (`AGENTS.md` – no in-process state between requests; ADR-004).
-- [ ] The audience allow-list, hosted domain, expected issuer and redirect URI are configuration values; no client secret ships in the SPA bundle, and no `.env` file is committed.
-- [ ] `aud` is validated against a configured **allow-list of confApp's own OAuth client IDs** – Google issues a distinct client ID per platform, so the web, Android and iOS IDs are separate entries. The allow-list contains no wildcard and no pattern match, is never empty, and is applied identically on every platform; there is no code path that skips or relaxes the `aud` check for mobile callers.
-- [ ] `GET /api/health` remains the single unauthenticated route – it is a deployment health/readiness signal S13 depends on, so it stays anonymous by decision, not by omission. Every other route registered by this or any later story goes through the wrapper; the route table is asserted against that rule so a new anonymous route cannot be added silently.
-- [ ] No part of the auth path consults Google Directory, the Admin SDK, or any group claim.
-- [ ] The user table uses plain PostgreSQL only, with a unique constraint on `sub` and no uniqueness constraint on email; the migration is reversible.
-- [ ] No token, token fragment, or `Authorization` header value appears in a log line or an error response body.
-- [ ] The sign-in screen and signed-in shell render without horizontal scroll at 375px and rescale legibly at 768px and 1280px.
+- [x] ID-token validation exists in exactly one module; no route handler and no client code parses a JWT to make a trust decision.
+- [x] The OIDC callback refuses a response whose `state` or `nonce` does not match the initiating request, and stores no token in that case.
+- [x] Signing keys are read from Google's published JWKS via the OIDC discovery document and refreshed on an unknown `kid`; correctness never depends on an in-process cache surviving between requests or being shared across replicas (`AGENTS.md` – no in-process state between requests; ADR-004).
+- [x] The audience allow-list, hosted domain, expected issuer and redirect URI are configuration values; no client secret ships in the SPA bundle, and no `.env` file is committed.
+- [x] `aud` is validated against a configured **allow-list of confApp's own OAuth client IDs** – Google issues a distinct client ID per platform, so the web, Android and iOS IDs are separate entries. The allow-list contains no wildcard and no pattern match, is never empty, and is applied identically on every platform; there is no code path that skips or relaxes the `aud` check for mobile callers.
+- [x] `GET /api/health` remains the single unauthenticated route – it is a deployment health/readiness signal S13 depends on, so it stays anonymous by decision, not by omission. Every other route registered by this or any later story goes through the wrapper; the route table is asserted against that rule so a new anonymous route cannot be added silently.
+- [x] No part of the auth path consults Google Directory, the Admin SDK, or any group claim.
+- [x] The user table uses plain PostgreSQL only, with a unique constraint on `sub` and no uniqueness constraint on email; the migration is reversible.
+- [x] No token, token fragment, or `Authorization` header value appears in a log line or an error response body.
+- [x] The sign-in screen and signed-in shell render without horizontal scroll at 375px and rescale legibly at 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -164,47 +164,47 @@ adr    | docs/adrs/ADR-004-containerized-api-and-spa.md#decision          | The 
 
 ### Implementation Tasks
 
-- [ ] **TI01** Auth configuration is external, validated at startup, and documented for local setup
+- [x] **TI01** Auth configuration is external, validated at startup, and documented for local setup
   - The **audience allow-list** (one or more of confApp's own OAuth client IDs, one per platform – see **Technical Overview**), hosted domain, expected issuer and redirect URI come from environment configuration. Startup fails with a named configuration error when the hosted domain is absent, when the allow-list is empty, or when any entry is a wildcard/pattern rather than a literal client ID – rather than defaulting to "any domain" or "any audience". Add `.env.example` (never a real `.env`) documenting the allow-list as a multi-value setting, and the local-setup rows in `docs/KEY_DEVELOPMENT_COMMANDS.md`.
   - **Verify**: `Starting the API with the hosted-domain setting unset, with an empty audience allow-list, or with a wildcard entry each fails with its own named configuration error and serves no request; a two-entry allow-list starts cleanly; .env.example is tracked and no .env is`
 
-- [ ] **TI02** An `app_user` table exists keyed on the stable `sub` claim
+- [x] **TI02** An `app_user` table exists keyed on the stable `sub` claim
   - Columns: confApp id, `sub` (unique), email, display name, created/last-seen timestamps. Plain PostgreSQL only, reversible migration, no uniqueness on email.
   - **Verify**: `Test: migration applies and reverts cleanly; a second insert with an existing sub is rejected by the unique constraint; two rows sharing an email with distinct subs both insert`
 
-- [ ] **TI03** An ID-token verification service refuses any token failing signature, issuer, audience, expiry, or the `hd` domain check
+- [x] **TI03** An ID-token verification service refuses any token failing signature, issuer, audience, expiry, or the `hd` domain check
   - Single module, single entry point returning either a verified claim set or a typed refusal reason. Each failure mode carries its own machine code. `aud` is accepted when it matches **any** entry on TI01's allow-list and refused otherwise – one comparison against the list, with no platform-conditional branch that skips or relaxes it. Unsigned / `alg: none` tokens are a refusal. The decision uses token claims only – no directory, Admin SDK, or group lookup.
   - **Verify**: `Test (S02, S03): against a two-entry allow-list, a locally-signed fixture set – aud = entry one; aud = entry two; tampered signature; wrong iss; aud = a client ID absent from the allow-list; expired; hd absent; hd = othercompany.example – yields exactly two acceptances (both allow-list entries) and six refusals with distinct codes, with no outbound call other than JWKS retrieval`
 
-- [ ] **TI04** Signing keys come from Google's discovery document and survive key rotation without in-process assumptions
+- [x] **TI04** Signing keys come from Google's discovery document and survive key rotation without in-process assumptions
   - Discover `jwks_uri` from the well-known document; cache by `kid` per instance only; an unknown `kid` triggers one refetch before refusal. Consumes TI03's verification entry point.
   - **Verify**: `Test: verification succeeds against a cold, empty cache; an unknown kid causes exactly one JWKS refetch, and a kid still unknown after refetch is refused rather than accepted`
 
-- [ ] **TI05** A `withAuth` wrapper is the only way a handler obtains its caller
+- [x] **TI05** A `withAuth` wrapper is the only way a handler obtains its caller
   - Signature and `AuthenticatedCaller` shape exactly as pinned in **Technical Overview**, wrapping a plain HTTP handler of S01's framework (ADR-004 – no Functions bindings) – this is the `sharedDecisions` artefact S03–S09 consume, and `sub` is the join key it hands them. Uses TI03 for verification and TI06 for the user row; refuses through S01's error envelope; never logs the token or `Authorization` value. Every registered route is wrapped except `GET /api/health`, which stays anonymous as S13's readiness signal.
   - **Verify**: `Test (S05): a wrapped probe handler records no invocation for a missing, malformed, invalid, or wrong-domain credential; each response body carries the S01 envelope's message and machine code; neither response bodies nor log output contain the token or Authorization value; no route module imports the JWT verification library directly; an assertion over the registered route table names GET /api/health as the only unwrapped route`
 
-- [ ] **TI06** A verified first sign-in creates the user row, and later sign-ins update display data on the same row
+- [x] **TI06** A verified first sign-in creates the user row, and later sign-ins update display data on the same row
   - Upsert on `sub` (TI02); email and display name are refreshed as display data. A refused token never reaches this step. Wrapper (TI05) resolves `userId` from here.
   - **Verify**: `Test (S02, S04): two verifications with one sub and different emails leave one row with the newer email; a refused wrong-domain token leaves the table unchanged`
 
-- [ ] **TI07** The SPA initiates authorization code + PKCE in the top-level browser with no client secret
+- [x] **TI07** The SPA initiates authorization code + PKCE in the top-level browser with no client secret
   - Authorization request carries `code_challenge_method=S256`, a per-attempt `state` and `nonce`, `scope=openid email profile`, and the `hd` parameter as a UX hint only. Top-level navigation – no iframe, no WebView.
   - **Verify**: `Test: the generated authorization URL contains code_challenge_method=S256 plus distinct per-attempt state and nonce values; the production bundle contains no client secret; navigation is top-level`
 
-- [ ] **TI08** The redirect callback exchanges the code, rejects a mismatched `state` or `nonce`, and establishes signed-in state
+- [x] **TI08** The redirect callback exchanges the code, rejects a mismatched `state` or `nonce`, and establishes signed-in state
   - Verifier from TI07's attempt; on success store the ID token and expose signed-in state so API calls attach it as a bearer credential.
   - **Verify**: `Test (S01): a callback whose state does not match the initiating request stores no token and surfaces a sign-in error; a matching callback yields a signed-in session whose next API call is accepted`
 
-- [ ] **TI09** An expiring token renews without re-prompting, and a refused renewal ends the session with a reason
+- [x] **TI09** An expiring token renews without re-prompting, and a refused renewal ends the session with a reason
   - Renew ahead of expiry and on an expiry refusal from the API; when Google refuses the renewal (deprovisioned account), sign out and state why rather than looping. Consumes TI08's session state.
   - **Verify**: `Test (S06): an expired stored token is renewed and the retried API call succeeds without user interaction; a renewal refused by Google leaves the app signed out with the reason displayed`
 
-- [ ] **TI10** Sign-out clears the token and user-scoped device state, and a different user signing in starts clean
+- [x] **TI10** Sign-out clears the token and user-scoped device state, and a different user signing in starts clean
   - Clearing exposes the hook S10's schedule cache registers with – sign-out and user-switch both fire it, carrying the `sub` being cleared. This story owns the hook and its firing; S10 owns what is registered on it. Access ends at the next request; no server-side eviction.
   - **Verify**: `Test (S07): after sign-out no token remains and an API call made with the previous token is refused; a probe registered on the hook is invoked exactly once on sign-out and once when a different sub signs in, each time with the sub being cleared`
 
-- [ ] **TI11** The sign-in screen and signed-in shell are legible across the three target widths
+- [x] **TI11** The sign-in screen and signed-in shell are legible across the three target widths
   - Follows the responsive shell from S01. Sign-out control reachable one-handed on a phone.
   - **Verify**: `Screenshots at 375px, 768px and 1280px show the sign-in screen and signed-in shell with no horizontal scroll and no clipped controls`
 
@@ -217,13 +217,29 @@ adr    | docs/adrs/ADR-004-containerized-api-and-spa.md#decision          | The 
 
 ## Final Validation Checklist
 
-- [ ] A token that is cryptographically valid but carries no `hd`, or a foreign `hd`, is refused by the running API – demonstrated end to end, not only in unit tests.
-- [ ] No `.env`, client secret, or token value appears anywhere in the committed tree or in log output.
-- [ ] The running API accepts a token whose `aud` is any configured allow-list entry and refuses one whose `aud` is outside it, with no platform-conditional branch anywhere in the verification path – S11 must be able to sign in on Android and iOS by adding configuration only.
+- [x] A token that is cryptographically valid but carries no `hd`, or a foreign `hd`, is refused by the running API – demonstrated end to end, not only in unit tests.
+- [x] No `.env`, client secret, or token value appears anywhere in the committed tree or in log output.
+- [x] The running API accepts a token whose `aud` is any configured allow-list entry and refuses one whose `aud` is outside it, with no platform-conditional branch anywhere in the verification path – S11 must be able to sign in on Android and iOS by adding configuration only.
 
 
 ## Implementation Observations
 
 > _Managed by exec-spec post-implementation – append-only. Spec authors: leave this section empty._
 
-_No observations recorded yet._
+### Run: 2026-08-17 05:48 UTC – discovered-requirements
+
+#### DISCOVERED REQUIREMENTS
+
+- **DR01 – The authorization-code exchange must be brokered by confApp's own API, not performed in the SPA.** Google's token endpoint requires `client_secret` for the **Web application** OAuth client type even when PKCE `code_verifier` is supplied (https://developers.google.com/identity/openid-connect/openid-connect – token-endpoint request parameters). The FIS forbids a client secret in the SPA bundle (Structural Criteria; TI07), so the SPA cannot call Google's token endpoint directly. Resolution: the SPA runs PKCE and holds the verifier, then posts `{ code, codeVerifier, nonce }` to a new anonymous API route `POST /api/auth/token`; the API adds the client secret from its own environment and exchanges with Google. PKCE is preserved end to end and no secret reaches the browser. The Google ID token remains the sole bearer credential – this introduces no confApp-issued session token and no refresh-token store (both remain out of scope).
+- **DR02 – Nonce verification is server-side, inside the token-exchange route.** The Structural Criteria forbid client code parsing a JWT to make a trust decision, but also require the callback to refuse a `nonce` mismatch. Resolution: the SPA sends its expected `nonce` with the exchange; the API verifies the ID token through the single verification module (TI03) and compares the `nonce` claim there, refusing through the shared envelope. `state` remains a client-side comparison because it is an opaque round-tripped value, not a token claim.
+- **DR03 – The anonymous route allow-list has exactly two entries, both explicit.** The Structural Criterion "`GET /api/health` remains the single unauthenticated route" was written before DR01 surfaced. `POST /api/auth/token` is necessarily anonymous – it is how a caller *obtains* a credential. The criterion's intent (no route is anonymous by omission; the anonymous set is enumerated and asserted) is preserved: the allow-list is a literal two-entry constant, the route-registration audit refuses startup for any other unwrapped route, and the assertion covers both. `GET /api/health` remains the only route anonymous for readiness reasons.
+- **DR04 – Renewal is silent re-authorization (`prompt=none`), not a refresh token.** Google issues a refresh token only with `access_type=offline`, and storing one is explicitly out of scope ("A confApp-issued session token or refresh-token store"). Resolution for TI09: renew by re-running the PKCE authorization request as a top-level navigation with `prompt=none` and a `login_hint`; Google returns a code without user interaction while the Workspace session is alive. `error=login_required` / `interaction_required` / `invalid_grant` – the deprovisioned-account case – ends the session with the reason displayed. No iframe is used, honouring the embedded-WebView/iframe prohibition.
+
+### Run: 2026-08-17 06:28 UTC – observations
+
+#### NOTICED BUT NOT TOUCHING
+
+- `docs/STATE.md:26-31` – Plan health was written as `At Risk` by the Step 5b derivation rule, which fires on "any State blocker exists". The three blocker entries are pre-existing and two are annotated as **not** blocking development; S01 left plan health `On Track` with the same three present. Nothing in S02 caused this. The Blockers section's own comment says to remove resolved entries – pruning them would return plan health to `On Track`.
+- `.env.example:51` – `GOOGLE_WEB_CLIENT_SECRET` carries the placeholder `replace-with-the-web-client-secret`, matching the file's stated convention that every value is a non-secret placeholder. A real client secret must never replace it in this tracked file; it belongs only in the untracked `.env`.
+- `web/src/auth/session.ts` – The Google ID token is stored in `localStorage`, so it is readable by any successful XSS. This follows directly from the pinned design (the ID token *is* the bearer credential, there is no confApp-issued session, and sign-in must survive a multi-day conference across browser restarts). Surfaced as accepted residual risk, not fixed: eliminating it would require the confApp session token that `## Scope & Boundaries` explicitly excludes. Worth a decision if a stricter posture is ever wanted.
+- `api/src/auth/verify-id-token.ts` – `jwtVerify` runs with jose's default `clockTolerance` of zero. Across horizontally scaled replicas with drifting clocks this can refuse a token a second or two either side of its true expiry. Benign in practice because the SPA renews 120s ahead of expiry, so no user reaches the boundary; recorded because the strict setting is deliberate (expiry refusal is an Expected Outcome) rather than overlooked.

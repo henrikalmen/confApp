@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import Fastify from 'fastify';
 import { buildApp, installErrorHandling } from '../src/app.ts';
 import { fakeDatabase } from './fake-db.ts';
+import { fakeAuth } from './fake-auth.ts';
 
 /**
  * Acceptance Scenario S02 – unknown API route is refused in the standard error envelope –
@@ -16,7 +17,7 @@ describe('the shared error envelope', () => {
   });
 
   it('refuses an unknown route with 404 ROUTE_NOT_FOUND and a displayable message', async () => {
-    const app = buildApp({ db: fakeDatabase() });
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/does-not-exist' });
@@ -51,7 +52,7 @@ describe('the shared error envelope', () => {
   });
 
   it('keeps every refusal in the same envelope shape', async () => {
-    const app = buildApp({ db: fakeDatabase() });
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     apps.push(app);
 
     const refusals = await Promise.all([

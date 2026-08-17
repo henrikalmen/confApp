@@ -54,6 +54,14 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       PORT: '8080'
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Sign-in (S02). No default for the hosted domain or the allow-list, deliberately: the
+      # API refuses to start without them rather than serving with the domain or audience
+      # check effectively disabled. The client secret is read here and never reaches the SPA.
+      GOOGLE_HOSTED_DOMAIN: ${GOOGLE_HOSTED_DOMAIN}
+      GOOGLE_AUDIENCE_ALLOWLIST: ${GOOGLE_AUDIENCE_ALLOWLIST}
+      GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID}
+      GOOGLE_WEB_CLIENT_SECRET: ${GOOGLE_WEB_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8082/auth/callback}
     ports:
       - '${API_HOST_PORT:-8081}:8080'
     depends_on:
@@ -74,6 +82,12 @@ services:
       API_BASE_URL: ${API_BASE_URL:-/api}
       # Where this container proxies /api/ to. No trailing slash: that would strip the prefix.
       API_UPSTREAM: http://api:8080
+      # Sign-in values the browser needs. A client ID is public and a hosted domain is a UX
+      # hint – neither is a secret. GOOGLE_WEB_CLIENT_SECRET is deliberately NOT listed here:
+      # anything in this block is written into a file the browser downloads.
+      GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID}
+      GOOGLE_HOSTED_DOMAIN: ${GOOGLE_HOSTED_DOMAIN}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8082/auth/callback}
     ports:
       - '${WEB_HOST_PORT:-8082}:80'
     depends_on:

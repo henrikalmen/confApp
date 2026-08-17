@@ -201,7 +201,7 @@
       ],
       "parallel": false,
       "risk": "high",
-      "status": "spec-ready",
+      "status": "done",
       "fis": "s02-google-workspace-sign-in.md",
       "owner": null,
       "scope": "An employee signs in with their company Google account and the API trusts the result. Covers the OIDC authorization-code + PKCE flow from the SPA, server-side validation of the ID token on every request (signature, issuer, audience, expiry, and the hosted-domain `hd` claim), a confApp user record keyed on the stable `sub` claim, the authenticated-caller context every later handler consumes, and sign-out. Excludes per-conference roles and any authorization decision beyond 'is this a verified employee' – those are S07.",

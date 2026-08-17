@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { createDatabase } from '../src/db.ts';
 import { fakeDatabase } from './fake-db.ts';
+import { fakeAuth } from './fake-auth.ts';
 
 describe('GET /api/health', () => {
   const apps: FastifyInstance[] = [];
@@ -17,7 +18,7 @@ describe('GET /api/health', () => {
    */
   it('rejects verbose=maybe with VALIDATION_FAILED naming the field, issuing no query', async () => {
     const db = fakeDatabase();
-    const app = buildApp({ db });
+    const app = buildApp({ db, auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health?verbose=maybe' });
@@ -34,7 +35,7 @@ describe('GET /api/health', () => {
   });
 
   it('accepts verbose=true', async () => {
-    const app = buildApp({ db: fakeDatabase() });
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health?verbose=true' });
@@ -50,7 +51,7 @@ describe('GET /api/health', () => {
    */
   it('returns the schema version the database supplied, not a constant', async () => {
     const db = fakeDatabase(() => [{ value: '99-from-the-database' }]);
-    const app = buildApp({ db });
+    const app = buildApp({ db, auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health' });
@@ -71,7 +72,7 @@ describe('GET /api/health', () => {
    * S05's rate limiter later depends on the rule holding from the start.
    */
   it('does not let a previous verbose=true request influence the next request', async () => {
-    const app = buildApp({ db: fakeDatabase() });
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     apps.push(app);
 
     const verbose = await app.inject({ method: 'GET', url: '/api/health?verbose=true' });
@@ -83,7 +84,7 @@ describe('GET /api/health', () => {
   });
 
   it('computes each response timestamp for its own request', async () => {
-    const app = buildApp({ db: fakeDatabase() });
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     apps.push(app);
 
     const first = await app.inject({ method: 'GET', url: '/api/health' });
@@ -108,7 +109,7 @@ describe('GET /api/health', () => {
     const db = fakeDatabase(() => {
       throw undefinedTable;
     });
-    const app = buildApp({ db });
+    const app = buildApp({ db, auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health' });
@@ -123,7 +124,7 @@ describe('GET /api/health', () => {
     const db = fakeDatabase(() => {
       throw Object.assign(new Error('syntax error at or near "slect"'), { code: '42601' });
     });
-    const app = buildApp({ db });
+    const app = buildApp({ db, auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health' });
@@ -141,7 +142,7 @@ describe('GET /api/health', () => {
     const silent = { error: () => {} };
     // Port 1 is reserved and never listening.
     const db = createDatabase('postgres://confapp:confapp@127.0.0.1:1/confapp', silent);
-    const app = buildApp({ db });
+    const app = buildApp({ db, auth: fakeAuth() });
     apps.push(app);
 
     const response = await app.inject({ method: 'GET', url: '/api/health' });

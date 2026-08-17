@@ -19,6 +19,25 @@ export const ERROR_CODES = {
   ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+
+  // ---------- authentication (S02) ----------
+  // Every distinguishable way a credential can fail gets its own code, so a client can tell
+  // "sign in again" from "you are not allowed here" without parsing prose. The messages are
+  // displayable sentences for the same reason every other envelope message is.
+  AUTH_CREDENTIAL_MISSING: 'AUTH_CREDENTIAL_MISSING',
+  AUTH_CREDENTIAL_MALFORMED: 'AUTH_CREDENTIAL_MALFORMED',
+  AUTH_TOKEN_MALFORMED: 'AUTH_TOKEN_MALFORMED',
+  AUTH_TOKEN_SIGNATURE_INVALID: 'AUTH_TOKEN_SIGNATURE_INVALID',
+  AUTH_TOKEN_ISSUER_INVALID: 'AUTH_TOKEN_ISSUER_INVALID',
+  AUTH_TOKEN_AUDIENCE_INVALID: 'AUTH_TOKEN_AUDIENCE_INVALID',
+  AUTH_TOKEN_EXPIRED: 'AUTH_TOKEN_EXPIRED',
+  AUTH_SIGNING_KEY_UNKNOWN: 'AUTH_SIGNING_KEY_UNKNOWN',
+  /** The token carried no `hd` claim at all – a consumer @gmail.com account. */
+  AUTH_DOMAIN_CLAIM_MISSING: 'AUTH_DOMAIN_CLAIM_MISSING',
+  /** The token carried an `hd` claim for some other company's Workspace domain. */
+  AUTH_DOMAIN_NOT_ALLOWED: 'AUTH_DOMAIN_NOT_ALLOWED',
+  AUTH_NONCE_MISMATCH: 'AUTH_NONCE_MISMATCH',
+  AUTH_EXCHANGE_FAILED: 'AUTH_EXCHANGE_FAILED',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -108,4 +127,82 @@ export function internalError(): AppError {
     500,
     'The server encountered an unexpected problem handling this request.',
   );
+}
+
+/**
+ * The one place an authentication refusal becomes a response.
+ *
+ * Two rules hold for every entry. The status separates "we do not know who you are" (401,
+ * signing in again may help) from "we know, and this is not your company" (403, it never
+ * will). And no message ever repeats the credential back – not the token, not a claim value,
+ * not the `Authorization` header – because these strings are logged and displayed.
+ */
+const AUTH_REFUSALS = {
+  [ERROR_CODES.AUTH_CREDENTIAL_MISSING]: [
+    401,
+    'This request needs you to be signed in. Sign in with your company Google account and try again.',
+  ],
+  [ERROR_CODES.AUTH_CREDENTIAL_MALFORMED]: [
+    401,
+    'The sign-in credential on this request was not in the expected format. Please sign in again.',
+  ],
+  [ERROR_CODES.AUTH_TOKEN_MALFORMED]: [
+    401,
+    'Your sign-in could not be read. Please sign in again.',
+  ],
+  [ERROR_CODES.AUTH_TOKEN_SIGNATURE_INVALID]: [
+    401,
+    'Your sign-in could not be verified as genuine. Please sign in again.',
+  ],
+  [ERROR_CODES.AUTH_TOKEN_ISSUER_INVALID]: [
+    401,
+    'Your sign-in did not come from Google. Please sign in again.',
+  ],
+  [ERROR_CODES.AUTH_TOKEN_AUDIENCE_INVALID]: [
+    401,
+    'Your sign-in was issued for a different application. Please sign in to confApp again.',
+  ],
+  [ERROR_CODES.AUTH_TOKEN_EXPIRED]: [401, 'Your sign-in has expired. Please sign in again.'],
+  [ERROR_CODES.AUTH_SIGNING_KEY_UNKNOWN]: [
+    401,
+    'Your sign-in was signed with a key Google does not currently publish. Please sign in again.',
+  ],
+  [ERROR_CODES.AUTH_DOMAIN_CLAIM_MISSING]: [
+    403,
+    'confApp is limited to company Google Workspace accounts, and this account is not one. ' +
+      'Please sign in with your work account.',
+  ],
+  [ERROR_CODES.AUTH_DOMAIN_NOT_ALLOWED]: [
+    403,
+    'confApp is limited to company Google Workspace accounts, and this account belongs to a ' +
+      'different organisation.',
+  ],
+  [ERROR_CODES.AUTH_NONCE_MISMATCH]: [
+    401,
+    'This sign-in did not match the request that started it, so it was not completed. Please try signing in again.',
+  ],
+  [ERROR_CODES.AUTH_EXCHANGE_FAILED]: [
+    401,
+    'Google did not complete this sign-in. Please try signing in again.',
+  ],
+} as const satisfies Record<AuthRefusalCode, readonly [number, string]>;
+
+/** The subset of `ERROR_CODES` that an authentication decision can produce. */
+export type AuthRefusalCode =
+  | typeof ERROR_CODES.AUTH_CREDENTIAL_MISSING
+  | typeof ERROR_CODES.AUTH_CREDENTIAL_MALFORMED
+  | typeof ERROR_CODES.AUTH_TOKEN_MALFORMED
+  | typeof ERROR_CODES.AUTH_TOKEN_SIGNATURE_INVALID
+  | typeof ERROR_CODES.AUTH_TOKEN_ISSUER_INVALID
+  | typeof ERROR_CODES.AUTH_TOKEN_AUDIENCE_INVALID
+  | typeof ERROR_CODES.AUTH_TOKEN_EXPIRED
+  | typeof ERROR_CODES.AUTH_SIGNING_KEY_UNKNOWN
+  | typeof ERROR_CODES.AUTH_DOMAIN_CLAIM_MISSING
+  | typeof ERROR_CODES.AUTH_DOMAIN_NOT_ALLOWED
+  | typeof ERROR_CODES.AUTH_NONCE_MISMATCH
+  | typeof ERROR_CODES.AUTH_EXCHANGE_FAILED;
+
+export function authRefusal(code: AuthRefusalCode): AppError {
+  const [status, message] = AUTH_REFUSALS[code];
+  return new AppError(code, status, message);
 }
