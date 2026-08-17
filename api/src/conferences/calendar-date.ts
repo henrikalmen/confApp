@@ -60,6 +60,27 @@ export function daySpan(startDate: CalendarDate, endDate: CalendarDate): number 
 }
 
 /**
+ * The server's "now", in **both** frames at once – and that is the whole point of the shape.
+ *
+ * A UTC instant alone cannot produce a wall clock without a timezone, and timezone conversion is
+ * banned for every schedule value (PRD → Constraints, Binding Constraint FR4). So the server sends
+ * both and the client converts neither:
+ *
+ *   - `instant` is a real moment, ISO-8601 UTC. It exists so the client can measure the
+ *     server–device offset by subtracting its own clock reading at receipt, and for nothing else.
+ *     No value derived from it ever reaches the screen.
+ *   - `day` and `time` are the server's **naive wall clock** – the same frame Sessions are authored
+ *     in (S06 → Constraints & Gotchas, recorded assumption: one configured deployment wall clock).
+ *     They are what "is this session running now" is decided against, by string comparison.
+ */
+export interface ServerNow {
+  instant: string;
+  day: CalendarDate;
+  /** 'HH:mm' – the same naive form Session start and end times use. */
+  time: string;
+}
+
+/**
  * How the server decides what day it is.
  *
  * Its own wall-clock calendar date, in the same naive frame the stored dates use – read fresh on
@@ -69,16 +90,58 @@ export function daySpan(startDate: CalendarDate, endDate: CalendarDate): number 
  */
 export interface Clock {
   today(): CalendarDate;
+  /** The same reading in both frames, taken once so the two cannot disagree across midnight. */
+  now(): ServerNow;
+}
+
+function pad(value: number, width = 2): string {
+  return String(value).padStart(width, '0');
+}
+
+/**
+ * Millisecond precision, padded to the microsecond wire form.
+ *
+ * The envelope's two instants – `serverNow.instant` and `lastUpdatedAt` – share one format so a
+ * client needs one parser. `lastUpdatedAt` genuinely carries microseconds (PostgreSQL formats it;
+ * see `instantExpression`), while a JavaScript clock is millisecond-granular, so the last three
+ * digits here are always zero. That is a uniform format, not a precision claim: the offset this
+ * value exists to measure is a network round trip, where a microsecond would be noise.
+ */
+function toInstant(reading: Date): string {
+  return reading.toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
 }
 
 export const systemClock: Clock = {
   today(): CalendarDate {
-    const now = new Date();
-    return format(now.getFullYear(), now.getMonth() + 1, now.getDate());
+    return systemClock.now().day;
+  },
+
+  now(): ServerNow {
+    // One reading, three fields. Taking `new Date()` twice would let a request that lands on the
+    // stroke of midnight report today's date beside tomorrow's instant.
+    const reading = new Date();
+    return {
+      instant: toInstant(reading),
+      // The deployment's configured wall clock, read through local getters on purpose – that is
+      // the clock the Organizer authored in, and it is the only frame these fields mean anything in.
+      day: format(reading.getFullYear(), reading.getMonth() + 1, reading.getDate()),
+      time: `${pad(reading.getHours())}:${pad(reading.getMinutes())}`,
+    };
   },
 };
 
-/** A clock pinned to one day, so the archive-boundary rules can be tested at a stated date. */
-export function fixedClock(today: CalendarDate): Clock {
-  return { today: () => today };
+/**
+ * A clock pinned to one day and time, so the archive boundary and the running-Session highlight
+ * can both be tested at a stated moment.
+ *
+ * The pinned wall clock is reported as its own UTC instant. A fixed clock is a statement of what
+ * the server believes the time to be, and inventing a deployment timezone for it would put a
+ * conversion into the one place this codebase is most careful there is none. A test that cares
+ * about clock skew skews the *device*, which is where the skew lives in production.
+ */
+export function fixedClock(today: CalendarDate, time = '00:00'): Clock {
+  return {
+    today: () => today,
+    now: () => ({ instant: `${today}T${time}:00.000000Z`, day: today, time }),
+  };
 }

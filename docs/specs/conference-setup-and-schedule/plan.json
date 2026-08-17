@@ -306,7 +306,7 @@
       ],
       "parallel": true,
       "risk": "medium",
-      "status": "spec-ready",
+      "status": "done",
       "fis": "s06-attendee-schedule-view.md",
       "owner": null,
       "scope": "An Attendee opens a Conference they joined and sees its Schedule for a chosen Day. Covers the day-navigable list showing title, start and end time, location and kind in start-time order; conference selection when the Attendee has joined more than one, defaulting to the running conference or the most recently joined; current-day default during the conference and day 1 outside it; concurrent Sessions marked as running at the same time rather than stacked as a sequence; the currently-running Session highlighted using server time corrected by the server–device offset from the last sync; explicit empty and error states; and legibility one-handed at 375px, rescaling to 768px and 1280px. Defines the schedule read model and cache envelope S10 reuses. Excludes offline behaviour (S10) and organizer editing (S04, S09).",

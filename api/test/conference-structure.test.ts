@@ -197,7 +197,17 @@ describe('the conference routes are authenticated (TI04)', () => {
     }
   });
 
-  it('registers the organizer list and leaves /api/me/conferences to S06', async () => {
+  /**
+   * The Organizer list, and the route split it exists on one side of.
+   *
+   * This assertion used to read "and leaves /api/me/conferences to S06", because S06 had not landed.
+   * It now asserts the thing that guard was protecting all along: **both** endpoints exist and they
+   * are separate. `GET /conferences` is the Organizer list – Role Assignment, drafts included – and
+   * `GET /me/conferences` is the Attendee one – joined, published or archived. Merging them, or
+   * making either reachable through a query parameter that switches the other's semantics, fails
+   * here. S06's FIS records the split from its side, and so does this test.
+   */
+  it('registers the organizer list separately from S06’s attendee list', async () => {
     const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     try {
       const urls = app.confappRoutes.map((route) => `${route.method} ${route.url}`);
@@ -209,8 +219,9 @@ describe('the conference routes are authenticated (TI04)', () => {
       expect(urls).toContain('POST /api/conferences/:conferenceId/publish');
       expect(urls).toContain('POST /api/conferences/:conferenceId/archive');
 
-      // The attendee list is a different result set and a different story.
-      expect(urls.some((url) => url.includes('/api/me/conferences'))).toBe(false);
+      // Two intended endpoints, on two different paths.
+      expect(urls).toContain('GET /api/me/conferences');
+      expect(urls.filter((url) => url === 'GET /api/conferences')).toHaveLength(1);
     } finally {
       await app.close();
     }

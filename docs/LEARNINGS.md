@@ -37,6 +37,11 @@
 ## CSS / Responsive Layout
 
 - **`auto-fit` is wrong for "sidebar + main that stacks"** – it keeps filling the row with tracks, crushing content at wide widths. Use `flex-wrap` with a flex-basis on the main pane instead.
+- **`flex-shrink: 0` + a rem `min-width` overflows under OS font scaling** – fine at 16px root, off-screen at 24px on a 375px phone; Capacitor inherits the OS scale. Use `min-width: min(Xrem, 100%)`.
+
+## Testing
+
+- **Counting queries at the repository seam cannot catch an N+1** – a one-statement repo call says nothing about a handler looping per day; count across a whole request via a recording Database.
 
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.

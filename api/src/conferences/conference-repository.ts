@@ -36,6 +36,33 @@ export interface Conference {
   updatedAt: string;
 }
 
+/**
+ * One Conference as the Attendee list sees it: the fields the picker renders, plus the timestamp
+ * that decides the default.
+ *
+ * Deliberately not a `Conference`. It carries no `joinCode`, no `createdBySub` and no `updatedAt` –
+ * an attendee has no use for any of them, and the narrower type is what stops the code from
+ * reaching the picker at all. `joinedAt` never leaves the server: it orders the list and picks the
+ * default, and the response names the default outright rather than making a client re-derive it.
+ */
+export interface AttendeeConference {
+  id: string;
+  name: string;
+  startDate: CalendarDate;
+  endDate: CalendarDate;
+  lifecycleState: LifecycleState;
+  joinedAt: string;
+}
+
+interface AttendeeConferenceRow {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  lifecycle_state: string;
+  joined_at: Date;
+}
+
 interface ConferenceRow {
   id: string;
   name: string;
@@ -92,6 +119,18 @@ export interface ConferenceRepository {
    */
   findByJoinCode(joinCode: string): Promise<Conference | null>;
   listForRoleHolder(sub: string): Promise<Conference[]>;
+  /**
+   * The **Attendee** list: the Conferences this `sub` has *joined* that are `published` or
+   * `archived`, most recently joined first.
+   *
+   * A genuinely different result set from `listForRoleHolder`, not a filtered view of it, and that
+   * is why the two endpoints stay separate (S03 TI06 records the split from its side). This one
+   * joins through `membership`, so a draft nobody could have joined never appears – and a draft its
+   * own Admin *is* a member of is excluded by the state predicate, because the attendee surface
+   * shows only what has been published (FR4 → Validation). The Organizer reads their draft through
+   * the composition view instead.
+   */
+  listJoinedAndReadable(sub: string): Promise<AttendeeConference[]>;
   updateDetails(conferenceId: string, details: ConferenceDetails): Promise<Conference>;
   updateLifecycleState(conferenceId: string, state: LifecycleState): Promise<Conference>;
   /** The draft → published transition, which is also where the Conference's code is minted. */
@@ -236,6 +275,41 @@ export function createConferenceRepository(
         [sub],
       );
       return rows.map(toConference);
+    },
+
+    /**
+     * The Attendee list, most recently joined first.
+     *
+     * `joined_at` is S03's column on `membership` – already there, already defaulted, already
+     * indexed by the unique constraint – so this story adds no migration for it. The tie-break on
+     * `c.id` is not decoration: `joined_at` defaults to `now()`, which is *transaction*-start time,
+     * so two Memberships written inside one transaction carry the identical stamp and an untied
+     * ORDER BY would pick a different default on different reads of the same data.
+     */
+    async listJoinedAndReadable(sub: string): Promise<AttendeeConference[]> {
+      const rows = await db.query<AttendeeConferenceRow>(
+        `select c.id, c.name, c.start_date, c.end_date, c.lifecycle_state, m.joined_at
+           from conference c
+           join membership m on m.conference_id = c.id
+          where m.user_sub = $1
+            and c.lifecycle_state in ('published', 'archived')
+          order by m.joined_at desc, c.id`,
+        [sub],
+      );
+
+      return rows.map((row) => {
+        if (!isLifecycleState(row.lifecycle_state)) {
+          throw new Error(`conference ${row.id} holds unknown lifecycle state.`);
+        }
+        return {
+          id: row.id,
+          name: row.name,
+          startDate: row.start_date,
+          endDate: row.end_date,
+          lifecycleState: row.lifecycle_state,
+          joinedAt: row.joined_at.toISOString(),
+        };
+      });
     },
 
     /** A write to the Conference row, so `updated_at` moves with it. */

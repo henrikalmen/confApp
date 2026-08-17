@@ -1,4 +1,5 @@
 import { resolveApiBaseUrl } from '../config.ts';
+import type { ServerNow } from '../clock/effective-clock.ts';
 
 /** Mirrors the API's error envelope – the shared contract in api/src/errors.ts. */
 export interface ApiErrorEnvelope {
@@ -367,4 +368,98 @@ export async function deleteSession(conferenceId: string, sessionId: string): Pr
   await apiRequest<{ deleted: string }>(`/conferences/${conferenceId}/sessions/${sessionId}`, {
     method: 'DELETE',
   });
+}
+
+// ---------- attendee schedule view (S06) ----------
+
+/**
+ * One Conference in the attendee's picker. A different result set from `fetchConferences` above,
+ * from a different endpoint: joined conferences that are published or archived, never a draft.
+ */
+export interface AttendeeConference {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  state: LifecycleState;
+}
+
+/**
+ * The list plus the server's choice of default.
+ *
+ * `defaultConferenceId` is named by the server rather than implied by list order: "the one running
+ * today, else the most recently joined" is decided against the *server's* calendar day, and a
+ * client re-deriving it would need the same rule in the browser, the Android shell and the iOS one.
+ */
+export interface AttendeeConferences {
+  conferences: AttendeeConference[];
+  defaultConferenceId: string | null;
+}
+
+/** One Session as an Attendee reads it – no row version, because an attendee edits nothing. */
+export interface AttendeeSession {
+  id: string;
+  title: string;
+  description: string | null;
+  kind: SessionKind;
+  /** Naive wall-clock strings, exactly as authored. Never parsed through a `Date`. */
+  startTime: string;
+  endTime: string;
+  location: string;
+  /**
+   * The Sessions this one runs at the same time as – a Parallel Track. Symmetric, and computed by
+   * the server on every read so it cannot go stale. Presentational only: there is no Personal
+   * Agenda and nothing to choose between concurrent Sessions (FR4, FR6).
+   */
+  concurrentWith: string[];
+}
+
+export interface AttendeeScheduleDay {
+  date: string;
+  /** 1-based position in the span, so a day can be labelled without calendar arithmetic. */
+  dayNumber: number;
+  sessions: AttendeeSession[];
+}
+
+/**
+ * The schedule envelope – the shared decision S06 produces, S09 replaces wholesale and S10 caches
+ * verbatim.
+ *
+ * Self-contained on purpose: the whole view renders from this one object with no further request,
+ * which is what lets S10 hand the same component tree a cached copy with no network available.
+ *
+ * `serverNow` carries the server's reading in both frames, and `conference.lastUpdatedAt` is an
+ * **instant** – to be shown as an elapsed age ("updated 4 minutes ago"), never as an absolute wall
+ * clock, because deriving one on the client needs the timezone conversion this whole representation
+ * exists to avoid. This story carries it and acts on it in no other way.
+ */
+export interface AttendeeSchedule {
+  conference: {
+    id: string;
+    name: string;
+    startDate: string;
+    endDate: string;
+    state: LifecycleState;
+    lastUpdatedAt: string | null;
+  };
+  days: AttendeeScheduleDay[];
+  serverNow: ServerNow;
+}
+
+export async function fetchMyConferences(signal?: AbortSignal): Promise<AttendeeConferences> {
+  return apiRequest<AttendeeConferences>('/me/conferences', signal ? { signal } : {});
+}
+
+/**
+ * The attendee read. `/schedule`, not `/schedule/organizer` – same resource, two audiences, two
+ * intended endpoints.
+ */
+export async function fetchAttendeeSchedule(
+  conferenceId: string,
+  signal?: AbortSignal,
+): Promise<AttendeeSchedule> {
+  return apiRequest<AttendeeSchedule>(
+    `/conferences/${conferenceId}/schedule`,
+    signal ? { signal } : {},
+  );
 }

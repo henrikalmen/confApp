@@ -11,6 +11,7 @@ import { registerMeRoute } from './routes/me.ts';
 import { registerConferenceRoutes } from './routes/conferences.ts';
 import { registerSessionRoutes } from './routes/sessions.ts';
 import { registerJoinCodeRoutes } from './routes/join-code.ts';
+import { registerAttendeeRoutes } from './routes/attendee.ts';
 import { createFailedJoinAttempts } from './conferences/failed-join-attempts.ts';
 import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
 import { createConferenceAuthorization } from './conferences/authorization.ts';
@@ -122,11 +123,22 @@ export function buildApp({
     scheduleGate: scheduleGate ?? createScheduleGate(db),
     clock,
   });
+  const sessions = createSessionRepository(db);
+
   registerSessionRoutes(app, {
     withAuth,
     conferences,
-    sessions: createSessionRepository(db),
+    sessions,
     authorization,
+  });
+  // The Attendee's read surface (S06) – a different result set from the Organizer's on both of its
+  // routes, which is why it is registered separately rather than folded into the two above.
+  registerAttendeeRoutes(app, {
+    withAuth,
+    conferences,
+    sessions,
+    authorization,
+    clock,
   });
   registerJoinCodeRoutes(app, {
     withAuth,

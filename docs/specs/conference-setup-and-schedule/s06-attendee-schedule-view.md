@@ -41,49 +41,49 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01] [TI03,TI06,TI08] An Attendee opens a running Conference and lands on today's Sessions in start-time order**
+- [x] **S01 [OC01] [TI03,TI06,TI08] An Attendee opens a running Conference and lands on today's Sessions in start-time order**
   - **Given** Ravi is an Attendee of the published Conference "Kickoff 2026" running 2026-09-14 to 2026-09-16, it is the only Conference he has joined, and today is 2026-09-15
   - **And** 2026-09-15 holds "Retrospective" 15:00–16:00 (Workshop, "Room B") and "Opening Keynote" 09:00–10:30 (Presentation, "Main Hall"), created in that order
   - **When** Ravi opens the schedule
   - **Then** the Conference Day 2026-09-15 is selected without him choosing it, and the list reads "Opening Keynote" first then "Retrospective", each showing its title, `09:00–10:30` / `15:00–16:00`, its location and its kind
 
-- [ ] **S02 [OC01] [TI01,TI02,TI10] The Conference shown by default is the running one, otherwise the most recently joined**
+- [x] **S02 [OC01] [TI01,TI02,TI10] The Conference shown by default is the running one, otherwise the most recently joined**
   - **Given** Ravi has joined three published Conferences: "Retro 2025" (ended 2025-11-20, joined 2025-11-01), "Kickoff 2026" (2026-09-14 to 2026-09-16, joined 2026-08-01) and "Product Days" (2026-11-02 to 2026-11-03, joined 2026-09-10)
   - **When** Ravi opens the schedule on 2026-09-15
   - **Then** "Kickoff 2026" is shown – the Conference currently running – and a picker lists all three
   - **And** on 2026-09-20, with none of the three running, "Product Days" is shown because it is the most recently joined
 
-- [ ] **S03 [OC01,OC03] [TI06,TI09] Days are navigable, default to day 1 outside the Conference, and a Day with no Sessions says so**
+- [x] **S03 [OC01,OC03] [TI06,TI09] Days are navigable, default to day 1 outside the Conference, and a Day with no Sessions says so**
   - **Given** "Kickoff 2026" runs 2026-09-14 to 2026-09-16 and 2026-09-16 holds no Sessions at all
   - **When** Ravi opens the schedule on 2026-09-01 (before it starts) and again on 2026-10-01 (after it ends)
   - **Then** day 1 – 2026-09-14 – is selected on both occasions, and all three Conference Days are reachable from the day navigation
   - **And** navigating to 2026-09-16 shows an explicit "no sessions on this day" state, not a blank area
 
-- [ ] **S04 [OC01] [TI03,TI07] Overlapping Sessions are marked as running at the same time and offer nothing to choose**
+- [x] **S04 [OC01] [TI03,TI07] Overlapping Sessions are marked as running at the same time and offer nothing to choose**
   - **Given** on 2026-09-15 "Design Workshop" runs 10:00–11:00 and "Architecture Deep Dive" runs 10:00–11:00, while "Opening Keynote" runs 09:00–10:30 and "Retrospective" 15:00–16:00
   - **When** Ravi views 2026-09-15
   - **Then** "Design Workshop" and "Architecture Deep Dive" are presented as concurrent with each other, "Opening Keynote" is presented as concurrent with both (09:00–10:30 overlaps 10:00–11:00), and "Retrospective" is presented as concurrent with nothing
   - **And** no Session in the list offers a control to pick, attend, star, add to an agenda or otherwise record a choice, and nothing is written to the server by viewing the Schedule
 
-- [ ] **S05 [OC02] [TI05,TI08] A device clock three hours fast highlights the right Session and never alters a displayed time**
+- [x] **S05 [OC02] [TI05,TI08] A device clock three hours fast highlights the right Session and never alters a displayed time**
   - **Given** "Opening Keynote" was authored 09:00–10:30 on 2026-09-15, the server's wall clock reads 2026-09-15 09:40, and Ravi's device clock is set three hours fast
   - **When** Ravi loads the schedule and reads it
   - **Then** "Opening Keynote" is highlighted as currently running – the highlight follows the server wall clock carried in the response, corrected by the server–device offset measured at that sync – and it still reads `09:00–10:30`
   - **And** when Ravi's device clock then jumps a further three hours forward *after* the sync, the highlight may move to the wrong Session, but every time on screen is still exactly the authored value: `09:00–10:30` is not re-rendered as `12:00–13:30`, and no timezone conversion is applied to any Session time on any device
 
-- [ ] **S06 [OC03] [TI04] Reading a Conference the caller is not entitled to is refused with the reason named**
+- [x] **S06 [OC03] [TI04] Reading a Conference the caller is not entitled to is refused with the reason named**
   - **Given** "Draft Days" is in `draft` state and Ravi holds an Admin Role Assignment for it; "Private Offsite" is published and Ravi has no Membership for it; "Retro 2025" is archived and Ravi is a member
   - **When** Ravi requests each schedule in turn through the attendee schedule endpoint
   - **Then** "Draft Days" is refused with a distinct machine code and a displayable message naming that the Conference is not published – its Sessions are not returned even to its own Admin – "Private Offsite" is refused as not joined, and "Retro 2025" returns its full Schedule and is marked as archived
   - **And** both refusals arrive in the shared error envelope, and neither response discloses Session content
 
-- [ ] **S07 [OC03] [TI09] A failed fetch shows an error state offering retry, and the retry succeeds**
+- [x] **S07 [OC03] [TI09] A failed fetch shows an error state offering retry, and the retry succeeds**
   - **Given** Ravi is a member of "Kickoff 2026" and has never loaded its Schedule on this device
   - **When** the schedule request fails because the venue network drops the connection
   - **Then** the view shows an explicit error state carrying a displayable message with a retry control – not a blank screen, a spinner that never ends, or a fabricated empty Schedule
   - **And** activating retry after connectivity returns renders the Schedule; no cached copy is consulted, because caching arrives with S10
 
-- [ ] **S08 [OC04] [TI11] The Schedule is legible one-handed at 375px and rescales to tablet and desktop**
+- [x] **S08 [OC04] [TI11] The Schedule is legible one-handed at 375px and rescales to tablet and desktop**
   - **Given** a Conference Day holding a concurrent pair, a currently-running highlighted Session and a long Session title
   - **When** the attendee schedule view is rendered at viewport widths 375px, 768px and 1280px
   - **Then** every Session's title, time range, location, kind, concurrency marking and the running highlight are readable at each width with no horizontal body scroll and no clipped or truncated-beyond-recognition content, and the day navigation is reachable one-handed at 375px
@@ -91,18 +91,18 @@
 
 ## Structural Criteria
 
-- [ ] The schedule endpoint returns **one self-contained envelope** – shape as pinned in *Technical Overview* – from which the whole view renders with no further network call, so S10 can cache it verbatim and S09 can replace it wholesale.
-- [ ] The attendee schedule component tree renders as a pure function of `(envelope, effectiveWallClockNow)`; no component in it issues a fetch, reads `Date.now()` directly, or requires a live connection to render.
-- [ ] The clock module's entire state is the serializable anchor `{ serverNowInstant, serverNowDay, serverNowTime, deviceClockAtReceipt }` – all four plain values – and the module exposes a **rehydration entry point** that accepts exactly that anchor and yields a working `effectiveWallClockNow()` in a process that has performed no fetch. The offset is *derived* from the anchor on demand, never the only place the sync is recorded, so a force-quit followed by an offline relaunch loses nothing S10 has persisted.
-- [ ] `serverNow` in the envelope carries **both** a UTC instant (for offset measurement) **and** the server's naive wall-clock day and time in the same clock Sessions are authored in – the client never converts an instant into a wall clock.
-- [ ] No Session `day`, `startTime` or `endTime` value in this story's server or client code passes through `new Date(...)`, `Date.parse`, `toLocaleTimeString`, `Intl.DateTimeFormat`, or any timezone-conversion library; all formatting and comparison uses the S04 wall-clock helpers.
-- [ ] `concurrentWith` is produced by **S04's single overlap implementation** (S04 TI07), imported and called – not a second function restating `start < otherEnd AND end > otherStart`. One rule, one implementation, exactly as the S04 wall-clock helpers are treated; the codebase contains no second overlap predicate.
-- [ ] `GET /me/conferences` (attendee, joined + published-or-archived) and S03's `GET /conferences` (Organizer, Role Assignment + drafts included) both exist as separate endpoints with separate result sets; no handler serves both, and neither is reachable by a query parameter switching the other's semantics.
-- [ ] The schedule and conference-list endpoints obtain their caller through S02's `withAuth` wrapper and their per-Conference decision through S03's single provisional authorization helper – no inline role or membership comparison in a handler body; every membership and conference lookup joins on `sub` against `app_user.sub`, never on `userId` or email.
-- [ ] Every refusal is emitted through S01's JSON error envelope with a displayable message and a distinct machine code; no endpoint-local error shape.
-- [ ] The Conference `lastUpdatedAt` produced by S04 is carried through the envelope unmodified and at full precision, and is not interpreted or acted on by this story.
-- [ ] The Membership timestamp migration is reversible and uses plain PostgreSQL only (ADR-003); handlers retain no request-derived state between requests, because the API runs as a long-running container scaled across replicas (ADR-004).
-- [ ] A Conference Day's Sessions are fetched in one query per schedule request – no per-Session or per-Day round trip.
+- [x] The schedule endpoint returns **one self-contained envelope** – shape as pinned in *Technical Overview* – from which the whole view renders with no further network call, so S10 can cache it verbatim and S09 can replace it wholesale.
+- [x] The attendee schedule component tree renders as a pure function of `(envelope, effectiveWallClockNow)`; no component in it issues a fetch, reads `Date.now()` directly, or requires a live connection to render.
+- [x] The clock module's entire state is the serializable anchor `{ serverNowInstant, serverNowDay, serverNowTime, deviceClockAtReceipt }` – all four plain values – and the module exposes a **rehydration entry point** that accepts exactly that anchor and yields a working `effectiveWallClockNow()` in a process that has performed no fetch. The offset is *derived* from the anchor on demand, never the only place the sync is recorded, so a force-quit followed by an offline relaunch loses nothing S10 has persisted.
+- [x] `serverNow` in the envelope carries **both** a UTC instant (for offset measurement) **and** the server's naive wall-clock day and time in the same clock Sessions are authored in – the client never converts an instant into a wall clock.
+- [x] No Session `day`, `startTime` or `endTime` value in this story's server or client code passes through `new Date(...)`, `Date.parse`, `toLocaleTimeString`, `Intl.DateTimeFormat`, or any timezone-conversion library; all formatting and comparison uses the S04 wall-clock helpers.
+- [x] `concurrentWith` is produced by **S04's single overlap implementation** (S04 TI07), imported and called – not a second function restating `start < otherEnd AND end > otherStart`. One rule, one implementation, exactly as the S04 wall-clock helpers are treated; the codebase contains no second overlap predicate.
+- [x] `GET /me/conferences` (attendee, joined + published-or-archived) and S03's `GET /conferences` (Organizer, Role Assignment + drafts included) both exist as separate endpoints with separate result sets; no handler serves both, and neither is reachable by a query parameter switching the other's semantics.
+- [x] The schedule and conference-list endpoints obtain their caller through S02's `withAuth` wrapper and their per-Conference decision through S03's single provisional authorization helper – no inline role or membership comparison in a handler body; every membership and conference lookup joins on `sub` against `app_user.sub`, never on `userId` or email.
+- [x] Every refusal is emitted through S01's JSON error envelope with a displayable message and a distinct machine code; no endpoint-local error shape.
+- [x] The Conference `lastUpdatedAt` produced by S04 is carried through the envelope unmodified and at full precision, and is not interpreted or acted on by this story.
+- [x] The Membership timestamp migration is reversible and uses plain PostgreSQL only (ADR-003); handlers retain no request-derived state between requests, because the API runs as a long-running container scaled across replicas (ADR-004).
+- [x] A Conference Day's Sessions are fetched in one query per schedule request – no per-Session or per-Day round trip.
 
 
 ## Scope & Boundaries
@@ -186,56 +186,56 @@ doc    | docs/UBIQUITOUS_LANGUAGE.md#conference-structure                       
 
 ### Implementation Tasks
 
-- [ ] **TI01** Membership records when it was created, so "most recently joined" is answerable
+- [x] **TI01** Membership records when it was created, so "most recently joined" is answerable
   - S03 TI01 owns the Membership table and already specifies a joined timestamp, and S05 writes join rows into it – reuse that column if it exists. Only if it does not, add a non-null `joined_at timestamptz` defaulting to `clock_timestamp()` via a reversible plain-PostgreSQL migration. No other Membership semantics change here.
   - **Verify**: `Test: migration applies and reverts cleanly; two Memberships created in sequence for one user order deterministically by joined_at`
 
-- [ ] **TI02** `GET /me/conferences` returns the caller's readable Conferences with the default already chosen
+- [x] **TI02** `GET /me/conferences` returns the caller's readable Conferences with the default already chosen
   - **Route, deliberate and non-negotiable**: this is `GET /me/conferences`, the **Attendee** list – joined Conferences in `published` or `archived` state only. `GET /conferences` is S03 TI06's **Organizer** list (Role Assignment, drafts included) and is a different result set; the two coexist and neither is overloaded to serve the other.
   - Membership is resolved on the S02 caller's **`sub`**, joined against `app_user.sub` – `userId` is a local surrogate and is never the join key, and email is never a key. Default = the Conference whose date span contains the server's current day; if none or several, the most recently joined (TI01) among the candidates. Response names the default explicitly rather than relying on list order.
   - **Verify**: `Test: with one running and two non-running joined Conferences the running one is the default; with none running the most recently joined is; a draft Conference the caller admins is absent from GET /me/conferences while GET /conferences still lists it; the membership query joins on sub and no query in this story filters or joins on userId or email`
 
-- [ ] **TI03** `GET /conferences/{conferenceId}/schedule` returns the schedule envelope pinned in *Technical Overview*
+- [x] **TI03** `GET /conferences/{conferenceId}/schedule` returns the schedule envelope pinned in *Technical Overview*
   - Every Conference Day of the span present including empty ones; Sessions start-time ascending; S04 wall-clock strings passed through untouched; `concurrentWith` computed per read by **calling S04 TI07's overlap implementation** – import it, do not restate the predicate, exactly as S04's wall-clock helpers are reused rather than re-derived; `serverNow` carrying instant + naive day/time; Conference `lastUpdatedAt` carried at full precision, serialized from `conference.schedule_watermark_at` under the unchanged wire name. This envelope is the artefact S09 and S10 consume; document it beside the serializer, **including that `lastUpdatedAt` is an instant to be shown as elapsed age only** – no absolute wall-clock rendering may be derived from it on the client, and any future absolute stamp must be added to this envelope as a server-rendered naive wall clock in `serverNow`'s frame. One query for the Sessions – no per-day or per-Session round trip.
   - **Verify**: `Test: Sessions inserted out of order return ascending within each day; a day with no Sessions is present with an empty list; 09:00–10:30 and 10:00–11:00 appear in each other's concurrentWith while 09:00–10:00 and 10:00–11:00 do not; the payload contains no Z-suffixed or offset-bearing Session time`
   - **Verify**: `Test: the schedule serializer calls S04's exported overlap function – a grep of this story's server code finds no second implementation of start < otherEnd AND end > otherStart, and changing S04's boundary rule in one place changes this endpoint's output`
 
-- [ ] **TI04** The schedule read is refused for a non-member and for a Conference that is not published or archived
+- [x] **TI04** The schedule read is refused for a non-member and for a Conference that is not published or archived
   - Caller from S02's `withAuth`; per-Conference decision through S03's provisional authorization helper – no inline membership comparison. Distinct machine codes and displayable messages through S01's envelope; refusals disclose no Session content. Archived Conferences read successfully and the envelope marks the state. Depends on TI03.
   - **Verify**: `Test: a non-member is refused with its own machine code; a draft Conference is refused even for its own Admin; an archived Conference returns its full Schedule with state "archived"; neither refusal body contains a Session title`
 
-- [ ] **TI05** A shared clock module derives the effective wall clock from the sync anchor, never from the raw device clock
+- [x] **TI05** A shared clock module derives the effective wall clock from the sync anchor, never from the raw device clock
   - At each successful fetch it records the **anchor** – `serverNow.{instant, day, time}` as received plus `deviceClockAtReceipt`, **the device clock reading at the moment of receipt** – and derives `offset = serverNow.instant − deviceClockAtReceipt` from it, exposing `effectiveWallClockNow()` as `serverNow.{day,time}` advanced by elapsed real time (arithmetic per *Technical Overview*).
   - **Two entry points, both explicit**: one that takes a freshly received envelope plus the device clock reading at receipt, and one that **rehydrates** the module from a previously stored anchor object of exactly those four scalar values. The rehydration path performs no fetch and assumes no connection. The anchor is plain serializable data – no live object, no closure over a network client – because it is the thing S10 persists.
   - **Contract this leaves on S10** (S10's cache entry must satisfy it): S10 stores the anchor alongside the cached envelope, its "fetched-at" value **is** `deviceClockAtReceipt` – the device clock at receipt, not a server value and not an unspecified clock – and on an offline read it calls the rehydration entry point with `(cached serverNow, cached deviceClockAtReceipt)` before rendering. This is what makes FR4's offline clause – "offline the device clock is used, corrected by the server–device offset recorded at the last successful sync" – hold across a force-quit and offline relaunch; without it the offset dies with the process.
   - **Verify**: `Test: with a device clock offset by +3h at sync, effectiveWallClockNow() returns the server wall clock advanced only by elapsed time; the module never returns a value derived from a timezone conversion`
   - **Verify**: `Test: an anchor survives a JSON round trip and rehydrates a module in a fresh process with no fetch performed; the rehydrated effectiveWallClockNow() equals the original module's value for the same device clock reading, including when that device clock is +3h skewed`
 
-- [ ] **TI06** The attendee schedule view renders from `(envelope, effectiveWallClockNow)` with Conference Day navigation and the correct default day
+- [x] **TI06** The attendee schedule view renders from `(envelope, effectiveWallClockNow)` with Conference Day navigation and the correct default day
   - Pure render from those two inputs – no fetch, no direct clock read inside the tree, so S10 can pass a cached envelope. Default day = the day containing the effective current day when it falls inside the span, otherwise day 1. All days of the span are navigable. Time strings come from S04's helpers. Consumes TI03's envelope and TI05's clock.
   - **Verify**: `Test: during the Conference the current day is preselected; before the start and after the end day 1 is; every day of the span is reachable; the tree renders when given an envelope and a fixed clock value with the network unavailable`
 
-- [ ] **TI07** Concurrent Sessions read as running at the same time and expose no way to choose between them
+- [x] **TI07** Concurrent Sessions read as running at the same time and expose no way to choose between them
   - Driven by TI03's `concurrentWith`; concurrent Sessions are visually grouped or marked as simultaneous rather than listed as a sequence. No select/attend/star/add control on any Session, and viewing the Schedule issues no write.
   - **Verify**: `Test: two 10:00–11:00 Sessions render with a concurrency marking naming each other; a non-overlapping Session carries none; the rendered list contains no attendance or selection control and viewing produces no write request`
 
-- [ ] **TI08** The currently running Session is highlighted from the corrected clock, and displayed times are never touched by it
+- [x] **TI08** The currently running Session is highlighted from the corrected clock, and displayed times are never touched by it
   - Highlight = Sessions on the effective current day where `startTime <= now < endTime` by string comparison; a Parallel Track highlights all matching Sessions. Re-evaluated on a local timer at minute granularity without re-fetching. The clock value is an input to the highlight only – it must not reach a formatter that renders a Session time. Consumes TI05.
   - **Verify**: `Test: with the server wall clock at 09:40 the 09:00–10:30 Session is highlighted; with a device clock skewed +3h at sync the same Session is highlighted; with the device clock jumped after sync the displayed time strings are byte-identical to the authored values`
 
-- [ ] **TI09** Empty Day, refusal, and fetch-failure states are explicit, and the failure state offers retry
+- [x] **TI09** Empty Day, refusal, and fetch-failure states are explicit, and the failure state offers retry
   - A Day with no Sessions renders a named empty state, not a blank area. A refusal from TI04 renders the envelope's displayable message. A failed fetch renders an error state with a working retry control; no cached fallback is consulted or implied – that is S10.
   - **Verify**: `Test: an empty day shows the empty state; a refused request shows the server's message; a failed fetch shows an error state whose retry re-issues the request and renders the Schedule on success`
 
-- [ ] **TI10** An Attendee who joined more than one Conference can switch between them from the schedule view
+- [x] **TI10** An Attendee who joined more than one Conference can switch between them from the schedule view
   - Picker lists the TI02 Conferences with archived ones distinguishable, opens on the server-chosen default, and switching loads that Conference's envelope through TI03. A caller with exactly one readable Conference is taken straight to it.
   - **Verify**: `Test: with three joined Conferences the picker lists all three and opens on the default; selecting another renders that Conference's Schedule; with one joined Conference no selection step is imposed`
 
-- [ ] **TI11** The attendee schedule view is legible one-handed at 375px and rescales to 768px and 1280px
+- [x] **TI11** The attendee schedule view is legible one-handed at 375px and rescales to 768px and 1280px
   - Fluid layout per `AGENTS.md`; day navigation, Session rows, concurrency marking and the running highlight all remain readable and reachable. Use the three-width screenshot command S01 documented rather than a manual resize.
   - **Verify**: `Screenshots at 375px, 768px and 1280px show titles, time ranges, locations, kinds, the concurrency marking and the highlight fully legible with no horizontal body scroll`
 
-- [ ] **TI12** A contract test suite pins the envelope and the clock rules that S09 and S10 build on
+- [x] **TI12** A contract test suite pins the envelope and the clock rules that S09 and S10 build on
   - Asserts the envelope's required fields and their formats, that it renders a complete view with no further request, that `serverNow` carries both an instant and a naive wall clock, that the clock anchor is serializable and rehydratable into a working clock with no fetch (TI05), and that the corrected-clock arithmetic never alters a displayed time. These are the guard rails for the produced shared decision.
   - **Verify**: `Test: the suite fails if serverNow's wall-clock fields are dropped, if the clock anchor loses deviceClockAtReceipt or stops round-tripping through JSON, if a Session time is routed through a Date on the way to the screen, or if rendering the view requires a network call`
 
@@ -257,4 +257,35 @@ doc    | docs/UBIQUITOUS_LANGUAGE.md#conference-structure                       
 
 > _Managed by exec-spec post-implementation – append-only._
 
-_No observations recorded yet._
+### Run: 2026-08-17 21:09 UTC – observations
+
+#### NOTICED BUT NOT TOUCHING
+
+- **TI01 needed no migration.** S03 already ships `membership.joined_at timestamptz NOT NULL DEFAULT now()` (`db/migrations/20260817120000000_conference.sql`), and TI01 says to reuse the column if it exists. The Structural Criterion "the Membership timestamp migration is reversible and uses plain PostgreSQL only" is therefore satisfied by S03s migration, verified here by reverting through it and re-applying (`api/test/attendee-schedule.integration.test.ts`). A deterministic `c.id` tie-break was added to the ordering because `now()` is transaction-start time, so two Memberships written in one transaction would otherwise tie.
+- **`plan.json` records S03 as `spec-ready` although S03 has landed.** `api/src/conferences/lifecycle.ts`, `authorization.ts` and the conference/membership/role_assignment tables all exist and are under test; S06 consumes them. The status is stale, not the code. Not corrected here - it is another storys status field.
+- **Pre-existing Prettier drift in four untouched files**: `api/test/join-code-structure.test.ts`, `api/test/join-code.test.ts`, `visual/conferences.spec.ts`, `web/src/components/JoinCodePanel.tsx` (all S05). Left alone; `npm run format:check` still reports them.
+- **`visual/shell.spec.ts` (3 tests) cannot pass without the composed stack.** It asserts a live database value through the health panel, so it needs `docker compose up -d`. Confirmed pre-existing: it fails identically with S06s `App.tsx` change stashed. Unrelated to this story.
+- **Playwright has only Chromium installed**, so the three-width responsive claim is Chromium-verified. ADR-001 puts the same assets in a WKWebView on iOS, so a WebKit pass on this screen is worth adding before the mobile shells land in S11.
+
+#### Visual review findings deliberately not fixed (shared S04 styles)
+
+Each of these lives in a style S04 already shipped and both views share, so changing it is a cross-story design decision that would also re-open S04s validated screenshots - not an S06 defect. Acceptance Scenario S08 holds in all three cases.
+
+- **Ragged Session-title alignment at 768px and 1280px.** `.session-card__when` sizes to its content, so the title column starts at a different x on every row (~78px of rag). Fixing it properly means widening the shared time column to a common `min-width`, which changes the Organizer view too.
+- **Day navigation wraps 2+1 at 375px** and the orphaned third button stretches full width (`.schedule__day { flex: 1 1 auto }`). The nav is still reachable one-handed, which is what S08 requires.
+- **`--overlap` amber means two things on one card**: `.badge--workshop` marks *kind = Workshop* and `.session-card--concurrent` marks *runs in parallel*. Both facts are also stated in words, so legibility holds, but the colour channel is ambiguous.
+
+#### Review findings addressed during this run
+
+- **HIGH - `/me/conferences` failure was an unrecoverable dead end.** On a list-fetch failure `conferenceId` stayed `null`, so the schedule phase never left `loading`, the retry control (rendered only under `phase.kind === "failed"`) never appeared, and `loadConferences` had `[]` deps so it could not be re-driven at all. That is exactly Acceptance Scenario S07s Given - a dropped venue network fails both requests and `/me/conferences` goes first - and there is no address bar to reload from on the Capacitor shells. Fixed by making `attempt` a dependency of both effects and giving the list-failure branch its own retry; pinned by a regression test that fails when the wiring is reverted.
+- **MEDIUM - the "one query" test did not constrain the handler.** It called `listForConference` directly, which issues one statement by construction, so a handler looping per Conference Day would have stayed green. Rewritten to count `from sessions` reads across a whole request against a recording `Database` seam.
+- **MEDIUM - S06s server logic had no coverage outside `describe.skipIf(!reachable)`.** Added `api/test/attendee-conferences.test.ts` and `api/test/schedule-envelope.test.ts` so the default-conference rule and the envelope composition keep their proof on a machine with no PostgreSQL.
+- **MEDIUM - no web test drove `/me/conferences` to failure** (every stub was `status: 200`), which is why the HIGH above shipped green. Added.
+- **Guardrail breach - em dash in shipped UI copy** (`ScheduleView.tsx`), against `docs/guidelines/CRITICAL-RULES-AND-GUARDRAILS.md` "En dashes, not em dashes". Replaced.
+- **P2 visual - the time/badge column could not shrink.** `.session-card__when` had `flex-shrink: 0` with a rem-based `min-width`, so from about a 22px root font the "Now" badge left the card and pushed the body sideways at 375px - and the OS font-scale preference drives exactly that inside a Capacitor WebView (ADR-001). Fixed to `flex: 0 1 auto` / `min-width: min(7.5rem, 100%)`, with two raised-font-scale regression captures that fail against the old rule.
+- **LOW (accepted, not fixed)** - `web/test/schedule-envelope-contract.test.tsx` asserts its format regexes against an envelope literal declared in the same file, so those particular assertions are self-referential. The binding constraint is `api/test/attendee-schedule.integration.test.ts`, which asserts `serverNow` and the instant count off a real response body; the contract file is kept for the render-with-no-network and source-scan assertions, which are not self-referential.
+
+#### Contract left on later stories
+
+- **S10** must persist TI05s clock anchor - the cached `serverNow` fields **and** `deviceClockAtReceipt`, its "fetched-at" being the *device* clock reading at receipt - alongside the cached envelope, and call `rehydrateClock(anchor)` before rendering an offline read. `web/test/effective-clock.test.ts` pins the round trip and shows a partial anchor producing a visibly wrong clock.
+- **S09 and S10** must render `conference.lastUpdatedAt` as an elapsed age computed from the instant, never as an absolute wall clock derived on the client. Documented beside the serializer in `api/src/sessions/schedule-envelope.ts`.

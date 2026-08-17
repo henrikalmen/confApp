@@ -263,13 +263,27 @@ describe('the schedule routes are registered and authenticated', () => {
 
   /**
    * The Organizer read is a *different route* from S06's attendee read on the same resource. Two
-   * audiences, two payloads – this story must not have taken the attendee one.
+   * audiences, two payloads.
+   *
+   * This assertion used to read "leaves S06's attendee schedule route unregistered", because S06 had
+   * not landed. It now asserts what that guard was protecting: both routes exist, on distinct paths,
+   * each authenticated. A later "consolidation" of the two – or an attempt to serve one from the
+   * other through a query parameter – fails here.
    */
-  it("leaves S06's attendee schedule route unregistered", async () => {
+  it("registers the organizer read separately from S06's attendee read", async () => {
     const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
     try {
-      const urls = app.confappRoutes.map((route) => `${route.method} ${route.url}`);
-      expect(urls).not.toContain('GET /api/conferences/:conferenceId/schedule');
+      const byUrl = new Map(
+        app.confappRoutes.map((route) => [`${route.method} ${route.url}`, route]),
+      );
+
+      for (const url of [
+        'GET /api/conferences/:conferenceId/schedule/organizer',
+        'GET /api/conferences/:conferenceId/schedule',
+      ]) {
+        expect([...byUrl.keys()]).toContain(url);
+        expect(byUrl.get(url)!.authenticated, url).toBe(true);
+      }
     } finally {
       await app.close();
     }

@@ -359,6 +359,11 @@ describe('no schedule time is routed through a Date anywhere in the chain', () =
   const SCHEDULE_MODULES = [
     join(apiSrc, 'sessions'),
     join(apiSrc, 'routes', 'sessions.ts'),
+    // The attendee read (S06) carries the same values to a second audience, so it is held to the
+    // same bar. Its client half – `web/src/attendee` and `web/src/clock` – is asserted in
+    // `web/test/schedule-envelope-contract.test.ts`, where the clock module's one permitted
+    // `Date.now()` can be distinguished from a conversion.
+    join(apiSrc, 'routes', 'attendee.ts'),
     join(webSrc, 'schedule'),
   ];
 

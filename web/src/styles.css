@@ -533,14 +533,25 @@ body {
   border-radius: var(--radius);
 }
 
+/*
+ * Wide enough for "09:00–10:30" and its kind badge without the two ever splitting – but allowed to
+ * shrink, and the floor is capped at the card's own width.
+ *
+ * `flex: 0 0 auto` with a bare `min-width: 7.5rem` was wrong in a way that only shows up at a raised
+ * text size: rem grows with the user's base font, the column refuses to shrink, and from about a
+ * 22px root the badges leave the card and push the whole page sideways at 375px. That is not a
+ * hypothetical setting – the SPA runs inside a Capacitor WebView, where the OS font-scale
+ * preference drives exactly this (ADR-001) – and the "Now" badge is the first thing to go
+ * off-screen, which is the one marking the corridor use-case exists for. `flex-wrap` above already
+ * drops the badges under the time string, so shrinking costs nothing.
+ */
 .session-card__when {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  /* Wide enough for "09:00–10:30" and its kind badge without the two ever splitting. */
-  min-width: 7.5rem;
+  min-width: min(7.5rem, 100%);
 }
 
 .session-card__time {
@@ -604,6 +615,82 @@ body {
 
 .badge--presentation {
   color: var(--accent);
+}
+
+/* ---------- the attendee schedule (S06) ---------- */
+
+/*
+ * The attendee's card reuses `.session-card` wholesale – the same flex-basis mechanism that stacks
+ * time / detail on a phone and lays them out in a row on a desktop, with no breakpoint. Only the
+ * two treatments an attendee has that an organizer does not are added here.
+ */
+
+/*
+ * A Parallel Track, marked as a *fact* rather than as an affordance. Same accent as the Organizer's
+ * overlap indicator, because it is the same thing seen from the other side – and stated in words as
+ * well as in colour, because colour alone would exclude anyone who cannot see it.
+ */
+.session-card--concurrent {
+  border-left-style: double;
+  border-left-width: 6px;
+  border-left-color: var(--overlap);
+}
+
+.session-card__concurrent {
+  margin: 0.35rem 0 0;
+  color: var(--overlap);
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The running Session. A tinted surface and a heavier rule, so it is findable at a glance while
+ * walking – and the "Now" badge beside the time says so in words, because a highlight that is only
+ * a colour is no highlight at all on a sunlit phone or to anyone who cannot distinguish it.
+ *
+ * It deliberately outranks the concurrency treatment on the left border: two things running at once
+ * is worth knowing, but which one is happening *now* is what someone standing in a corridor is
+ * looking for.
+ */
+.session-card--running {
+  background: var(--notice-bg);
+  border-color: var(--notice-border);
+  border-left-color: var(--accent);
+  border-left-style: solid;
+  border-left-width: 6px;
+}
+
+.badge--running {
+  background: var(--accent);
+  color: var(--surface);
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/*
+ * The conference picker. A full-width control on a phone, sized to its content once there is room,
+ * so it is a comfortable one-handed target at 375px without becoming a stretched oddity at 1280px.
+ */
+.attendee-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem var(--gap);
+  margin: 0 0 var(--gap);
+}
+
+/*
+ * Grows to a comfortable reading width and stops. `flex: 1 1` was tried and is wrong here: it
+ * stretches the control across a 1280px desktop, where a conference name occupies a fifth of it and
+ * the rest is an empty box. Shrinking is still allowed, which is what keeps it inside a 375px phone
+ * beside its label rather than pushing the row sideways.
+ */
+.attendee-picker .field__input {
+  flex: 0 1 20rem;
+  max-width: 100%;
 }
 
 /* A save that succeeded and has something to say. Never the danger palette – nothing is wrong. */

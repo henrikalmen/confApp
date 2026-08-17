@@ -3,6 +3,7 @@ import { HealthPanel } from './components/HealthPanel.tsx';
 import { ConferencesPanel } from './components/ConferencesPanel.tsx';
 import { JoinConferencePanel } from './components/JoinConferencePanel.tsx';
 import { SignInScreen } from './components/SignInScreen.tsx';
+import { AttendeeSchedulePanel } from './attendee/AttendeeSchedulePanel.tsx';
 import { useAuth } from './auth/AuthProvider.tsx';
 
 /**
@@ -56,9 +57,14 @@ export function App(): React.JSX.Element {
         <nav className="app__nav" id="app-nav" aria-label="Main">
           <ul className="app__nav-list">
             {signedIn ? (
-              <li>
-                <a href="#conferences-title">Your conferences</a>
-              </li>
+              <>
+                <li>
+                  <a href="#attendee-schedule-title">Schedule</a>
+                </li>
+                <li>
+                  <a href="#conferences-title">Your conferences</a>
+                </li>
+              </>
             ) : null}
             <li>
               <a href="#health-title">Service health</a>
@@ -76,12 +82,16 @@ export function App(): React.JSX.Element {
           </div>
         ) : signedIn ? (
           <>
+            {/*
+             * The attendee's home comes first. Nearly everyone signing in is here to read the
+             * schedule of the conference they are standing in, and the organizer surfaces below are
+             * for the few who are also running one (FR4).
+             */}
+            <AttendeeSchedulePanel />
             <ConferencesPanel />
             {/*
              * Joining is available to every signed-in employee, organizer or not – there is nothing
-             * to pre-provision and no list to be on (FR3). It sits after the organizer surfaces
-             * because the shell is still one page: S06 owns the attendee's home and the navigation
-             * that will give each audience its own view.
+             * to pre-provision and no list to be on (FR3).
              */}
             <JoinConferencePanel />
             <HealthPanel />

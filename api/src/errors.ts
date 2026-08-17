@@ -97,6 +97,16 @@ export const ERROR_CODES = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   /** Deleting the sole Session of a published Conference, which must keep a schedule. */
   SESSION_LAST_IN_PUBLISHED_CONFERENCE: 'SESSION_LAST_IN_PUBLISHED_CONFERENCE',
+
+  // ---------- attendee schedule read (S06) ----------
+  // Two reasons, two codes, because they are two different situations for the person holding the
+  // phone: one means "you are not in this conference", the other means "you are, but there is
+  // nothing published to show you yet". Neither is CONFERENCE_ROLE_REQUIRED: that one answers a
+  // question about *acting* on a conference, and an attendee reading a schedule is not acting.
+  /** The caller holds no Membership for this Conference – or it does not exist, told alike. */
+  NOT_A_MEMBER: 'NOT_A_MEMBER',
+  /** The Conference exists and the caller is in it, but it is still a draft. */
+  CONFERENCE_NOT_READABLE: 'CONFERENCE_NOT_READABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

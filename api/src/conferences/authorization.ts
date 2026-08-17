@@ -41,6 +41,22 @@ export interface ConferenceAuthorization {
     required: ConferenceRole,
     options?: RequireConferenceRoleOptions,
   ): Promise<void>;
+  /**
+   * "Is this caller *in* this Conference" – the attendee read's decision (S06).
+   *
+   * A second entry point on the same seam rather than a second seam, for the same reason the first
+   * one exists: S07 replaces the bodies in this module and every handler keeps calling. What it
+   * cannot be is `requireConferenceRole(..., 'Attendee')`, for two reasons. That one short-circuits
+   * on Admin, so a role holder with no Membership would pass a check whose whole question is
+   * Membership. And its refusal is CONFERENCE_ROLE_REQUIRED – a sentence about permission to *act*,
+   * where an attendee opening a schedule needs to be told they have not joined (FIS S06 → Acceptance
+   * Scenario S06).
+   *
+   * Membership only. No role satisfies it, deliberately: Membership is universal – every role holder
+   * has one, including a creator, who is seeded one on create – so nothing is a member by
+   * implication (`docs/UBIQUITOUS_LANGUAGE.md`, S03's migration).
+   */
+  requireMembership(caller: AuthenticatedCaller, conferenceId: string): Promise<void>;
 }
 
 interface GrantRow {
@@ -75,6 +91,23 @@ function refusal(): AppError {
   );
 }
 
+/**
+ * Refuses without confirming or denying that the Conference exists, exactly as `refusal()` does.
+ *
+ * An unknown id and a Conference the caller has not joined produce the identical answer, so this
+ * endpoint cannot be used to discover which conference ids are real. That is also why the reason is
+ * checked *before* the lifecycle state: telling a non-member that a conference is "not published
+ * yet" would disclose both that it exists and what it is doing.
+ */
+function notAMember(): AppError {
+  return new AppError(
+    ERROR_CODES.NOT_A_MEMBER,
+    403,
+    'You have not joined this conference, so its schedule is not available to you. ' +
+      'Ask the organizer for the join code.',
+  );
+}
+
 function satisfies(held: ReadonlySet<string>, required: ConferenceRole): boolean {
   // An Admin has conference-wide authority, so it satisfies every requirement. Provisional
   // exactly like the rest of this module: S07 owns what the role model finally means.
@@ -96,6 +129,18 @@ export function createConferenceAuthorization(db: Queryable): ConferenceAuthoriz
       const held = new Set(rows.map((row) => row.role));
 
       if (!satisfies(held, required)) throw refusal();
+    },
+
+    async requireMembership(caller: AuthenticatedCaller, conferenceId: string): Promise<void> {
+      // Joined on `sub` against the same column every other grant lookup uses. `userId` is
+      // confApp's local surrogate for the `app_user` row and is never a join key here; email is
+      // never a key at all (ADR-002, AGENTS.md#do-not--never).
+      const rows = await db.query<{ id: string }>(
+        'select id from membership where conference_id = $1 and user_sub = $2',
+        [conferenceId, caller.sub],
+      );
+
+      if (rows[0] === undefined) throw notAMember();
     },
   };
 }
