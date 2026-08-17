@@ -1,0 +1,17 @@
+# Exports the DNS servers nginx should use to resolve the API upstream at request time.
+#
+# Sourced (not executed) by the nginx entrypoint before it runs envsubst on the templates, so
+# CONFAPP_RESOLVERS is a defined environment variable by the time the config is generated.
+# It has to be derived here rather than hardcoded: under Docker Compose the container gets
+# Docker's embedded DNS at 127.0.0.11, while on the default bridge it inherits the host's
+# resolver, and a wrong address makes nginx refuse to start.
+
+CONFAPP_RESOLVERS="$(awk '/^nameserver[ \t]+[0-9.]+$/ { printf "%s ", $2 }' /etc/resolv.conf)"
+
+# No usable IPv4 nameserver: fall back to Docker's embedded DNS.
+if [ -z "${CONFAPP_RESOLVERS# }" ]; then
+    CONFAPP_RESOLVERS="127.0.0.11"
+fi
+
+export CONFAPP_RESOLVERS
+echo "confapp-resolvers: ${CONFAPP_RESOLVERS}"

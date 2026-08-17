@@ -1,0 +1,15 @@
+{
+  "name": "@confapp/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate:up": "node --env-file-if-exists=../.env migrate.mjs up",
+    "migrate:down": "node --env-file-if-exists=../.env migrate.mjs down 1",
+    "migrate:down:all": "node --env-file-if-exists=../.env migrate.mjs down all"
+  },
+  "dependencies": {
+    "node-pg-migrate": "9.0.0",
+    "pg": "8.23.0"
+  }
+}

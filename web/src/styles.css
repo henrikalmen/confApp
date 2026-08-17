@@ -1,0 +1,289 @@
+/*
+ * confApp shell styling.
+ *
+ * Responsive by default: the layout rescales with the viewport rather than targeting fixed
+ * breakpoints only, and nothing declares a fixed pixel width. A layout that does not rescale
+ * from a 375px phone to a 1280px desktop is a defect, not a follow-up (AGENTS.md).
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-sunken: #f4f6fa;
+  --border: #d7dce5;
+  --text: #14181f;
+  --text-muted: #5a6474;
+  --accent: #1f4f9c;
+  --danger-bg: #fdf2f2;
+  --danger-border: #e3b7b7;
+  --danger-text: #8c2b2b;
+
+  --gap: clamp(0.75rem, 2.5vw, 1.5rem);
+  --radius: 0.6rem;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #161a21;
+    --surface-sunken: #1e232c;
+    --border: #333b48;
+    --text: #eef1f6;
+    --text-muted: #a3adbd;
+    --accent: #8fb4ee;
+    --danger-bg: #2c1b1b;
+    --danger-border: #6b3a3a;
+    --danger-text: #f0b4b4;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  line-height: 1.5;
+  /* Never let a long unbroken value push the page sideways on a narrow phone. */
+  overflow-wrap: break-word;
+}
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- header ---------- */
+
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  padding: var(--gap);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app__brand {
+  margin: 0;
+  font-size: clamp(1.15rem, 1rem + 1.2vw, 1.75rem);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.app__tagline {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: clamp(0.8rem, 0.75rem + 0.3vw, 0.95rem);
+}
+
+/*
+ * The navigation affordance. It is a real control at every width – the shell must be usable
+ * one-handed at 375px, so it stays reachable rather than collapsing out of existence.
+ */
+.app__nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.app__nav-toggle:hover {
+  border-color: var(--accent);
+}
+
+.app__nav-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app__nav {
+  width: 100%;
+  padding: 0 var(--gap) var(--gap);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app__nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem var(--gap);
+}
+
+.app__nav-list a {
+  display: inline-block;
+  padding: 0.4rem 0;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.app__nav-list a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- main ---------- */
+
+.app__main {
+  flex: 1;
+  width: min(70rem, 100%);
+  margin-inline: auto;
+  padding: var(--gap);
+  display: grid;
+  gap: var(--gap);
+}
+
+.app__footer {
+  padding: var(--gap);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* ---------- health panel ---------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.panel__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.panel__title {
+  margin: 0;
+  font-size: clamp(1rem, 0.9rem + 0.5vw, 1.2rem);
+}
+
+.panel__actions {
+  margin: var(--gap) 0 0;
+}
+
+.panel__hint {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/*
+ * auto-fit + minmax is what makes this reflow instead of clipping: one column on a phone,
+ * several on a desktop, with no width-specific rules.
+ */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--gap);
+  margin: 0;
+}
+
+.fact {
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.fact__label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fact__value {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: clamp(1rem, 0.9rem + 0.6vw, 1.3rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.status__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.alert {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.alert__code {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.button {
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

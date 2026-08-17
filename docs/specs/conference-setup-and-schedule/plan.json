@@ -174,7 +174,7 @@
       "dependsOn": [],
       "parallel": false,
       "risk": "medium",
-      "status": "spec-ready",
+      "status": "done",
       "fis": "s01-tracer-bullet-skeleton.md",
       "owner": null,
       "scope": "Stand the stack up as one thin end-to-end slice, packaged the way it will ship. A React + TypeScript single-page app with a responsive shell that rescales across phone, tablet and desktop, built to static assets and served from a static-file container; a long-running HTTP API server in its own container; and PostgreSQL storing its data on a named volume so it outlives the container, all composed together with Docker Compose and reversible migration tooling. One trivial request travels SPA container to API container to database and back, proving the wiring, and written data survives stopping and recreating the database container, proving the volume. Establishes the API route and error-envelope conventions, the test/lint/format/build commands, the Dockerfiles and Compose definition, and fills in docs/KEY_DEVELOPMENT_COMMANDS.md and the pinned versions in docs/STACK.md. Excludes authentication, any conference domain entity or table, cloud deployment (S13), and the Capacitor shells (S11).",

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>confApp</title>
+    <!--
+      Runtime configuration, not build-time. The static container rewrites this file at
+      start from its environment, so the same built image runs against any API base URL
+      without a rebuild. Loaded before the app bundle so window config is in place first.
+    -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

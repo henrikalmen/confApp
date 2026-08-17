@@ -1,0 +1,168 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import pg from 'pg';
+import { buildApp } from '../src/app.ts';
+import { createDatabase } from '../src/db.ts';
+
+const run = promisify(execFile);
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * These run against the composed PostgreSQL, in a database of their own. The migrate-down half
+ * of Acceptance Scenario S06 destroys everything it touches, so it must never point at the
+ * development database – and never at the volume S08 uses to prove durability.
+ */
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+
+async function serverReachable(url: string): Promise<boolean> {
+  const admin = new URL(url);
+  admin.pathname = '/postgres';
+  const client = new pg.Client({ connectionString: admin.toString() });
+  try {
+    await client.connect();
+    await client.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const reachable = testDatabaseUrl !== undefined && (await serverReachable(testDatabaseUrl));
+
+if (!reachable) {
+  // Loud on purpose: a silent skip would look like passing coverage.
+  console.warn(
+    '\n[integration] SKIPPED – no PostgreSQL at TEST_DATABASE_URL.\n' +
+      '[integration] Start the stack first: docker compose up -d\n',
+  );
+}
+
+/** Runs the real documented migrate command, so the test covers the command, not a copy of it. */
+async function migrate(...args: string[]): Promise<string> {
+  const { stdout } = await run(process.execPath, [join(repoRoot, 'db', 'migrate.mjs'), ...args], {
+    cwd: join(repoRoot, 'db'),
+    env: { ...process.env, DATABASE_URL: testDatabaseUrl },
+  });
+  return stdout;
+}
+
+/** Connects to the server's default database, so the test database itself can be created. */
+async function withAdmin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+  const admin = new URL(testDatabaseUrl!);
+  admin.pathname = '/postgres';
+  const client = new pg.Client({ connectionString: admin.toString() });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+function databaseNameOf(url: string): string {
+  return new URL(url).pathname.replace(/^\//, '');
+}
+
+describe.skipIf(!reachable)('migrations against a real PostgreSQL', () => {
+  const url = testDatabaseUrl!;
+
+  beforeAll(async () => {
+    const name = databaseNameOf(url);
+    await withAdmin(async (client) => {
+      const existing = await client.query('select 1 from pg_database where datname = $1', [name]);
+      if (existing.rowCount === 0) {
+        // Identifier cannot be parameterised; the name comes from our own .env, not a request.
+        await client.query(`CREATE DATABASE "${name.replace(/"/g, '""')}"`);
+      }
+    });
+    // Start from a known-empty schema regardless of what a previous run left behind.
+    await migrate('down', 'all');
+  });
+
+  afterAll(async () => {
+    await migrate('down', 'all').catch(() => undefined);
+  });
+
+  /**
+   * Acceptance Scenario S06 – migrations are reversible and leave a working schema after a
+   * full down/up cycle.
+   */
+  it('creates app_meta with the seeded row, reverts it completely, and re-applies', async () => {
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    try {
+      await migrate('up');
+      const seeded = await client.query("select value from app_meta where key = 'schema_version'");
+      expect(seeded.rows[0]?.value).toBe('1');
+
+      await migrate('down', 'all');
+      const gone = await client.query('select to_regclass($1) as table', ['public.app_meta']);
+      expect(gone.rows[0]?.table).toBeNull();
+
+      await migrate('up');
+      const again = await client.query("select value from app_meta where key = 'schema_version'");
+      expect(again.rows[0]?.value).toBe('1');
+    } finally {
+      await client.end();
+    }
+  });
+
+  /**
+   * Acceptance Scenario S08 (migration half) – after the first run this is the normal case: a
+   * recreated container starts against a volume that already holds the schema. migrate-up must
+   * consult the applied-migration record and skip, not fail with a duplicate-object error.
+   */
+  it('is a no-op against an already-migrated database and leaves existing rows untouched', async () => {
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    try {
+      await migrate('up');
+      await client.query(
+        "insert into app_meta (key, value) values ('durability_probe', 'written-before') " +
+          'on conflict (key) do update set value = excluded.value',
+      );
+
+      const output = await migrate('up');
+      expect(output).toMatch(/Nothing to up/i);
+
+      const probe = await client.query("select value from app_meta where key = 'durability_probe'");
+      expect(probe.rows[0]?.value).toBe('written-before');
+    } finally {
+      await client.end();
+    }
+  });
+
+  /**
+   * Acceptance Scenario S01 (data half) – the value the handler returns is the row the
+   * migration seeded, read through the real pooled data-access module.
+   */
+  it('serves GET /api/health from the real database through the real pool', async () => {
+    await migrate('up');
+    const db = createDatabase(url, { error: () => {} });
+    const app = buildApp({ db });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/health' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().schemaVersion).toBe('1');
+    } finally {
+      await app.close();
+      await db.close();
+    }
+  });
+
+  /** Structural Criterion – plain PostgreSQL only, so a pg_dump/restore move stays possible. */
+  it('records applied migrations in the database itself', async () => {
+    await migrate('up');
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    try {
+      const applied = await client.query('select name from pgmigrations order by id');
+      expect(applied.rows.map((r) => r.name)).toContain('20260816120000000_app-meta');
+    } finally {
+      await client.end();
+    }
+  });
+});

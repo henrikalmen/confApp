@@ -1,0 +1,92 @@
+# confApp – the whole stack, composed the way it ships.
+#
+# One artifact everywhere: the API and SPA images built here are the images that deploy
+# (ADR-004). Every value that differs between environments arrives from the environment –
+# nothing environment-specific is baked into an image.
+#
+# Configuration comes from an untracked `.env` beside this file; copy `.env.example` to
+# `.env` to start. `.env` is never committed.
+
+name: confapp
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Published so host-side tooling – the documented migrate command and the integration
+      # tests – can reach it. Defaults avoid the usual 5432 clash with a native install.
+      - '${POSTGRES_HOST_PORT:-5434}:5432'
+    volumes:
+      # The database is the one component that needs durable storage, so its data directory
+      # sits on a top-level NAMED volume. Not an anonymous volume, not a bind mount to a host
+      # path, and never left on the container's writable layer – that layer is destroyed with
+      # the container, which is precisely the loss this guards against.
+      #
+      # The mount point is the directory the postgres:18 image declares as its volume.
+      # PostgreSQL 18 keeps PGDATA at /var/lib/postgresql/18/docker, so mounting the older
+      # /var/lib/postgresql/data would persist an empty directory and quietly lose the
+      # database on every container replacement.
+      #
+      # This survives the container, NOT deletion of the volume (`docker compose down -v`)
+      # and NOT loss of its host. A named volume is not a backup – ADR-003 makes backups and
+      # restore correctness an owned responsibility, and S13 owns durable storage and the
+      # restore drill in the deployed environment.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Service name, not localhost: inside the compose network `db` resolves to the database.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      PORT: '8080'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '${API_HOST_PORT:-8081}:8080'
+    depends_on:
+      db:
+        condition: service_healthy
+    # No volumes, deliberately. The API holds no state between requests, so there is nothing
+    # here to preserve – destroy and recreate it freely. Adding a volume to keep something
+    # would be the smell that request state has crept in.
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    environment:
+      # What the browser calls. Same-origin by default, proxied to the API by this container,
+      # so no CORS step is needed and the Capacitor shell (S11) can point elsewhere.
+      API_BASE_URL: ${API_BASE_URL:-/api}
+      # Where this container proxies /api/ to. No trailing slash: that would strip the prefix.
+      API_UPSTREAM: http://api:8080
+    ports:
+      - '${WEB_HOST_PORT:-8082}:80'
+    depends_on:
+      api:
+        # Started, not healthy, and deliberately so: the SPA container serves static assets
+        # and proxies per request, so it must come up even when the API is not ready – for
+        # example before migrate-up has run. The browser then shows the API's own refusal
+        # message rather than the site failing to load at all.
+        condition: service_started
+    # No volumes here either, and for the same reason: the SPA container serves static assets
+    # and holds nothing between requests. That both application services are stateless is what
+    # makes the database the only component requiring durable storage.
+
+volumes:
+  db-data:
+    name: confapp-db-data

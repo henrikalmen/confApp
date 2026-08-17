@@ -1,0 +1,43 @@
+{
+  "name": "confapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal application for running company conferences",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "api",
+    "web",
+    "db"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace api && npm run build --workspace web",
+    "dev": "npm run dev --workspace api & npm run dev --workspace web",
+    "dev:api": "npm run dev --workspace api",
+    "dev:web": "npm run dev --workspace web",
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate:up": "npm run migrate:up --workspace db",
+    "migrate:down": "npm run migrate:down --workspace db",
+    "migrate:down:all": "npm run migrate:down:all --workspace db",
+    "screenshots": "playwright test --config playwright.config.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
+    "@types/node": "26.2.0",
+    "eslint": "10.8.1",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
+  }
+}

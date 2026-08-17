@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+coverage/
+.tsbuild/
+screenshots/
+test-results/
+playwright-report/
+.agent_temp/
+package-lock.json
+docs/
+*.md

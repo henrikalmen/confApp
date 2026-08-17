@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.tsbuild
+**/*.tsbuildinfo
+.git
+.gitignore
+.agent_temp
+docs
+screenshots
+test-results
+playwright-report
+.env
+.env.*
+!.env.example
+*.md
