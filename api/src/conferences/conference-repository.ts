@@ -1,6 +1,7 @@
 import type { Database, Queryable } from '../db.ts';
 import type { CalendarDate } from './calendar-date.ts';
 import type { ConferenceDetails } from './conference-validation.ts';
+import { generateJoinCode, type JoinCodeMinter } from './join-code.ts';
 import { isLifecycleState, type LifecycleState } from './lifecycle.ts';
 
 /**
@@ -19,6 +20,15 @@ export interface Conference {
   lifecycleState: LifecycleState;
   createdBySub: string;
   /**
+   * The Join Code, in its canonical uppercase form – `null` until the Conference is published.
+   *
+   * Present on the domain object because the join lookup and the Organizer's code panel both need
+   * it, and deliberately **not** on the wire shape the Conference endpoints return: only the
+   * dedicated code endpoint discloses it, so there is one authorized surface rather than a value
+   * riding along on every read (`routes/join-code.ts`).
+   */
+  joinCode: string | null;
+  /**
    * The Conference row's own version, and the base version S09 sends back with an edit. It moves
    * when *this row* is written and at no other time. S04's schedule watermark is a separate
    * column, deliberately named differently, and surfaces separately as `lastUpdatedAt`.
@@ -33,11 +43,23 @@ interface ConferenceRow {
   end_date: string;
   lifecycle_state: string;
   created_by_sub: string;
+  join_code: string | null;
   updated_at: Date;
 }
 
 /** Every read goes through the same column list, so no caller can invent a different shape. */
-const COLUMNS = 'id, name, start_date, end_date, lifecycle_state, created_by_sub, updated_at';
+const COLUMNS =
+  'id, name, start_date, end_date, lifecycle_state, created_by_sub, join_code, updated_at';
+
+/** PostgreSQL's unique-violation SQLSTATE, and the constraint a minted code can collide with. */
+const UNIQUE_VIOLATION = '23505';
+const JOIN_CODE_UNIQUE = 'conference_join_code_unique';
+
+function isJoinCodeCollision(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === UNIQUE_VIOLATION && constraint === JOIN_CODE_UNIQUE;
+}
 
 function toConference(row: ConferenceRow): Conference {
   if (!isLifecycleState(row.lifecycle_state)) {
@@ -53,6 +75,7 @@ function toConference(row: ConferenceRow): Conference {
     endDate: row.end_date,
     lifecycleState: row.lifecycle_state,
     createdBySub: row.created_by_sub,
+    joinCode: row.join_code,
     updatedAt: row.updated_at.toISOString(),
   };
 }
@@ -60,12 +83,77 @@ function toConference(row: ConferenceRow): Conference {
 export interface ConferenceRepository {
   create(details: ConferenceDetails, createdBySub: string): Promise<Conference>;
   findById(conferenceId: string): Promise<Conference | null>;
+  /**
+   * The Conference holding this **canonical** code, in any lifecycle state.
+   *
+   * Unscoped by state on purpose: a code minted for a Conference that has since been archived must
+   * resolve to *that* Conference so the refusal can name the real reason, rather than miss and
+   * report the code as unknown (FR3 → Validation).
+   */
+  findByJoinCode(joinCode: string): Promise<Conference | null>;
   listForRoleHolder(sub: string): Promise<Conference[]>;
   updateDetails(conferenceId: string, details: ConferenceDetails): Promise<Conference>;
   updateLifecycleState(conferenceId: string, state: LifecycleState): Promise<Conference>;
+  /** The draft → published transition, which is also where the Conference's code is minted. */
+  publish(conferenceId: string): Promise<Conference>;
+  /** A new code, replacing the old one, which is not retained anywhere. */
+  regenerateJoinCode(conferenceId: string): Promise<Conference>;
+  /**
+   * Records that this `sub` is an Attendee of this Conference, idempotently.
+   *
+   * The Attendee role *is* Membership and needs no Role Assignment
+   * (`docs/UBIQUITOUS_LANGUAGE.md`), so this writes exactly one row and no grant.
+   */
+  joinAsAttendee(conferenceId: string, sub: string): Promise<void>;
 }
 
-export function createConferenceRepository(db: Database): ConferenceRepository {
+export function createConferenceRepository(
+  db: Database,
+  /**
+   * How a code is produced. Injected with the real generator as its default so production wiring
+   * says nothing about it, and so a test can pin the code it expects rather than reading it back.
+   */
+  mintJoinCode: JoinCodeMinter = generateJoinCode,
+): ConferenceRepository {
+  /**
+   * Runs a write that assigns a freshly minted code, retrying on the uniqueness violation.
+   *
+   * The retry is what makes the database constraint – rather than a `select` for an existing code –
+   * the authority on uniqueness. A read-then-insert check passes every test and still collides
+   * under two concurrent publishes, because nothing holds between the two statements. Here the
+   * collision is simply an outcome to draw again from: at ~7.3e8 codes it is a theoretical event,
+   * so a handful of attempts is generous rather than a loop that could spin.
+   */
+  async function withMintedCode(
+    conferenceId: string,
+    sql: string,
+    trailing: readonly unknown[] = [],
+  ): Promise<Conference> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const rows = await db.query<ConferenceRow>(sql, [
+          conferenceId,
+          mintJoinCode(),
+          ...trailing,
+        ]);
+        const row = rows[0];
+        if (row === undefined) {
+          // Either the row is gone or it no longer matches the statement's guard – both mean it
+          // changed under a request whose decision had already been made, never anything the
+          // caller did wrong.
+          throw new Error(`conference ${conferenceId} changed while its join code was being set.`);
+        }
+        return toConference(row);
+      } catch (error) {
+        if (!isJoinCodeCollision(error)) throw error;
+      }
+    }
+
+    throw new Error(
+      `Could not mint an unused join code for conference ${conferenceId} in 8 attempts.`,
+    );
+  }
+
   return {
     /**
      * Three rows, one transaction: the Conference, the creator's Membership, and the creator's
@@ -110,6 +198,18 @@ export function createConferenceRepository(db: Database): ConferenceRepository {
       const rows = await db.query<ConferenceRow>(
         `select ${COLUMNS} from conference where id = $1`,
         [conferenceId],
+      );
+      const row = rows[0];
+      return row === undefined ? null : toConference(row);
+    },
+
+    async findByJoinCode(joinCode: string): Promise<Conference | null> {
+      // An equality match against the canonical stored form – no `lower(...)`, no `ilike`. Case is
+      // absorbed by normalizing the submitted value before it gets here, which keeps the comparison
+      // index-friendly and keeps case-insensitivity in one place rather than in every query.
+      const rows = await db.query<ConferenceRow>(
+        `select ${COLUMNS} from conference where join_code = $1`,
+        [joinCode],
       );
       const row = rows[0];
       return row === undefined ? null : toConference(row);
@@ -169,6 +269,70 @@ export function createConferenceRepository(db: Database): ConferenceRepository {
       const row = rows[0];
       if (row === undefined) throw new Error(`conference ${conferenceId} vanished mid-transition.`);
       return toConference(row);
+    },
+
+    /**
+     * Publishing, which is where a Conference gets its code.
+     *
+     * The transition and the minting are one statement, so a published Conference without a code is
+     * not a state this schema can be left in – not by a crash between two writes and not by a later
+     * story adding a publish path that forgets the second one.
+     *
+     * The `lifecycle_state = 'draft'` predicate is a guard, not the rule: `assertPublishable` has
+     * already refused a republish with both states named, and this keeps a concurrent second publish
+     * from minting a *new* code over an existing one (which would silently invalidate a code already
+     * on a slide). A no-op update surfaces as a vanished row and is reported as a fault, because by
+     * the time this runs the transition has been decided.
+     */
+    async publish(conferenceId: string): Promise<Conference> {
+      return withMintedCode(
+        conferenceId,
+        `update conference
+            set lifecycle_state = 'published', join_code = $2, updated_at = now()
+          where id = $1 and lifecycle_state = 'draft'
+         returning ${COLUMNS}`,
+      );
+    },
+
+    /**
+     * A new code for a Conference that already has one.
+     *
+     * The previous code is overwritten rather than kept in a history table: it must be refused
+     * exactly like an unknown code from the next request onwards (FR3), and a row that still held it
+     * is a row some later lookup could match. Nothing else on the Conference changes, so every
+     * existing Membership is untouched by construction – there is no delete in this statement.
+     *
+     * `updated_at` moves because this is a write to the Conference row, which is the whole rule for
+     * that column (`plan.json` → sharedDecisions → "three fields, four consumers", field 3). The
+     * schedule watermark does not, and cannot: S04's trigger fires only on the Conference's own
+     * name, dates and lifecycle state, and a code is none of those.
+     */
+    async regenerateJoinCode(conferenceId: string): Promise<Conference> {
+      return withMintedCode(
+        conferenceId,
+        `update conference
+            set join_code = $2, updated_at = now()
+          where id = $1
+         returning ${COLUMNS}`,
+      );
+    },
+
+    /**
+     * One Membership row, or none if it is already there.
+     *
+     * `on conflict do nothing` against the `(conference_id, user_sub)` unique constraint S03
+     * created is what makes re-entering a code a no-op rather than an error – and it makes it so for
+     * *every* way a caller can already be a member, including the creator's seeded Membership and a
+     * second request that arrives while the first is still in flight. A `select` for an existing row
+     * followed by an `insert` would refuse the second of two concurrent joins with a constraint
+     * violation the employee would read as "something went wrong".
+     */
+    async joinAsAttendee(conferenceId: string, sub: string): Promise<void> {
+      await db.query(
+        `insert into membership (conference_id, user_sub) values ($1, $2)
+         on conflict (conference_id, user_sub) do nothing`,
+        [conferenceId, sub],
+      );
     },
   };
 }

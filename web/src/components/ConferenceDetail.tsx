@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError, archiveConference, publishConference, type Conference } from '../api/client.ts';
 import { LifecycleBadge, formatSpan } from './lifecycle-display.tsx';
+import { JoinCodePanel } from './JoinCodePanel.tsx';
 import { SchedulePanel } from '../schedule/SchedulePanel.tsx';
 
 /**
@@ -127,6 +128,20 @@ export function ConferenceDetail({
           </button>
         </p>
       </section>
+
+      {/*
+       * The code panel sits directly under the lifecycle actions because that is where it becomes
+       * relevant: publishing is what mints the code, and sharing it is the Organizer's very next
+       * action (PRD User Flow 1 ends "publish → share the join code").
+       *
+       * An archived conference still shows its code, read-only in effect: the code is retained –
+       * archiving deletes nothing (FR9) – and any attempt to use it is refused as archived, so
+       * hiding it would leave an Organizer unable to see what the code on last year's slide was.
+       */}
+      <JoinCodePanel
+        conferenceId={conference.id}
+        published={conference.lifecycleState !== 'draft'}
+      />
 
       {/*
        * The composition surface itself. It sits below the lifecycle actions because that is the

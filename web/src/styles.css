@@ -700,6 +700,47 @@ body {
   font-size: 0.85rem;
 }
 
+/* ---------- join code ---------- */
+
+/*
+ * The entry form. `auto-fit` is wrong here – this is a field and a button that stack on a phone and
+ * sit side by side where there is room, so the field is allowed to grow and the button is not.
+ */
+.join-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gap);
+}
+
+.join-form .field {
+  /* Grows into the space, but may shrink to nothing rather than forcing the row wider than 375px. */
+  flex: 1 1 12rem;
+}
+
+.join-form__actions {
+  margin: 0;
+}
+
+/*
+ * A six-character code typed off a slide. Monospaced with real tracking so O-like and I-like shapes
+ * are separable, and `text-transform` on the input only – the value sent is what was typed, because
+ * normalizing it is the server's single job to do.
+ */
+.field__input--code {
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  font-size: clamp(1.05rem, 1rem + 0.5vw, 1.3rem);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.join-code {
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  letter-spacing: 0.2em;
+  /* Wraps rather than pushing the page sideways, even beside a long conference name at 375px. */
+  overflow-wrap: anywhere;
+}
+
 /* ---------- sign-in ---------- */
 
 .signin {

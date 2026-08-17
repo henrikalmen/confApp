@@ -68,7 +68,7 @@ export function assertTransitionPermitted(from: LifecycleState, to: LifecycleSta
   throw new AppError(ERROR_CODES.CONFERENCE_TRANSITION_NOT_PERMITTED, 409, because);
 }
 
-// ---------- the two exported guards S05 and S09 consume (TI10) ----------
+// ---------- the guards S05 and S09 consume (S03 TI10) ----------
 
 /**
  * Editable means "not archived". Archiving makes a Conference read-only (FR9); draft and
@@ -90,19 +90,86 @@ export function assertEditable(conference: LifecycleSubject): void {
 }
 
 /**
+ * Why a Conference cannot be joined – the three situations, named.
+ *
+ * They are distinguished here and not by the caller. S05's join endpoint has to tell an employee
+ * which of the three it is (FR3 → Error Handling), and the only way to do that without a second
+ * copy of the lifecycle rule living in the join path is for the rule itself to report its reason.
+ */
+export type JoinRefusalReason = 'not-published' | 'archived' | 'ended';
+
+/**
  * The single, whole definition of joinable – state AND end date, in one place.
  *
  * Both halves matter, and the second is the one that gets forgotten: a Conference that is still
  * `published` but ended yesterday is closed, whether or not anyone has got round to archiving it.
  * Joining ends with the end date, not with the manual archive step.
  *
- * S05's join endpoint consumes this predicate. It must not restate the rule – two implementations
- * of one invariant is precisely what a later story then has to unpick.
+ * Order is deliberate. A draft is reported as not-published whatever its dates, because publishing
+ * is what its Organizer has to do next and a date is irrelevant to that. An archived Conference is
+ * reported as archived rather than as ended, because archived is the terminal fact and "it ended"
+ * would invite the employee to wait for something.
+ *
+ * Every consumer reaches the rule through this function or through the two below it. S05's join,
+ * re-join and refusal paths call them and restate nothing – two implementations of one invariant is
+ * precisely what a later story then has to unpick.
  */
-export function isJoinable(conference: LifecycleSubject, today: CalendarDate): boolean {
-  if (conference.lifecycleState !== 'published') return false;
+export function joinRefusalReason(
+  conference: LifecycleSubject,
+  today: CalendarDate,
+): JoinRefusalReason | null {
+  if (conference.lifecycleState === 'draft') return 'not-published';
+  if (conference.lifecycleState === 'archived') return 'archived';
   // Still joinable *on* the last day; closed the day after.
-  return compareDates(conference.endDate, today) >= 0;
+  if (compareDates(conference.endDate, today) < 0) return 'ended';
+  return null;
+}
+
+export function isJoinable(conference: LifecycleSubject, today: CalendarDate): boolean {
+  return joinRefusalReason(conference, today) === null;
+}
+
+/** The refusal each reason produces, in the words the employee reads. */
+const JOIN_REFUSALS: Record<
+  JoinRefusalReason,
+  (conference: LifecycleSubject & { name: string }) => AppError
+> = {
+  'not-published': (conference) =>
+    new AppError(
+      ERROR_CODES.JOIN_CONFERENCE_NOT_PUBLISHED,
+      409,
+      `That code is for "${conference.name}", which has not been published yet. ` +
+        'Ask the organizer to publish it, then try again.',
+    ),
+  archived: (conference) =>
+    new AppError(
+      ERROR_CODES.JOIN_CONFERENCE_ARCHIVED,
+      409,
+      `That code is for "${conference.name}", which has been archived and can no longer be joined.`,
+    ),
+  ended: (conference) =>
+    new AppError(
+      ERROR_CODES.JOIN_CONFERENCE_ENDED,
+      409,
+      `That code is for "${conference.name}", which ended on ${conference.endDate} and can no ` +
+        'longer be joined.',
+    ),
+};
+
+/**
+ * Refuses a join with the reason named, or returns having decided the Conference is joinable.
+ *
+ * The Conference is named in every message. Non-disclosure is deliberately not attempted (FR3 →
+ * Error Handling): the code is not a security boundary, and an employee who mistyped one digit
+ * needs to know *which* conference they nearly joined.
+ */
+export function assertJoinable(
+  conference: LifecycleSubject & { name: string },
+  today: CalendarDate,
+): void {
+  const reason = joinRefusalReason(conference, today);
+  if (reason === null) return;
+  throw JOIN_REFUSALS[reason](conference);
 }
 
 // ---------- archiving ----------

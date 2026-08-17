@@ -60,6 +60,24 @@ export const ERROR_CODES = {
   /** An edit was attempted on an archived Conference, which is read-only. */
   CONFERENCE_NOT_EDITABLE: 'CONFERENCE_NOT_EDITABLE',
 
+  // ---------- join code access (S05) ----------
+  // One code per *reason*, deliberately disclosing which. Non-disclosure is not attempted: the
+  // Join Code is not a security boundary – sign-in already restricts confApp to the company
+  // Workspace domain (ADR-002) – and "invalid code" on the morning of day one costs an employee
+  // more than the vagueness protects. The three non-joinable reasons are separate codes because
+  // they are separate situations: one resolves itself when the Organizer publishes, one never
+  // will, and one means the conference is over.
+  /** No Conference in the database holds that code, in any lifecycle state. */
+  JOIN_CODE_UNKNOWN: 'JOIN_CODE_UNKNOWN',
+  /** The code names a Conference that is still a draft. */
+  JOIN_CONFERENCE_NOT_PUBLISHED: 'JOIN_CONFERENCE_NOT_PUBLISHED',
+  /** The code names a Conference that has been archived. */
+  JOIN_CONFERENCE_ARCHIVED: 'JOIN_CONFERENCE_ARCHIVED',
+  /** The code names a Conference whose end date has passed, archived or not. */
+  JOIN_CONFERENCE_ENDED: 'JOIN_CONFERENCE_ENDED',
+  /** This `sub` has made too many failed attempts inside the rolling window. */
+  JOIN_ATTEMPTS_RATE_LIMITED: 'JOIN_ATTEMPTS_RATE_LIMITED',
+
   // ---------- schedule composition (S04) ----------
   // One code per rule, so the composition form can attach each message to the control it is
   // about and a test can assert which rule refused. There is deliberately no code for an

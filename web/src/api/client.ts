@@ -199,6 +199,60 @@ export async function archiveConference(id: string): Promise<Conference> {
   return apiRequest<Conference>(`/conferences/${id}/archive`, { method: 'POST' });
 }
 
+// ---------- join code access (S05) ----------
+
+/** What the server says when a code resolved: which conference the employee just joined. */
+export interface JoinedConference {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  lifecycleState: LifecycleState;
+}
+
+/** The Organizer's view of their conference's code. `joinCode` is null until it is published. */
+export interface ConferenceJoinCode {
+  conferenceId: string;
+  joinCode: string | null;
+  lifecycleState: LifecycleState;
+}
+
+/**
+ * Joining by code. Not nested under a conference id: the code is what *selects* the conference, so
+ * the client has no id to send – which is the whole point of a code read off a slide.
+ *
+ * The value is sent as typed. Trimming, hyphens and case are the server's business (one
+ * normalization, shared by the join, re-join and refusal paths), and a second copy of that rule here
+ * is how "K7RM-4P works in the browser but not on the phone" happens.
+ */
+export async function joinConference(code: string): Promise<JoinedConference> {
+  const body = await apiRequest<{ conference: JoinedConference }>('/join', {
+    method: 'POST',
+    body: { code },
+  });
+  return body.conference;
+}
+
+export async function fetchJoinCode(
+  conferenceId: string,
+  signal?: AbortSignal,
+): Promise<ConferenceJoinCode> {
+  return apiRequest<ConferenceJoinCode>(
+    `/conferences/${conferenceId}/join-code`,
+    signal ? { signal } : {},
+  );
+}
+
+/**
+ * A new code. Sends no body: what it means is entirely in the endpoint, and the previous code stops
+ * working from the server's next request onwards. No attendee is removed.
+ */
+export async function regenerateJoinCode(conferenceId: string): Promise<ConferenceJoinCode> {
+  return apiRequest<ConferenceJoinCode>(`/conferences/${conferenceId}/join-code/regenerate`, {
+    method: 'POST',
+  });
+}
+
 // ---------- schedule composition (S04) ----------
 
 export type SessionKind = 'Presentation' | 'Workshop';

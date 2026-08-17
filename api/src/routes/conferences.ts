@@ -172,7 +172,11 @@ export function registerConferenceRoutes(
       const hasSession = await scheduleGate.hasAtLeastOneSession(conference.id);
       assertPublishable(conference, hasSession);
 
-      return toWire(await repository.updateLifecycleState(conference.id, 'published'));
+      // Publishing mints the Conference's Join Code in the same statement as the transition (S05):
+      // a published Conference always has one, and republishing is refused above rather than
+      // silently reissuing a code that is already on a slide. Regenerating is a separate,
+      // deliberate action at `POST /api/conferences/:id/join-code/regenerate`.
+      return toWire(await repository.publish(conference.id));
     }),
   });
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { HealthPanel } from './components/HealthPanel.tsx';
 import { ConferencesPanel } from './components/ConferencesPanel.tsx';
+import { JoinConferencePanel } from './components/JoinConferencePanel.tsx';
 import { SignInScreen } from './components/SignInScreen.tsx';
 import { useAuth } from './auth/AuthProvider.tsx';
 
@@ -76,6 +77,13 @@ export function App(): React.JSX.Element {
         ) : signedIn ? (
           <>
             <ConferencesPanel />
+            {/*
+             * Joining is available to every signed-in employee, organizer or not – there is nothing
+             * to pre-provision and no list to be on (FR3). It sits after the organizer surfaces
+             * because the shell is still one page: S06 owns the attendee's home and the navigation
+             * that will give each audience its own view.
+             */}
+            <JoinConferencePanel />
             <HealthPanel />
           </>
         ) : (

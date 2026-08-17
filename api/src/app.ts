@@ -10,12 +10,15 @@ import { registerAuthRoutes } from './routes/auth.ts';
 import { registerMeRoute } from './routes/me.ts';
 import { registerConferenceRoutes } from './routes/conferences.ts';
 import { registerSessionRoutes } from './routes/sessions.ts';
+import { registerJoinCodeRoutes } from './routes/join-code.ts';
+import { createFailedJoinAttempts } from './conferences/failed-join-attempts.ts';
 import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
 import { createConferenceAuthorization } from './conferences/authorization.ts';
 import { createConferenceRepository } from './conferences/conference-repository.ts';
 import { createScheduleGate, type ScheduleGate } from './conferences/schedule-gate.ts';
 import { createSessionRepository } from './sessions/session-repository.ts';
 import { systemClock, type Clock } from './conferences/calendar-date.ts';
+import { generateJoinCode, type JoinCodeMinter } from './conferences/join-code.ts';
 import type { Verifier } from './auth/verify-id-token.ts';
 import type { UserRepository } from './auth/users.ts';
 import type { CodeExchange } from './auth/code-exchange.ts';
@@ -75,6 +78,11 @@ export interface BuildAppOptions {
   scheduleGate?: ScheduleGate;
   /** The server's calendar date. Pinned by tests so the archive boundary can be stated. */
   clock?: Clock;
+  /**
+   * How a Join Code is minted. Production draws from the ambiguity-free alphabet; a test may pin
+   * the value so a scenario can name the code an employee types (S05 TI02).
+   */
+  mintJoinCode?: JoinCodeMinter;
   loggerOptions?: FastifyServerOptions['logger'];
 }
 
@@ -83,6 +91,7 @@ export function buildApp({
   auth,
   scheduleGate,
   clock = systemClock,
+  mintJoinCode = generateJoinCode,
   loggerOptions = false,
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: loggerOptions });
@@ -103,7 +112,7 @@ export function buildApp({
   });
   registerMeRoute(app, withAuth);
 
-  const conferences = createConferenceRepository(db);
+  const conferences = createConferenceRepository(db, mintJoinCode);
   const authorization = createConferenceAuthorization(db);
 
   registerConferenceRoutes(app, {
@@ -118,6 +127,15 @@ export function buildApp({
     conferences,
     sessions: createSessionRepository(db),
     authorization,
+  });
+  registerJoinCodeRoutes(app, {
+    withAuth,
+    repository: conferences,
+    authorization,
+    // The limiter's counter is a table, not this object: nothing is retained here between requests,
+    // so several replicas share one total (ADR-004).
+    failedAttempts: createFailedJoinAttempts(db),
+    clock,
   });
 
   return app;
