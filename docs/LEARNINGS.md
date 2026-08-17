@@ -52,3 +52,4 @@
 
 - ...
 - **Git Bash mangles `/api` env values into Windows paths** – `API_BASE_URL=/api` becomes `C:/Program Files/Git/api`, so fetches fail as `file:///…`. Set `MSYS_NO_PATHCONV=1` or drop the override.
+- **A test helper named `join` shadows `node:path`'s `join`** – surfaces as `app.inject is not a function` far from the cause. Name domain helpers `submit`/`post` in modules importing node:path.

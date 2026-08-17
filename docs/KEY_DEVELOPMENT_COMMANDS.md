@@ -144,6 +144,32 @@ Requires the stack to be up (`docker compose up -d && npm run migrate:up`) and, 
 | `npm run screenshots -- -g 768` | Capture at ~768px (tablet) → `screenshots/tablet-768.png` |
 | `npm run screenshots -- -g 1280` | Capture at ~1280px (desktop) → `screenshots/desktop-1280.png` |
 
+### Validating a change you have not rebuilt the image for
+
+`npm run screenshots` drives the **composed stack**, and the SPA container serves the assets that
+were baked into its image. After editing anything under `web/src` those captures are of the *old*
+build until you rebuild — `docker compose up -d --build` — which is easy to forget because the
+specs still pass, just against stale UI.
+
+Where `docker` is not on PATH (the WSL case below), rebuild is not available at all. Drive the Vite
+dev server instead, which serves your working tree:
+
+```sh
+npm run dev:web                                   # note the port it prints; 5173 may be taken
+WEB_URL='http://[::1]:5176' npx playwright test --config playwright.config.ts visual/<spec>.spec.ts
+```
+
+Two things bite here:
+
+- **Use `[::1]`, not `127.0.0.1`.** Vite binds IPv6-only, so the IPv4 loopback is refused and every
+  test fails with `ERR_CONNECTION_REFUSED` at `page.goto`.
+- **Do not pass `API_BASE_URL=/api` on the command line from Git Bash.** MSYS path conversion
+  rewrites it to `C:/Program Files/Git/api`, and the app then fetches `file:///C:/…/api/health`.
+  The dev server already reads `.env` itself, so pass nothing.
+
+The API need not be running: a spec that stubs its routes with `page.route` only leaves the health
+panel showing an error, which is not what these captures assert.
+
 ## Note for Docker-in-WSL setups
 
 If `docker` lives inside WSL while Node runs on Windows, run the Docker commands from a WSL
