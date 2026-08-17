@@ -9,15 +9,32 @@ export interface ApiErrorEnvelope {
   };
 }
 
+export interface ApiErrorDetail {
+  field: string;
+  message: string;
+}
+
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  /**
+   * Field-level messages, when the refusal was about particular inputs. The create form attaches
+   * each one to its own control, which is what "rejected inline" in FR1 means – a form-level
+   * banner would leave the organizer hunting for which field to fix.
+   */
+  readonly details: ApiErrorDetail[];
 
-  constructor(code: string, message: string, status = 0) {
+  constructor(code: string, message: string, status = 0, details: ApiErrorDetail[] = []) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
+    this.details = details;
+  }
+
+  /** The message for one field, or undefined when the refusal did not name it. */
+  messageFor(field: string): string | undefined {
+    return this.details.find((detail) => detail.field === field)?.message;
   }
 }
 
@@ -93,7 +110,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   if (!response.ok) {
     if (isEnvelope(payload)) {
-      throw new ApiError(payload.error.code, payload.error.message, response.status);
+      throw new ApiError(
+        payload.error.code,
+        payload.error.message,
+        response.status,
+        payload.error.details ?? [],
+      );
     }
     throw new ApiError(
       'UNEXPECTED_RESPONSE',
@@ -112,4 +134,67 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 
 export async function fetchMe(signal?: AbortSignal): Promise<Me> {
   return apiRequest<Me>('/me', signal ? { signal } : {});
+}
+
+// ---------- conferences (S03) ----------
+
+export type LifecycleState = 'draft' | 'published' | 'archived';
+
+export interface Conference {
+  id: string;
+  name: string;
+  /** Naive calendar dates, 'YYYY-MM-DD'. Never parsed through `new Date` – see below. */
+  startDate: string;
+  endDate: string;
+  lifecycleState: LifecycleState;
+  /** The row version S09 will send back as the base of an edit. */
+  updatedAt: string;
+}
+
+export interface ConferenceDetailsInput {
+  name: string;
+  startDate: string;
+  endDate: string;
+}
+
+/**
+ * The **Organizer** list: the conferences the signed-in employee holds a role in, drafts included.
+ *
+ * The attendee's list of joined conferences is a different result set at `/me/conferences` and
+ * belongs to S06 – two intended endpoints, not one overloaded one.
+ */
+export async function fetchConferences(signal?: AbortSignal): Promise<Conference[]> {
+  const body = await apiRequest<{ conferences: Conference[] }>(
+    '/conferences',
+    signal ? { signal } : {},
+  );
+  return body.conferences;
+}
+
+export async function fetchConference(id: string, signal?: AbortSignal): Promise<Conference> {
+  return apiRequest<Conference>(`/conferences/${id}`, signal ? { signal } : {});
+}
+
+export async function createConference(details: ConferenceDetailsInput): Promise<Conference> {
+  return apiRequest<Conference>('/conferences', { method: 'POST', body: details });
+}
+
+export async function updateConference(
+  id: string,
+  details: ConferenceDetailsInput,
+): Promise<Conference> {
+  return apiRequest<Conference>(`/conferences/${id}`, { method: 'PATCH', body: details });
+}
+
+/**
+ * Publish and archive send no body: what they mean is entirely in the endpoint, and the server
+ * decides whether the move is legal from the conference's stored state. The client never asserts
+ * that a transition is allowed – it asks, and renders the refusal if there is one.
+ */
+export async function publishConference(id: string): Promise<Conference> {
+  return apiRequest<Conference>(`/conferences/${id}/publish`, { method: 'POST' });
+}
+
+export async function archiveConference(id: string): Promise<Conference> {
+  return apiRequest<Conference>(`/conferences/${id}/archive`, { method: 'POST' });
 }

@@ -8,7 +8,12 @@ import { toValidationError } from './validation.ts';
 import { registerHealthRoute } from './routes/health.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerMeRoute } from './routes/me.ts';
+import { registerConferenceRoutes } from './routes/conferences.ts';
 import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
+import { createConferenceAuthorization } from './conferences/authorization.ts';
+import { createConferenceRepository } from './conferences/conference-repository.ts';
+import { createScheduleGate, type ScheduleGate } from './conferences/schedule-gate.ts';
+import { systemClock, type Clock } from './conferences/calendar-date.ts';
 import type { Verifier } from './auth/verify-id-token.ts';
 import type { UserRepository } from './auth/users.ts';
 import type { CodeExchange } from './auth/code-exchange.ts';
@@ -60,10 +65,23 @@ export interface AuthDependencies {
 export interface BuildAppOptions {
   db: Database;
   auth: AuthDependencies;
+  /**
+   * Whether a Conference has a Session yet. Production binds the port that answers `false` until
+   * S04 supplies a real count; a test stubs it to prove the publish success path (S03 TI08).
+   */
+  scheduleGate?: ScheduleGate;
+  /** The server's calendar date. Pinned by tests so the archive boundary can be stated. */
+  clock?: Clock;
   loggerOptions?: FastifyServerOptions['logger'];
 }
 
-export function buildApp({ db, auth, loggerOptions = false }: BuildAppOptions): FastifyInstance {
+export function buildApp({
+  db,
+  auth,
+  scheduleGate,
+  clock = systemClock,
+  loggerOptions = false,
+}: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: loggerOptions });
 
   installErrorHandling(app);
@@ -81,6 +99,13 @@ export function buildApp({ db, auth, loggerOptions = false }: BuildAppOptions): 
     users: auth.users,
   });
   registerMeRoute(app, withAuth);
+  registerConferenceRoutes(app, {
+    withAuth,
+    repository: createConferenceRepository(db),
+    authorization: createConferenceAuthorization(db),
+    scheduleGate: scheduleGate ?? createScheduleGate(db),
+    clock,
+  });
 
   return app;
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { HealthPanel } from './components/HealthPanel.tsx';
+import { ConferencesPanel } from './components/ConferencesPanel.tsx';
 import { SignInScreen } from './components/SignInScreen.tsx';
 import { useAuth } from './auth/AuthProvider.tsx';
 
@@ -53,6 +54,11 @@ export function App(): React.JSX.Element {
       {navOpen ? (
         <nav className="app__nav" id="app-nav" aria-label="Main">
           <ul className="app__nav-list">
+            {signedIn ? (
+              <li>
+                <a href="#conferences-title">Your conferences</a>
+              </li>
+            ) : null}
             <li>
               <a href="#health-title">Service health</a>
             </li>
@@ -68,7 +74,10 @@ export function App(): React.JSX.Element {
             {state.message}
           </div>
         ) : signedIn ? (
-          <HealthPanel />
+          <>
+            <ConferencesPanel />
+            <HealthPanel />
+          </>
         ) : (
           <SignInScreen />
         )}

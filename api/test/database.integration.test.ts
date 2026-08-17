@@ -8,6 +8,7 @@ import { buildApp } from '../src/app.ts';
 import { createDatabase } from '../src/db.ts';
 import { createUserRepository } from '../src/auth/users.ts';
 import { fakeAuth } from './fake-auth.ts';
+import { stepsToRevertThrough } from './migration-depth.ts';
 import type { VerifiedClaims } from '../src/auth/verify-id-token.ts';
 
 const run = promisify(execFile);
@@ -234,7 +235,9 @@ describe.skipIf(!reachable)('migrations against a real PostgreSQL', () => {
       const present = await client.query('select to_regclass($1) as table', ['public.app_user']);
       expect(present.rows[0]?.table).not.toBeNull();
 
-      await migrate('down', '1');
+      // Far enough back to include this migration, whatever later stories have stacked on top.
+      const steps = await stepsToRevertThrough(client, '20260817090000000_app-user');
+      await migrate('down', String(steps));
       const gone = await client.query('select to_regclass($1) as table', ['public.app_user']);
       expect(gone.rows[0]?.table).toBeNull();
 

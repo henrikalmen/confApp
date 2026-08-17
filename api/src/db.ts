@@ -2,6 +2,18 @@ import pg from 'pg';
 import { databaseUnavailable } from './errors.ts';
 
 /**
+ * A PostgreSQL `date` reaches JS as the 'YYYY-MM-DD' string it is, not as a Date.
+ *
+ * By default the driver parses oid 1082 into a Date at **local** midnight, which then serialises
+ * to an instant – so a conference starting 2026-09-14 leaves the API as 2026-09-13T22:00:00Z for
+ * anyone east of UTC. Conference dates are naive calendar days end to end (S03), so the coercion
+ * is disabled once, here, at the only place the driver is configured. Doing it per query would
+ * leave the next story's SELECT to remember, and a day-boundary shift is invisible until it is
+ * in front of an attendee.
+ */
+pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
+
+/**
  * The one pooled data-access seam every handler reaches PostgreSQL through.
  *
  * The pool is created once at startup and reused for the life of the process. That is a
@@ -41,8 +53,21 @@ function isUnavailable(error: unknown): boolean {
   return CONNECTION_ERRNOS.has(code) || UNAVAILABLE_SQLSTATES.has(code);
 }
 
-export interface Database {
+/** Anything a statement can be issued against – the pool, or one client inside a transaction. */
+export interface Queryable {
   query<T extends pg.QueryResultRow>(text: string, values?: readonly unknown[]): Promise<T[]>;
+}
+
+export interface Database extends Queryable {
+  /**
+   * Runs `work` against a single client inside one transaction, committing on return and
+   * rolling back on throw.
+   *
+   * Handed a `Queryable` rather than the Database so nothing inside a transaction can start a
+   * nested one on a different client – the classic way three "atomic" writes turn out to have
+   * been two.
+   */
+  transaction<T>(work: (tx: Queryable) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -75,6 +100,45 @@ export function createDatabase(connectionString: string, logger: DatabaseLogger)
           throw databaseUnavailable();
         }
         throw error;
+      }
+    },
+
+    async transaction<T>(work: (tx: Queryable) => Promise<T>): Promise<T> {
+      let client: pg.PoolClient;
+      try {
+        client = await pool.connect();
+      } catch (error) {
+        if (isUnavailable(error)) {
+          logger.error({ err: error }, 'PostgreSQL is unreachable.');
+          throw databaseUnavailable();
+        }
+        throw error;
+      }
+
+      try {
+        await client.query('begin');
+        const result = await work({
+          async query<T2 extends pg.QueryResultRow>(
+            text: string,
+            values: readonly unknown[] = [],
+          ): Promise<T2[]> {
+            const rows = await client.query<T2>(text, values as unknown[]);
+            return rows.rows;
+          },
+        });
+        await client.query('commit');
+        return result;
+      } catch (error) {
+        // A rollback that itself fails must not replace the error that caused it – that error is
+        // the one the caller needs, and the client is released regardless either way.
+        await client.query('rollback').catch(() => undefined);
+        if (isUnavailable(error)) {
+          logger.error({ err: error }, 'PostgreSQL is unreachable.');
+          throw databaseUnavailable();
+        }
+        throw error;
+      } finally {
+        client.release();
       }
     },
 

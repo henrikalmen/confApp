@@ -38,6 +38,27 @@ export const ERROR_CODES = {
   AUTH_DOMAIN_NOT_ALLOWED: 'AUTH_DOMAIN_NOT_ALLOWED',
   AUTH_NONCE_MISMATCH: 'AUTH_NONCE_MISMATCH',
   AUTH_EXCHANGE_FAILED: 'AUTH_EXCHANGE_FAILED',
+
+  // ---------- conference lifecycle (S03) ----------
+  // One code per *reason*, not one per endpoint. The organizer surfaces show `message`; these
+  // exist so a client can tell "fix this field" from "you may not do this" from "not yet"
+  // without reading prose, and so a test can assert which rule refused.
+  /** The name is blank after trimming, or longer than 120 characters. */
+  CONFERENCE_NAME_INVALID: 'CONFERENCE_NAME_INVALID',
+  /** The dates are unreadable, out of order, or span something other than 1–4 days. */
+  CONFERENCE_DATE_SPAN_INVALID: 'CONFERENCE_DATE_SPAN_INVALID',
+  /** No Conference with that id, asked by someone entitled to know that. */
+  CONFERENCE_NOT_FOUND: 'CONFERENCE_NOT_FOUND',
+  /** The caller does not hold the required role in this Conference. */
+  CONFERENCE_ROLE_REQUIRED: 'CONFERENCE_ROLE_REQUIRED',
+  /** The requested lifecycle move is not one the state machine permits. */
+  CONFERENCE_TRANSITION_NOT_PERMITTED: 'CONFERENCE_TRANSITION_NOT_PERMITTED',
+  /** Publish was asked for while the Conference still has no Session. */
+  CONFERENCE_SCHEDULE_REQUIRED: 'CONFERENCE_SCHEDULE_REQUIRED',
+  /** Archive was asked for on or before the Conference's end date. */
+  CONFERENCE_ARCHIVE_TOO_EARLY: 'CONFERENCE_ARCHIVE_TOO_EARLY',
+  /** An edit was attempted on an archived Conference, which is read-only. */
+  CONFERENCE_NOT_EDITABLE: 'CONFERENCE_NOT_EDITABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

@@ -44,6 +44,46 @@ export function inMemoryUsers(): InMemoryUsers {
   };
 }
 
+/**
+ * Turns a `sub` into a bearer token this suite's verifier will accept.
+ *
+ * Only for tests whose subject is what a *known* caller may do – the conference authorization and
+ * lifecycle rules. Whether a real Google token is genuine, correctly audienced and from the right
+ * Workspace domain is settled in the S02 suite against locally-signed fixtures, and stubbing the
+ * verifier there would make exactly those cases pass for the wrong reason.
+ */
+export function tokenFor(sub: string): string {
+  return `test-token:${sub}`;
+}
+
+/**
+ * Accepts `tokenFor(sub)` and refuses anything else, so a test can still assert that an
+ * unauthenticated or malformed credential never reaches a handler.
+ */
+export function subjectVerifier(hd = 'ourcompany.example'): Verifier {
+  return {
+    async verify(token: string) {
+      const prefix = 'test-token:';
+      if (!token.startsWith(prefix)) {
+        return { ok: false, code: 'AUTH_TOKEN_MALFORMED' } as const;
+      }
+
+      const sub = token.slice(prefix.length);
+      return {
+        ok: true,
+        claims: {
+          sub,
+          hd,
+          email: `${sub}@${hd}`,
+          displayName: sub,
+          nonce: undefined,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        },
+      } as const;
+    },
+  };
+}
+
 /** Refuses everything. The default for suites that never intend to authenticate. */
 export function refusingVerifier(): Verifier {
   return {
