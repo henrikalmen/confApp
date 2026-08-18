@@ -78,7 +78,8 @@ function routeFetch(routes: Record<string, Route>): typeof fetch {
   return vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    const path = url.replace(/^.*\/api/, '');
+    // The query string carries S09's write base; routes are stated by path alone.
+    const path = url.replace(/^.*\/api/, '').replace(/\?.*$/, '');
     const route = routes[`${method} ${path}`];
 
     if (route === undefined) throw new Error(`No route stubbed for ${method} ${path}.`);

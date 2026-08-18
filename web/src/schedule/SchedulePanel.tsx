@@ -9,6 +9,7 @@ import {
   type OverlapWarning,
   type Session,
   type SessionDetailsInput,
+  type WriteBase,
 } from '../api/client.ts';
 import { SessionForm } from './SessionForm.tsx';
 import { dayLabel, formatTimeRange } from './wall-clock-time.ts';
@@ -53,6 +54,23 @@ function messageOf(error: unknown): { code: string; message: string } {
       };
 }
 
+/**
+ * Is this the current Session representation a version conflict carries?
+ *
+ * Checked rather than cast: the payload arrives from the network, and a conflict whose body was not
+ * what this expects must degrade to the plain refusal message rather than render `undefined` at the
+ * organizer.
+ */
+function isSession(value: unknown): value is Session {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.title === 'string' &&
+    typeof candidate.lastUpdatedAt === 'string'
+  );
+}
+
 function asApiError(error: unknown): ApiError {
   return error instanceof ApiError
     ? error
@@ -67,6 +85,14 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
   const [saveError, setSaveError] = useState<ApiError | null>(null);
   const [warning, setWarning] = useState<OverlapWarning | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * The session as the server holds it now, after somebody else saved first (S09 TI10).
+   *
+   * Held beside the editor rather than replacing it: the admin's typed values stay in the form and
+   * these are shown next to them, so re-applying the edit is a decision rather than a retype. It is
+   * also the base the next save carries - which is what makes that second save succeed.
+   */
+  const [conflict, setConflict] = useState<Session | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<OrganizerSchedule | null> => {
@@ -121,6 +147,22 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
     [schedule],
   );
 
+  /**
+   * The base a write carries: the row version it was loaded with, and the conference's lifecycle
+   * state at that moment (S09 TI04, TI05).
+   *
+   * After a conflict the base comes from the version the server handed back, not from the one the
+   * form was opened with - that is precisely what "re-apply onto the newer version" means, and
+   * without it the second save would be refused exactly like the first.
+   */
+  const baseFor = useCallback(
+    (session: Session): WriteBase => ({
+      conferenceState: schedule?.conference.lifecycleState ?? 'draft',
+      version: conflict?.id === session.id ? conflict.lastUpdatedAt : session.lastUpdatedAt,
+    }),
+    [schedule, conflict],
+  );
+
   const submit = useCallback(
     async (details: SessionDetailsInput): Promise<void> => {
       if (!editor.open) return;
@@ -131,22 +173,40 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
         const saved =
           editor.editing === null
             ? await createSession(conferenceId, details)
-            : await updateSession(conferenceId, editor.editing.id, details);
+            : await updateSession(
+                conferenceId,
+                editor.editing.id,
+                details,
+                baseFor(editor.editing),
+              );
 
         // Non-blocking: the save already happened. Parallel tracks are supported, so this names
         // what the session now runs alongside rather than asking for anything to be changed.
         setWarning(saved.overlapWarning);
         setEditor({ open: false });
+        setConflict(null);
         setSelectedDay(saved.session.day);
         await load();
       } catch (error) {
+        const refused = asApiError(error);
+
+        /*
+         * A version conflict is the one refusal that comes with something to act on. The editor
+         * stays open with the admin's values, the server's current version is shown beside them,
+         * and the next save carries that version as its base - the recovery path the PRD's
+         * edge-case table asks for, rather than "reload and start again".
+         */
+        if (refused.code === 'EDIT_VERSION_CONFLICT' && isSession(refused.current)) {
+          setConflict(refused.current);
+        }
+
         // Held as the ApiError so the form can attach each field message to its own control.
-        setSaveError(asApiError(error));
+        setSaveError(refused);
       } finally {
         setSaving(false);
       }
     },
-    [conferenceId, editor, load],
+    [conferenceId, editor, load, baseFor],
   );
 
   const remove = useCallback(
@@ -154,14 +214,14 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
       setRefusal(null);
       setWarning(null);
       try {
-        await deleteSession(conferenceId, session.id);
+        await deleteSession(conferenceId, session.id, baseFor(session));
         await load();
       } catch (error) {
         // The server's sentence, verbatim – it is the only thing that explains what to do next.
         setRefusal(asApiError(error).message);
       }
     },
-    [conferenceId, load],
+    [conferenceId, load, baseFor],
   );
 
   return (
@@ -299,6 +359,36 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
             </ol>
           )}
 
+          {/*
+           * What the server holds now, beside what the admin typed. Both are on screen at once on
+           * purpose: the edit is re-applied by choice, and a notice that simply said "somebody
+           * else changed this" would leave the newer values to be hunted for in the list.
+           */}
+          {conflict !== null && editor.open ? (
+            <div className="edit-conflict" role="status" data-testid="session-conflict">
+              <p className="edit-conflict__current">
+                <strong>{conflict.title}</strong> now runs {conflict.startTime}–{conflict.endTime}
+                {' on '}
+                {conflict.day} in {conflict.location}. Your changes are still below – save again to
+                apply them on top of this version.
+              </p>
+              <p className="edit-conflict__actions">
+                <button
+                  className="button button--quiet"
+                  type="button"
+                  data-testid="session-conflict-discard"
+                  onClick={() => {
+                    setConflict(null);
+                    setEditor({ open: false });
+                    setSaveError(null);
+                  }}
+                >
+                  Discard my changes
+                </button>
+              </p>
+            </div>
+          ) : null}
+
           {readOnly || activeDay === undefined ? null : editor.open ? (
             <SessionForm
               days={days}
@@ -308,6 +398,7 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
               onCancel={() => {
                 setEditor({ open: false });
                 setSaveError(null);
+                setConflict(null);
               }}
               busy={saving}
               error={saveError}
@@ -322,6 +413,7 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
                   setEditor({ open: true, editing: null });
                   setSaveError(null);
                   setWarning(null);
+                  setConflict(null);
                 }}
               >
                 Add a session

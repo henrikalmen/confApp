@@ -1,8 +1,17 @@
 import { useState } from 'react';
-import { ApiError, archiveConference, publishConference, type Conference } from '../api/client.ts';
+import {
+  ApiError,
+  archiveConference,
+  publishConference,
+  updateConference,
+  type Conference,
+  type ConferenceDetailsInput,
+} from '../api/client.ts';
+import { ConferenceForm } from './ConferenceForm.tsx';
 import { LifecycleBadge, formatSpan } from './lifecycle-display.tsx';
 import { JoinCodePanel } from './JoinCodePanel.tsx';
 import { SchedulePanel } from '../schedule/SchedulePanel.tsx';
+import { MembersPanel } from '../members/MembersPanel.tsx';
 
 /**
  * One conference, with the lifecycle actions an Admin can take on it.
@@ -22,6 +31,23 @@ export interface ConferenceDetailProps {
 
 type Action = 'publish' | 'archive';
 
+/**
+ * The name and dates stay editable after publish (FR1, FR7) - a conference gets renamed and a day
+ * gets added while it is running, and only an archive closes it to changes.
+ *
+ * The form carries the conference's `updatedAt` as its base, so a second admin who saved first
+ * wins and this save is refused with its own sentence rather than overwriting them (S09 TI06).
+ * Shortening the span past a session is refused too, naming the sessions that would be stranded -
+ * and because that refusal names both date fields, the message lands beside the inputs it is about.
+ */
+function detailsOf(conference: Conference): ConferenceDetailsInput {
+  return {
+    name: conference.name,
+    startDate: conference.startDate,
+    endDate: conference.endDate,
+  };
+}
+
 export function ConferenceDetail({
   conference,
   onChanged,
@@ -29,8 +55,40 @@ export function ConferenceDetail({
 }: ConferenceDetailProps): React.JSX.Element {
   const [busy, setBusy] = useState<Action | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<ApiError | null>(null);
 
   const archived = conference.lifecycleState === 'archived';
+
+  async function saveDetails(details: ConferenceDetailsInput): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await updateConference(conference.id, details, {
+        conferenceState: conference.lifecycleState,
+        version: conference.updatedAt,
+      });
+      onChanged(updated);
+      setEditing(false);
+    } catch (error) {
+      /*
+       * Held as the ApiError so the form attaches each message to the control it is about. A
+       * version conflict and a span that would strand sessions are two different situations with
+       * two different next actions, and the server's sentence is the only thing that says which.
+       */
+      setSaveError(
+        error instanceof ApiError
+          ? error
+          : new ApiError(
+              'NETWORK_UNREACHABLE',
+              'The app could not reach the server. Check your connection and try again.',
+            ),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function act(action: Action): Promise<void> {
     setBusy(action);
@@ -73,6 +131,38 @@ export function ConferenceDetail({
           </h2>
           <LifecycleBadge state={conference.lifecycleState} />
         </div>
+
+        {/*
+         * Editing is offered while the conference is not archived - draft and published alike.
+         * Archiving makes it read-only, so the control is absent rather than present-and-refused.
+         */}
+        {archived ? null : editing ? (
+          <ConferenceForm
+            onSubmit={saveDetails}
+            busy={saving}
+            error={saveError}
+            initial={detailsOf(conference)}
+            submitLabel="Save changes"
+            onCancel={() => {
+              setEditing(false);
+              setSaveError(null);
+            }}
+          />
+        ) : (
+          <p className="panel__actions">
+            <button
+              className="button"
+              type="button"
+              data-testid="edit-conference"
+              onClick={() => {
+                setEditing(true);
+                setSaveError(null);
+              }}
+            >
+              Edit name and dates
+            </button>
+          </p>
+        )}
 
         <dl className="facts">
           <div className="fact">
@@ -149,6 +239,14 @@ export function ConferenceDetail({
        * can it be published – the Publish button above is refused until this panel holds a session.
        */}
       <SchedulePanel conferenceId={conference.id} readOnly={archived} />
+
+      {/*
+       * Members and roles come last because that is the order the work happens in: the schedule has
+       * to exist before a session can be assigned to anybody. An archived conference still shows
+       * the whole roster – archiving deletes nothing (FR9), and who ran what is exactly what an
+       * organizer looks back at – but its role changes are refused, here and on the server.
+       */}
+      <MembersPanel conferenceId={conference.id} readOnly={archived} />
     </>
   );
 }

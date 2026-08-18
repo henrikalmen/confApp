@@ -24,13 +24,28 @@ export class ApiError extends Error {
    * banner would leave the organizer hunting for which field to fix.
    */
   readonly details: ApiErrorDetail[];
+  /**
+   * What the refused thing looks like **now**, present only on a version conflict (S09 TI04).
+   *
+   * This is what makes "re-apply your edit onto the current version" a real recovery path rather
+   * than advice: the organizer's typed values stay in the form and the server's newer values are
+   * shown beside them, so nothing has to be retyped from memory.
+   */
+  readonly current: unknown;
 
-  constructor(code: string, message: string, status = 0, details: ApiErrorDetail[] = []) {
+  constructor(
+    code: string,
+    message: string,
+    status = 0,
+    details: ApiErrorDetail[] = [],
+    current: unknown = undefined,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
     this.details = details;
+    this.current = current;
   }
 
   /** The message for one field, or undefined when the refusal did not name it. */
@@ -116,6 +131,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         payload.error.message,
         response.status,
         payload.error.details ?? [],
+        (payload.error as { current?: unknown }).current,
       );
     }
     throw new ApiError(
@@ -183,8 +199,12 @@ export async function createConference(details: ConferenceDetailsInput): Promise
 export async function updateConference(
   id: string,
   details: ConferenceDetailsInput,
+  base: WriteBase,
 ): Promise<Conference> {
-  return apiRequest<Conference>(`/conferences/${id}`, { method: 'PATCH', body: details });
+  return apiRequest<Conference>(`/conferences/${id}`, {
+    method: 'PATCH',
+    body: { ...details, base },
+  });
 }
 
 /**
@@ -353,21 +373,42 @@ export async function createSession(
   });
 }
 
+/**
+ * The version of the world an edit was composed against (S09 TI04, TI05).
+ *
+ * Both halves are sent on every edit and delete. `version` is the row version the editor loaded –
+ * `session.lastUpdatedAt` or `conference.updatedAt` – and `conferenceState` is the lifecycle state
+ * it was loaded in, which is the only way a publish or archive landing mid-edit can be told apart
+ * from an ordinary version conflict. Neither has a default: a write with no base is refused rather
+ * than treated as a force-write.
+ */
+export interface WriteBase {
+  conferenceState: LifecycleState;
+  version: string;
+}
+
 export async function updateSession(
   conferenceId: string,
   sessionId: string,
   details: SessionDetailsInput,
+  base: WriteBase,
 ): Promise<SavedSession> {
   return apiRequest<SavedSession>(`/conferences/${conferenceId}/sessions/${sessionId}`, {
     method: 'PATCH',
-    body: details,
+    body: { ...details, base },
   });
 }
 
-export async function deleteSession(conferenceId: string, sessionId: string): Promise<void> {
-  await apiRequest<{ deleted: string }>(`/conferences/${conferenceId}/sessions/${sessionId}`, {
-    method: 'DELETE',
-  });
+export async function deleteSession(
+  conferenceId: string,
+  sessionId: string,
+  base: WriteBase,
+): Promise<void> {
+  const query = `?conferenceState=${base.conferenceState}&version=${encodeURIComponent(base.version)}`;
+  await apiRequest<{ deleted: string }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}${query}`,
+    { method: 'DELETE' },
+  );
 }
 
 // ---------- attendee schedule view (S06) ----------
@@ -446,6 +487,30 @@ export interface AttendeeSchedule {
   serverNow: ServerNow;
 }
 
+/**
+ * The two scalars an open Schedule polls for (S09 TI01).
+ *
+ * Deliberately tiny: this is the request every attendee's phone makes every few seconds for the
+ * length of a conference. The client compares `lastUpdatedAt` with the value on the envelope it is
+ * already rendering and refetches the schedule only when it has moved, so the steady state costs
+ * one small read per client per tick.
+ */
+export interface ScheduleWatermark {
+  /** S04's schedule watermark – an instant, and the same value the envelope carries. */
+  lastUpdatedAt: string | null;
+  state: LifecycleState;
+}
+
+export async function fetchScheduleWatermark(
+  conferenceId: string,
+  signal?: AbortSignal,
+): Promise<ScheduleWatermark> {
+  return apiRequest<ScheduleWatermark>(
+    `/conferences/${conferenceId}/schedule/watermark`,
+    signal ? { signal } : {},
+  );
+}
+
 export async function fetchMyConferences(signal?: AbortSignal): Promise<AttendeeConferences> {
   return apiRequest<AttendeeConferences>('/me/conferences', signal ? { signal } : {});
 }
@@ -461,5 +526,158 @@ export async function fetchAttendeeSchedule(
   return apiRequest<AttendeeSchedule>(
     `/conferences/${conferenceId}/schedule`,
     signal ? { signal } : {},
+  );
+}
+
+// ---------- per-conference roles (S07) ----------
+
+/**
+ * The three roles, exactly as the API names them. Presenter/Facilitator is **one** role – the two
+ * words describe what the holder is doing, not different permissions – so there is one value here,
+ * not two, and `roleLabel` below is the only place the slash appears.
+ */
+export type ConferenceRole = 'Admin' | 'PresenterFacilitator' | 'Attendee';
+
+/** The two an Admin can hand out. Attendee is not granted: it *is* membership, written by joining. */
+export type GrantableRole = 'Admin' | 'PresenterFacilitator';
+
+export interface ConferenceMember {
+  sub: string;
+  displayName: string;
+  /** Display data, so an Admin can tell two people apart. Never a key. */
+  email: string;
+  roles: ConferenceRole[];
+  /** The sessions this member may run and edit. */
+  sessionIds: string[];
+}
+
+/** One session as the roster sees it, with the members assigned to run it. */
+export interface RosterSession {
+  id: string;
+  title: string;
+  kind: SessionKind;
+  day: string;
+  startTime: string;
+  endTime: string;
+  holders: string[];
+}
+
+/**
+ * The whole member surface in one payload: both directions of the same three tables.
+ *
+ * The server returns it from every mutation as well as the read, so what is on screen after a
+ * grant is what the server holds rather than what the client assumed.
+ */
+export interface ConferenceRoster {
+  conferenceId: string;
+  lifecycleState: LifecycleState;
+  members: ConferenceMember[];
+  sessions: RosterSession[];
+}
+
+/** The one place the two words appear – as a label, never as two roles. */
+export function roleLabel(role: ConferenceRole): string {
+  return role === 'PresenterFacilitator' ? 'Presenter/Facilitator' : role;
+}
+
+export async function fetchRoster(
+  conferenceId: string,
+  signal?: AbortSignal,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(
+    `/conferences/${conferenceId}/members`,
+    signal ? { signal } : {},
+  );
+}
+
+/**
+ * Granting, by the address the Admin types.
+ *
+ * The address is a lookup input only: the server resolves it to the person's stable `sub` and
+ * stores that. It refuses with its own message when nobody has signed in under that address, when
+ * more than one account uses it, and when the person has not joined the conference – three
+ * different situations, so the panel renders whichever sentence comes back rather than one of its
+ * own.
+ */
+export async function grantRole(
+  conferenceId: string,
+  email: string,
+  role: GrantableRole,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(`/conferences/${conferenceId}/members/roles`, {
+    method: 'POST',
+    body: { email, role },
+  });
+}
+
+/** Revoking, by the `sub` the member list carries. The membership itself is untouched. */
+export async function revokeRole(
+  conferenceId: string,
+  userSub: string,
+  role: GrantableRole,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(
+    `/conferences/${conferenceId}/members/${encodeURIComponent(userSub)}/roles/${role}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function assignSessionHolder(
+  conferenceId: string,
+  sessionId: string,
+  userSub: string,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/assignments`,
+    { method: 'POST', body: { userSub } },
+  );
+}
+
+export async function unassignSessionHolder(
+  conferenceId: string,
+  sessionId: string,
+  userSub: string,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/assignments/${encodeURIComponent(userSub)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// ---------- membership management (S08) ----------
+
+/**
+ * Ending your own membership of a conference.
+ *
+ * No target is sent, and there is nowhere to put one: the server revokes the *caller's* membership,
+ * resolved from their verified `sub`. A client that could name somebody else would be one request
+ * away from being an unauthorized removal endpoint.
+ *
+ * The confirmation the person gives before this is called lives entirely in the client. The API is
+ * a horizontally replicated container with no request affinity (ADR-004), so a server-side "pending
+ * leave" would be held on one replica and absent from the next.
+ */
+export async function leaveConference(conferenceId: string): Promise<void> {
+  await apiRequest<{ conferenceId: string; membership: string }>(
+    `/conferences/${conferenceId}/membership`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
+ * Removing a member, by the `sub` the member list carries.
+ *
+ * Answers with the whole roster like every other member mutation, so the list on screen is what the
+ * server holds. Removing somebody who is not a member succeeds and changes nothing – a repeated or
+ * mistaken removal is not an error (FR6 → Error Handling), so the roster simply comes back as it
+ * was.
+ */
+export async function removeMember(
+  conferenceId: string,
+  userSub: string,
+): Promise<ConferenceRoster> {
+  return apiRequest<ConferenceRoster>(
+    `/conferences/${conferenceId}/members/${encodeURIComponent(userSub)}`,
+    { method: 'DELETE' },
   );
 }

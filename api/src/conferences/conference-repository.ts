@@ -1,6 +1,7 @@
 import type { Database, Queryable } from '../db.ts';
 import type { CalendarDate } from './calendar-date.ts';
 import type { ConferenceDetails } from './conference-validation.ts';
+import { instantExpression } from '../sessions/wall-clock-time.ts';
 import { generateJoinCode, type JoinCodeMinter } from './join-code.ts';
 import { isLifecycleState, type LifecycleState } from './lifecycle.ts';
 
@@ -71,12 +72,32 @@ interface ConferenceRow {
   lifecycle_state: string;
   created_by_sub: string;
   join_code: string | null;
-  updated_at: Date;
+  updated_at: string;
 }
 
-/** Every read goes through the same column list, so no caller can invent a different shape. */
-const COLUMNS =
-  'id, name, start_date, end_date, lifecycle_state, created_by_sub, join_code, updated_at';
+/**
+ * Every read goes through the same column list, so no caller can invent a different shape.
+ *
+ * `updated_at` is formatted in SQL rather than in JavaScript, exactly as `session.last_updated_at`
+ * is and for the same reason: it is the base version S09 compares an edit against, the driver's
+ * `Date` holds only milliseconds, and a round trip through one would drop the last three digits –
+ * collapsing two distinct versions into one and quietly reinstating last-write-wins for the two
+ * saves most likely to land inside the same millisecond, the concurrent ones.
+ */
+function columnList(prefix = ''): string {
+  return [
+    `${prefix}id`,
+    `${prefix}name`,
+    `${prefix}start_date`,
+    `${prefix}end_date`,
+    `${prefix}lifecycle_state`,
+    `${prefix}created_by_sub`,
+    `${prefix}join_code`,
+    instantExpression(`${prefix}updated_at`, 'updated_at'),
+  ].join(', ');
+}
+
+const COLUMNS = columnList();
 
 /** PostgreSQL's unique-violation SQLSTATE, and the constraint a minted code can collide with. */
 const UNIQUE_VIOLATION = '23505';
@@ -103,7 +124,7 @@ function toConference(row: ConferenceRow): Conference {
     lifecycleState: row.lifecycle_state,
     createdBySub: row.created_by_sub,
     joinCode: row.join_code,
-    updatedAt: row.updated_at.toISOString(),
+    updatedAt: row.updated_at,
   };
 }
 
@@ -265,9 +286,7 @@ export function createConferenceRepository(
      */
     async listForRoleHolder(sub: string): Promise<Conference[]> {
       const rows = await db.query<ConferenceRow>(
-        `select distinct ${COLUMNS.split(', ')
-          .map((column) => `c.${column}`)
-          .join(', ')}
+        `select distinct ${columnList('c.')}
          from conference c
          join role_assignment r on r.conference_id = c.id
          where r.user_sub = $1

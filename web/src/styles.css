@@ -841,3 +841,329 @@ body {
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+/* ---------- members and roles (S07) ---------- */
+
+/*
+ * A roster of people, each with a variable number of role badges and session assignments. Every
+ * one of those is a wrapping row rather than a fixed track: a name, an address and three badges
+ * cannot be laid out on a 375px phone without wrapping, and a fixed column would push the page
+ * sideways at exactly the width most attendees are holding.
+ */
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.member-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.member-card__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.member-card__name {
+  font-weight: 600;
+}
+
+/*
+ * An address is a single unbroken token and is the one thing here long enough to overflow a phone.
+ * `anywhere` lets it break mid-word rather than demand its full width from the layout.
+ */
+.member-card__email {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.member-card__roles,
+.member-card__session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.member-card__roles > li,
+.member-card__session-list > li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.member-card__session-list > li > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.badge--role-admin {
+  color: var(--accent);
+}
+
+.badge--role-presenterfacilitator {
+  color: var(--overlap);
+}
+
+.badge--role-attendee {
+  color: var(--text-muted);
+}
+
+.member-card__sessions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.member-card__label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.member-card__none {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/*
+ * The assign control: a label, a select and a button that sit in a row where there is room and
+ * stack on a phone. The select is allowed to shrink – `min-width: min(12rem, 100%)` rather than a
+ * bare rem value, so it still fits when the OS font scale enlarges the root size (Capacitor
+ * inherits that scale, and a fixed rem minimum goes off-screen at 24px root on a 375px phone).
+ */
+.member-card__assign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.member-card__assign .field__input {
+  flex: 1 1 auto;
+  min-width: min(12rem, 100%);
+}
+
+/* A secondary action beside a badge – smaller, but still a real tap target on a phone. */
+.button--small {
+  min-height: 2.25rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.grant-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gap);
+  margin-top: var(--gap);
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+
+.grant-form .field {
+  flex: 1 1 min(16rem, 100%);
+  min-width: 0;
+}
+
+.grant-form__actions {
+  margin: 0;
+}
+
+.field__hint {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ---------- ending a membership (S08) ---------- */
+
+/*
+ * The confirmation step, for leaving and for removing a member alike.
+ *
+ * It reads as a distinct block rather than as a second button beside the first: the whole point of
+ * the step is that confirming is a different act from asking, and two adjacent buttons on a 375px
+ * phone are one mis-tap apart. The danger palette is the same one refusals use, because this is
+ * the one place in the app where the next tap deletes something.
+ */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.confirm__question {
+  margin: 0;
+  /* A conference name is arbitrary text and can be long; it wraps rather than pushing the page. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.confirm__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* The confirming act itself, and the only control in the app that is styled as destructive. */
+.button--danger {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.button--danger:hover:not(:disabled) {
+  border-color: var(--danger-text);
+}
+
+.member-card__remove {
+  margin: 0;
+}
+
+/*
+ * Leaving sits at the foot of the attendee panel, separated by a rule: it is not part of reading
+ * the schedule, and it should not read as though it were one of the day tabs.
+ */
+.leave-conference {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: var(--gap);
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- live schedule editing (S09) ---------- */
+
+/*
+ * How recently the schedule updated, as an elapsed age. Quiet by design: it is a standing fact
+ * about the screen rather than a message, and it must not compete with the sessions themselves.
+ * It keeps counting up through a failed refresh, which is the one moment it earns its place.
+ */
+.schedule__staleness {
+  margin: 0 0 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/*
+ * The in-app change banner. It uses the notice palette, not the danger one: a schedule change is
+ * information the attendee needs, not something that has gone wrong and not something they can fix.
+ *
+ * Column-first so it reads top-to-bottom on a phone with the dismiss control beneath the list, and
+ * a row from the tablet width up where there is space for the button beside the text. The list
+ * wraps rather than truncating - a session name the attendee cannot read entirely would defeat the
+ * whole point of naming it.
+ */
+.schedule-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-bottom: var(--gap);
+  padding: 0.75rem;
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius);
+  color: var(--notice-text);
+}
+
+.schedule-changes__body {
+  min-width: 0;
+}
+
+.schedule-changes__title {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.schedule-changes__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  /* Long session names wrap instead of pushing the banner wider than the viewport. */
+  overflow-wrap: anywhere;
+}
+
+.schedule-changes__dismiss {
+  flex-shrink: 0;
+}
+
+@media (min-width: 48rem) {
+  .schedule-changes {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--gap);
+  }
+}
+
+/*
+ * A control that is available but not the thing to do next - dismissing a banner, discarding a
+ * conflicting edit. Lower contrast than `--primary` so it does not read as the main action.
+ */
+.button--quiet {
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+  opacity: 0.85;
+}
+
+.button--quiet:hover:not(:disabled) {
+  opacity: 1;
+}
+
+/*
+ * The conflict notice on the organizer's form: what the server holds now, shown beside the values
+ * the admin typed so the edit can be re-applied rather than retyped.
+ */
+.edit-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: var(--gap);
+  padding: 0.75rem;
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius);
+  color: var(--notice-text);
+}
+
+.edit-conflict__current {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.edit-conflict__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}

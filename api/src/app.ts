@@ -12,10 +12,13 @@ import { registerConferenceRoutes } from './routes/conferences.ts';
 import { registerSessionRoutes } from './routes/sessions.ts';
 import { registerJoinCodeRoutes } from './routes/join-code.ts';
 import { registerAttendeeRoutes } from './routes/attendee.ts';
+import { registerMemberRoutes } from './routes/members.ts';
 import { createFailedJoinAttempts } from './conferences/failed-join-attempts.ts';
 import { createWithAuth, installRouteAudit } from './auth/with-auth.ts';
 import { createConferenceAuthorization } from './conferences/authorization.ts';
 import { createConferenceRepository } from './conferences/conference-repository.ts';
+import { createRoleRepository } from './conferences/role-repository.ts';
+import { createMembershipRepository } from './conferences/membership-repository.ts';
 import { createScheduleGate, type ScheduleGate } from './conferences/schedule-gate.ts';
 import { createSessionRepository } from './sessions/session-repository.ts';
 import { systemClock, type Clock } from './conferences/calendar-date.ts';
@@ -116,14 +119,18 @@ export function buildApp({
   const conferences = createConferenceRepository(db, mintJoinCode);
   const authorization = createConferenceAuthorization(db);
 
+  const sessions = createSessionRepository(db);
+
   registerConferenceRoutes(app, {
     withAuth,
     repository: conferences,
+    // S09's date-span edit has to know which Sessions a shortened span would strand, so the
+    // Conference routes read the schedule as well now. Reading only – Sessions stay S04's.
+    sessions,
     authorization,
     scheduleGate: scheduleGate ?? createScheduleGate(db),
     clock,
   });
-  const sessions = createSessionRepository(db);
 
   registerSessionRoutes(app, {
     withAuth,
@@ -139,6 +146,18 @@ export function buildApp({
     sessions,
     authorization,
     clock,
+  });
+  // The Admin's member-and-roles surface (S07), and the two endpoints that end a Membership (S08).
+  // S03 seeds the creator's row and S05's join endpoint writes the rest; leaving and removal are
+  // the only paths that delete one, and both go through the single revocation operation below.
+  registerMemberRoutes(app, {
+    withAuth,
+    conferences,
+    sessions,
+    roles: createRoleRepository(db),
+    membership: createMembershipRepository(db),
+    users: auth.users,
+    authorization,
   });
   registerJoinCodeRoutes(app, {
     withAuth,

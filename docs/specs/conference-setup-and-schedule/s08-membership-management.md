@@ -40,43 +40,43 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01,OC03] [TI01,TI04,TI06,TI08] An Attendee leaves after confirming, and access ends at the next request**
+- [x] **S01 [OC01,OC03] [TI01,TI04,TI06,TI08] An Attendee leaves after confirming, and access ends at the next request**
   - **Given** Nadia is an Attendee of the published Conference "Kickoff 2026", which is running today
   - **When** Nadia taps Leave and then confirms in the confirmation step
   - **Then** her Membership for "Kickoff 2026" no longer exists
   - **And** her next request for that Conference's Schedule is refused as not a member, through the shared error envelope – no signed-in session is terminated and no connection is torn down
 
-- [ ] **S02 [OC01] [TI08] A leave that is not confirmed revokes nothing**
+- [x] **S02 [OC01] [TI08] A leave that is not confirmed revokes nothing**
   - **Given** Nadia is an Attendee of "Kickoff 2026" and is sitting in a Session
   - **When** she taps Leave and then dismisses or cancels the confirmation
   - **Then** no revocation request reaches the server and her Membership is intact
   - **And** the destructive action is reachable only through that second, explicit confirming act – a single tap on Leave never revokes
 
-- [ ] **S03 [OC02] [TI05] Only an Admin of that Conference can remove a member, and removing a non-member succeeds as a no-op**
+- [x] **S03 [OC02] [TI05] Only an Admin of that Conference can remove a member, and removing a non-member succeeds as a no-op**
   - **Given** Priya is an Admin of "Kickoff 2026"; Ola is an Attendee of it; Björn is an Attendee of it holding no Admin role; and Ida is an Admin of a *different* Conference, "Retro 2026", and not a member of "Kickoff 2026"
   - **When** Priya removes Ola, then Björn attempts to remove another Attendee, then Ida attempts to remove another Attendee
   - **Then** Ola's Membership is gone; Björn's and Ida's attempts are both refused as unauthorized through the shared error envelope and no Membership changes
   - **And** when Priya then issues the same removal for Ola a second time – he now holds neither a Membership nor any Role Assignment for "Kickoff 2026" – the request succeeds as a no-op rather than returning an error, and nothing is deleted
 
-- [ ] **S04 [OC02] [TI02,TI04,TI05] The last Admin can neither leave nor be removed, and can leave once a second Admin exists**
+- [x] **S04 [OC02] [TI02,TI04,TI05] The last Admin can neither leave nor be removed, and can leave once a second Admin exists**
   - **Given** Priya created "Kickoff 2026" and is therefore both its only Admin and a member of it (S03 seeds a Membership alongside the Admin Role Assignment), and it also has 40 Attendees
   - **When** Priya attempts to leave, and separately another caller attempts to remove her
   - **Then** both are refused with a user-facing message explaining that another Admin must be appointed first, and Priya still holds both her Membership and her Admin Role Assignment
   - **And** once Björn is granted Admin, Priya's leave succeeds and removes her Membership together with her Admin Role Assignment, leaving "Kickoff 2026" with one Admin
   - **And** when two Admins attempt to leave at the same moment, exactly one succeeds and the Conference is never left without an Admin
 
-- [ ] **S05 [OC04] [TI01,TI07] Ending a Membership deletes the Membership and that Conference's standing, and nothing else**
+- [x] **S05 [OC04] [TI01,TI07] Ending a Membership deletes the Membership and that Conference's standing, and nothing else**
   - **Given** Nadia is a member of both "Kickoff 2026" and "Retro 2026", holds a Presenter/Facilitator role in "Kickoff 2026", and rows recorded against her `sub` for "Kickoff 2026" exist from what she did there
   - **When** an Admin of "Kickoff 2026" removes her
   - **Then** exactly two things are gone: her Membership of "Kickoff 2026" and her role standing in "Kickoff 2026"
   - **And** her user record, her Membership and role in "Retro 2026", and every row recording what she did in "Kickoff 2026" are all still present and unmodified – the deletion cascades to nothing
 
-- [ ] **S06 [OC03] [TI01,TI04] A user who left re-joins with the code and no trace of having left remains**
+- [x] **S06 [OC03] [TI01,TI04] A user who left re-joins with the code and no trace of having left remains**
   - **Given** Nadia left "Kickoff 2026" yesterday and it is still published and running
   - **When** she enters the join code `K7RM4P` again
   - **Then** she becomes an Attendee again exactly as a first-time joiner would, and nothing in what she is shown or in what the API returns records that she previously left
 
-- [ ] **S07 [OC02,OC03] [TI03] An archived Conference refuses every membership change**
+- [x] **S07 [OC02,OC03] [TI03] An archived Conference refuses every membership change**
   - **Given** "Retro 2025" is archived, Nadia is a member of it and Ida is its Admin
   - **When** Nadia confirms leaving it, and separately Ida attempts to remove Nadia from it
   - **Then** both are refused with a message naming the archived state, both Memberships are unchanged, and the archived Conference remains readable to its members
@@ -84,16 +84,16 @@
 
 ## Structural Criteria
 
-- [ ] Revoking a Membership deletes exactly that Membership row and that user's role standing for that Conference – no foreign key from the user or the Membership is declared with a delete rule that would remove any other row.
-- [ ] Every authorization decision in this story's handlers resolves through `requireConferenceRole`; no membership endpoint contains an inline role or creator comparison.
-- [ ] The last-Admin rule is consumed from S07's implementation and is not re-implemented, duplicated, or approximated here.
-- [ ] The last-Admin check and the revocation write happen inside one transaction on both the leave and the remove path – no read-then-write pair exists in which two concurrent revocations could each observe a second Admin.
-- [ ] Every refusal in this story is emitted through the shared JSON error envelope with a user-facing message and a distinct machine code – no endpoint-local error shape.
-- [ ] Every endpoint in this story runs behind S02's authenticated-caller wrapper, so the `hd` claim is verified server-side on every request.
-- [ ] No live-eviction machinery is introduced – no session invalidation, no push, no connection teardown; access is re-derived from membership on each request.
-- [ ] Leaving is unavailable offline: no revocation is queued, optimistically applied, or synced later; the offline surface stays read-only.
-- [ ] Schema changes, if any, use plain PostgreSQL only – no provider-specific extension (ADR-003).
-- [ ] The leave confirmation and the Admin member list are legible with no horizontal body scroll at 375px, 768px and 1280px.
+- [x] Revoking a Membership deletes exactly that Membership row and that user's role standing for that Conference – no foreign key from the user or the Membership is declared with a delete rule that would remove any other row.
+- [x] Every authorization decision in this story's handlers resolves through `requireConferenceRole`; no membership endpoint contains an inline role or creator comparison.
+- [x] The last-Admin rule is consumed from S07's implementation and is not re-implemented, duplicated, or approximated here.
+- [x] The last-Admin check and the revocation write happen inside one transaction on both the leave and the remove path – no read-then-write pair exists in which two concurrent revocations could each observe a second Admin.
+- [x] Every refusal in this story is emitted through the shared JSON error envelope with a user-facing message and a distinct machine code – no endpoint-local error shape.
+- [x] Every endpoint in this story runs behind S02's authenticated-caller wrapper, so the `hd` claim is verified server-side on every request.
+- [x] No live-eviction machinery is introduced – no session invalidation, no push, no connection teardown; access is re-derived from membership on each request.
+- [x] Leaving is unavailable offline: no revocation is queued, optimistically applied, or synced later; the offline surface stays read-only.
+- [x] Schema changes, if any, use plain PostgreSQL only – no provider-specific extension (ADR-003).
+- [x] The leave confirmation and the Admin member list are legible with no horizontal body scroll at 375px, 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -155,35 +155,35 @@ prd    | docs/specs/conference-setup-and-schedule/prd.md#fr6-conference-membersh
 
 ### Implementation Tasks
 
-- [ ] **TI01** A single revocation operation ends one user's Membership of one Conference and nothing else
+- [x] **TI01** A single revocation operation ends one user's Membership of one Conference and nothing else
   - Deletes the Membership row and that user's Role Assignment rows for that Conference in one transaction, keyed on the user's `sub` from S02's caller context – never on email. Both deletions are required: S03 seeds a Membership alongside every creator's Admin Role Assignment, so a role holder always has a Membership and revoking one without the other would leave standing behind. Explicit scoped deletes only; no cascade from the user or Membership row. Plain PostgreSQL (ADR-003). TI04 and TI05 both call this and duplicate none of it.
   - **Verify**: `Test: after revoking one user's Membership, that user's Memberships and roles in other Conferences, their user record, and rows recorded against their sub for the revoked Conference all still exist; only the Membership and the Role Assignments for that Conference are gone; revoking a Conference creator removes their seeded Membership and their Admin Role Assignment together, leaving neither behind`
 
-- [ ] **TI02** The last Admin of a Conference can neither leave nor be removed
+- [x] **TI02** The last Admin of a Conference can neither leave nor be removed
   - Consumes S07's last-Admin rule (`s07-per-conference-roles.md` → TI07), which already counts remaining Admins with the rows locked; does not re-implement or approximate it. The check is evaluated **inside** TI01's revocation transaction rather than by the endpoints beforehand, so a check-then-revoke pair cannot let two concurrent departures both observe a second Admin. The refusal carries a user-facing message explaining that another Admin must be appointed first, through S01's envelope, and reaches TI04 and TI05 unchanged.
   - **Verify**: `Test: with exactly one Admin, that Admin's leave and a removal targeting them are both refused with a message about appointing another Admin, and their Membership and Admin Role Assignment are both unchanged; with two Admins either may leave; two concurrent leaves by the only two Admins result in exactly one success and one refusal, and the Conference still has an Admin; this story's modules contain no Admin-count query of their own – the rule resolves to S07's single implementation`
 
-- [ ] **TI03** Membership cannot be changed on an archived Conference
+- [x] **TI03** Membership cannot be changed on an archived Conference
   - Uses the editability guard S03 exported (`s03-conference-lifecycle.md` → TI10) rather than re-testing the lifecycle state; the refusal names the archived state. TI04 and TI05 both apply it before entering TI01's transaction, since an archived Conference is refused whatever the Admin count.
   - **Verify**: `Test: a leave and an Admin removal against an archived Conference are each refused with a message naming the archived state, both Memberships persist, and the archived Conference stays readable to its members`
 
-- [ ] **TI04** An Attendee can end their own Membership through a leave endpoint
+- [x] **TI04** An Attendee can end their own Membership through a leave endpoint
   - Revokes only the caller's own Membership – the target is the caller's validated `sub`, never a value the client supplies. Applies TI03's archived guard, then calls TI01, which enforces TI02's last-Admin check inside its own transaction.
   - **Verify**: `Test: a member's leave removes their own Membership and returns success; a request attempting to leave on another user's behalf cannot revoke that user's Membership`
 
-- [ ] **TI05** An Admin of a Conference can remove any of its members, and removing a non-member is a no-op
+- [x] **TI05** An Admin of a Conference can remove any of its members, and removing a non-member is a no-op
   - Authorization goes through `requireConferenceRole(caller, conferenceId, 'Admin')` from S03 – no inline role comparison. A caller who is an Admin of a *different* Conference is not an Admin here. When the target holds no Membership for the Conference they are not in it at all – under S03's seeded model that also means no Role Assignment – so the request succeeds without change rather than erroring, and deletes nothing. Applies TI03's archived guard, then calls TI01, which enforces TI02's last-Admin check inside its own transaction.
   - **Verify**: `Test: an Admin of the Conference removes a member; a non-Admin member, a non-member, and an Admin of another Conference are each refused through the shared error envelope with no state change; an unauthenticated or wrong-domain caller is refused by S02's wrapper before handler code runs; removing a user who holds no Membership returns success while the Membership and Role Assignment tables have no row added, removed or modified; the membership handlers contain no role check that bypasses requireConferenceRole`
 
-- [ ] **TI06** A revoked user's next request for that Conference is refused, with no eviction machinery
+- [x] **TI06** A revoked user's next request for that Conference is refused, with no eviction machinery
   - Conference-scoped reads – the Schedule above all – resolve membership per request from stored state, so revocation takes effect on the next call with no in-flight interruption. No session invalidation, push, or connection teardown is introduced.
   - **Verify**: `Test: a user whose Membership was just revoked mid-session is refused on their next Schedule request while their sign-in remains valid, and their other Conferences still load`
 
-- [ ] **TI07** The database's declared delete rules cannot remove historical records when a Membership ends
+- [x] **TI07** The database's declared delete rules cannot remove historical records when a Membership ends
   - Assert on the schema itself, not only on today's tables: no foreign key referencing the user or the Membership carries a cascading delete rule. Records of what a user did in a Conference are keyed on the user and the Conference, so the Membership is never their parent row.
   - **Verify**: `Test: a query of the database catalog finds no foreign-key constraint referencing the user or Membership table with a cascade delete rule`
 
-- [ ] **TI08** The leave and remove surfaces make the destructive step explicit and work at all three widths
+- [x] **TI08** The leave and remove surfaces make the destructive step explicit and work at all three widths
   - Leave requires a distinct confirming act naming the Conference before any request is sent, and the affordance is unavailable while offline (FR8 – no leaving offline, nothing queued). The Admin member list shows the Conference's members with a remove control and renders the server's refusal message verbatim; the UI may disable an affordance but never substitutes for the server guard. Depends on TI04 and TI05.
   - **Verify**: `Test: cancelling the confirmation issues no request and leaves the Membership intact; the leave action is unavailable offline and queues nothing. Screenshots at 375px, 768px and 1280px show the confirmation and the member list fully visible with no horizontal body scroll`
 
@@ -204,4 +204,23 @@ prd    | docs/specs/conference-setup-and-schedule/prd.md#fr6-conference-membersh
 
 > _Managed by exec-spec post-implementation – append-only._
 
-_No observations recorded yet._
+### Run: 2026-08-18 06:54 UTC – discovered-requirements
+
+#### DISCOVERED REQUIREMENTS
+
+- **Ending a Membership must also delete that user's Session Assignments for that Conference.** TI01 names the Membership row and the Role Assignment rows only. Leaving the `session_assignment` rows behind breaks Acceptance Scenario S06 ("no trace of having left"): the roster derives a member's `sessionIds` from `session_assignment`, so a departed Presenter/Facilitator who re-joins with the code reappears already assigned to the Sessions they used to run. It also leaves exactly the orphan row S07's own role revocation deletes for the same reason (`role-repository.ts` → `revoke`). Session Assignments are the concrete expression of the Presenter/Facilitator standing, so they are part of "the standing it granted" in [OC04] and are deleted inside TI01's transaction with the other two.
+
+- **TI07's catalog assertion has one pre-existing exception that predates this story: `failed_join_attempt.user_sub` references `app_user` with `ON DELETE CASCADE`.** S05 declared it deliberately (rate-limiter bookkeeping, and it keeps `delete from app_user` a usable test teardown). It is not a record of what a user did in a Conference and no revocation path can fire it – revoking a Membership never deletes an `app_user` row. The TI07 catalog test therefore asserts the exact set of cascading foreign keys into `app_user`/`membership` equals that one named constraint, so any newly added cascading rule still fails the test, rather than asserting the set is empty (which the schema has not satisfied since S05 landed). Changing S05's rule is out of this story's scope.
+
+### Run: 2026-08-18 07:22 UTC – observations
+
+#### NOTICED BUT NOT TOUCHING
+
+- `api/test/join-code.test.ts`, `web/src/components/JoinCodePanel.tsx` and `visual/conferences.spec.ts` fail `prettier --check`. Pre-existing drift on committed files this story does not touch; left alone rather than bundled into an unrelated diff.
+- `docs/specs/conference-setup-and-schedule/plan.json` records S03 as `spec-ready` while S04–S07 are `done`, which cannot be true – S03's Membership table and `requireConferenceRole` are what S04 onwards are built on. A stale status write from an earlier run, not something this story changed.
+- `visual/shell.spec.ts` cannot run in this environment: it deliberately drives the composed stack for a live `schema-version`, and `docker` is not on PATH here (the WSL case documented in `docs/KEY_DEVELOPMENT_COMMANDS.md`). Its three viewport tests fail on a missing API, unrelated to this story; every other visual spec, including this story's, runs against the Vite dev server and passes.
+
+#### ASSUMPTIONS
+
+- **The Admin's "Remove from conference" control also takes a confirming act.** TI08 requires the confirmation only for the attendee's own leave. It is applied to the Admin removal as well because the two controls sit inches apart on a member card at 375px – one labelled "Remove" (a role) and one "Remove from conference" (the person) – and an unconfirmed destructive control beside a non-destructive one of nearly the same name is a slip waiting to happen. The server remains the only guard.
+- **S07's `assertConferenceKeepsAnAdmin` gained an optional `nextStep` parameter** (`api/src/conferences/role-repository.ts`) rather than a second copy of the rule. Its default reproduces S07's existing sentence byte-for-byte, so no existing call site or assertion changes; S08's two paths pass wording that fits leaving and removal instead of "then remove this role". This keeps the Structural Criterion "consumed from S07's implementation, not re-implemented" true while the refusal still reads correctly on both new paths.

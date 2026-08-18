@@ -38,8 +38,27 @@ const UPSERT = `
   returning id, sub, email, display_name
 `;
 
+/**
+ * Everyone whose current address is this one, case-insensitively.
+ *
+ * A *list*, not a single row, and that is the whole point. There is no unique index on email and
+ * there must not be one (see the S02 suite): an address that is freed and reissued belongs to two
+ * different people, and a row's email is refreshed only when that person next signs in, so a
+ * leaver who never returns keeps theirs while the new holder signs in and gets a second. Returning
+ * the matches lets the caller tell "nobody" from "more than one" and refuse each with its own
+ * reason, instead of silently keying a role assignment on whichever row sorted first.
+ *
+ * `sub` remains the identity throughout. This is a lookup input for choosing a person, never a key.
+ */
+const BY_EMAIL = `
+  select id, sub, email, display_name from app_user
+   where lower(email) = lower($1)
+   order by sub
+`;
+
 export interface UserRepository {
   upsertFromClaims(claims: VerifiedClaims): Promise<AppUser>;
+  findByEmail(email: string): Promise<AppUser[]>;
 }
 
 export function createUserRepository(db: Database): UserRepository {
@@ -59,6 +78,16 @@ export function createUserRepository(db: Database): UserRepository {
       }
 
       return { id: row.id, sub: row.sub, email: row.email, displayName: row.display_name };
+    },
+
+    async findByEmail(email: string): Promise<AppUser[]> {
+      const rows = await db.query<AppUserRow>(BY_EMAIL, [email.trim()]);
+      return rows.map((row) => ({
+        id: row.id,
+        sub: row.sub,
+        email: row.email,
+        displayName: row.display_name,
+      }));
     },
   };
 }

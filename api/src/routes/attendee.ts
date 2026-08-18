@@ -1,9 +1,9 @@
-import type { FastifyInstance } from 'fastify';
-import type { WithAuth } from '../auth/with-auth.ts';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { WithAuth, AuthenticatedCaller } from '../auth/with-auth.ts';
 import { AppError, ERROR_CODES } from '../errors.ts';
 import type { Clock } from '../conferences/calendar-date.ts';
 import type { ConferenceAuthorization } from '../conferences/authorization.ts';
-import type { ConferenceRepository } from '../conferences/conference-repository.ts';
+import type { Conference, ConferenceRepository } from '../conferences/conference-repository.ts';
 import { chooseDefaultConference } from '../conferences/attendee-conferences.ts';
 import type { SessionRepository } from '../sessions/session-repository.ts';
 import { buildScheduleEnvelope } from '../sessions/schedule-envelope.ts';
@@ -103,35 +103,52 @@ export function registerAttendeeRoutes(
   );
 
   /**
-   * The Attendee's Schedule read: the envelope pinned in S06 → Technical Overview, and nothing else.
+   * The one readability decision, made once and shared by both attendee reads.
    *
    * The order of the two refusals is load-bearing. Membership is decided **first**, so a caller who
    * has not joined is told exactly that and learns nothing further – not whether the id is real, not
    * what state the Conference is in. Checking the lifecycle first would answer "not published yet"
    * to anyone who guessed a uuid, disclosing both that the Conference exists and what it is doing.
    * Neither refusal carries any Session content.
+   *
+   * S09's watermark poll goes through this same helper rather than a check of its own. A poll that
+   * answered where the schedule read refuses – or refused where it answers – would be a second,
+   * divergent opinion about who may read a Conference, and the client polls precisely so it can
+   * refetch the schedule: the two must agree by construction.
+   */
+  async function loadReadable(
+    request: FastifyRequest,
+    caller: AuthenticatedCaller,
+  ): Promise<Conference> {
+    const { conferenceId } = request.params as ConferenceParams;
+
+    await authorization.requireMembership(caller, conferenceId);
+
+    const conference = await conferences.findById(conferenceId);
+    if (conference === null) {
+      // Reachable only where the Conference was removed between the two reads: the caller held a
+      // Membership a moment ago, so they are entitled to be told it is gone.
+      throw new AppError(
+        ERROR_CODES.CONFERENCE_NOT_FOUND,
+        404,
+        'That conference no longer exists.',
+      );
+    }
+
+    // Archived Conferences read successfully and the envelope marks the state – archiving makes a
+    // Conference read-only, not invisible (FR9). Only a draft is refused.
+    if (conference.lifecycleState === 'draft') throw notReadable(conference.name);
+
+    return conference;
+  }
+
+  /**
+   * The Attendee's Schedule read: the envelope pinned in S06 → Technical Overview, and nothing else.
    */
   app.get('/api/conferences/:conferenceId/schedule', {
     schema: { params: conferenceParamsSchema },
     handler: withAuth(async (request, caller) => {
-      const { conferenceId } = request.params as ConferenceParams;
-
-      await authorization.requireMembership(caller, conferenceId);
-
-      const conference = await conferences.findById(conferenceId);
-      if (conference === null) {
-        // Reachable only where the Conference was removed between the two reads: the caller held a
-        // Membership a moment ago, so they are entitled to be told it is gone.
-        throw new AppError(
-          ERROR_CODES.CONFERENCE_NOT_FOUND,
-          404,
-          'That conference no longer exists.',
-        );
-      }
-
-      // Archived Conferences read successfully and the envelope marks the state – archiving makes a
-      // Conference read-only, not invisible (FR9). Only a draft is refused.
-      if (conference.lifecycleState === 'draft') throw notReadable(conference.name);
+      const conference = await loadReadable(request, caller);
 
       /*
        * One query for the Sessions, whatever the span (TI03). A per-day or per-Session round trip
@@ -145,6 +162,40 @@ export function registerAttendeeRoutes(
       // reading, so a request landing on the stroke of midnight cannot report today's day beside
       // tomorrow's instant.
       return buildScheduleEnvelope(conference, schedule, watermark, clock.now());
+    }),
+  });
+
+  /**
+   * The **watermark poll** – how an open Schedule finds out it has gone stale (S09 TI01).
+   *
+   * Two scalars and nothing else. This is the endpoint every attendee's phone hits every few
+   * seconds for the length of a conference, so its cost is the story's capacity case: a client
+   * compares `lastUpdatedAt` with the value on the envelope it is already rendering and refetches
+   * the Schedule *only* when it has moved. Returning any Session content here would make the poll
+   * as expensive as the thing it exists to avoid, and would give a client a second, smaller
+   * schedule shape to merge – which is the delta format S09 deliberately does not have.
+   *
+   * `lastUpdatedAt` is S04's `schedule_watermark_at`, under the name S06's envelope gives it. It
+   * advances on a Conference field change and on any Session insert, update **or delete**, which is
+   * what makes a deletion – a change that leaves no row behind to notice – observable to a polling
+   * client. It is emphatically not `conference.updated_at`: that column is the Conference row's own
+   * version and is untouched by every Session write, so polling it would miss the whole schedule.
+   *
+   * `state` rides along because archiving is a change an open Schedule must notice too, and the
+   * client already has to read this response to decide whether to refetch.
+   *
+   * Nothing is remembered between polls. The watermark is read from the database on every request –
+   * never a counter held in the handler, which would be absent on the next replica anyway (ADR-004).
+   */
+  app.get('/api/conferences/:conferenceId/schedule/watermark', {
+    schema: { params: conferenceParamsSchema },
+    handler: withAuth(async (request, caller) => {
+      const conference = await loadReadable(request, caller);
+
+      return {
+        lastUpdatedAt: await sessions.scheduleWatermark(conference.id),
+        state: conference.lifecycleState,
+      };
     }),
   });
 }

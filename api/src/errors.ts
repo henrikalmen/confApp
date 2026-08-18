@@ -107,6 +107,55 @@ export const ERROR_CODES = {
   NOT_A_MEMBER: 'NOT_A_MEMBER',
   /** The Conference exists and the caller is in it, but it is still a draft. */
   CONFERENCE_NOT_READABLE: 'CONFERENCE_NOT_READABLE',
+
+  // ---------- per-conference roles (S07) ----------
+  // One code per *reason*, distinct from every other, because each one is a different thing for
+  // the Admin to do next: wait for someone to sign in, pick a different person, add a second
+  // Admin first, or give up because the conference is closed. A single ROLE_CHANGE_REFUSED would
+  // collapse four different next actions into one sentence the client could not branch on.
+  /** The revocation would leave the Conference with no Admin at all. */
+  CONFERENCE_LAST_ADMIN: 'CONFERENCE_LAST_ADMIN',
+  /** The typed address matches no confApp user – nobody by that name has ever signed in. */
+  ROLE_TARGET_NOT_SIGNED_IN: 'ROLE_TARGET_NOT_SIGNED_IN',
+  /**
+   * The typed address matches more than one confApp user, so no single `sub` can be resolved.
+   *
+   * Reachable because `app_user` carries no unique index on email, deliberately: an address that
+   * is freed and reissued belongs to two different people, and both keep their row. Resolving it
+   * by picking either would key the assignment on a guess – see the Discovered Requirement in
+   * `s07-per-conference-roles.md`.
+   */
+  ROLE_TARGET_AMBIGUOUS: 'ROLE_TARGET_AMBIGUOUS',
+  /** The target is a confApp user but has not joined this Conference. */
+  ROLE_TARGET_NOT_A_MEMBER: 'ROLE_TARGET_NOT_A_MEMBER',
+  /** The revocation names a role this member does not currently hold here. */
+  ROLE_ASSIGNMENT_NOT_FOUND: 'ROLE_ASSIGNMENT_NOT_FOUND',
+  /** A Session was assigned to someone who does not hold Presenter/Facilitator in this Conference. */
+  SESSION_ASSIGNMENT_ROLE_REQUIRED: 'SESSION_ASSIGNMENT_ROLE_REQUIRED',
+
+  // ---------- live schedule editing (S09) ----------
+  // Three codes for three genuinely different next actions, and collapsing any two of them would
+  // cost the editor the one thing they need to know. "Someone else changed this row" means re-apply
+  // your edit onto the version returned beside this refusal. "The conference was published or
+  // archived while you were typing" means the edit may no longer be possible at all, and which it
+  // is depends on the state named in the message. "Those dates would strand these sessions" means
+  // go and move the sessions the message lists, then try the same change again. A single
+  // EDIT_REFUSED would leave the client parsing prose to tell them apart.
+  /**
+   * The base row version sent with the write is not the row's current version – someone saved
+   * between the editor loading the row and saving it. The payload carries the current version so
+   * the edit can be re-applied on top of it rather than retyped.
+   */
+  EDIT_VERSION_CONFLICT: 'EDIT_VERSION_CONFLICT',
+  /**
+   * The Conference moved to another lifecycle state between load and save. Distinct from
+   * EDIT_VERSION_CONFLICT because it is not the edited row that moved, and distinct from
+   * CONFERENCE_NOT_EDITABLE because that one answers "this is archived" to someone who never had a
+   * stale view – here the message must name the *new* state, which is the edge case's whole point.
+   */
+  CONFERENCE_STATE_CHANGED: 'CONFERENCE_STATE_CHANGED',
+  /** The requested date span would leave existing Sessions outside the Conference's days. */
+  CONFERENCE_SPAN_ORPHANS_SESSIONS: 'CONFERENCE_SPAN_ORPHANS_SESSIONS',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -121,6 +170,7 @@ export interface ErrorEnvelope {
     code: ErrorCode;
     message: string;
     details?: ErrorDetail[];
+    current?: unknown;
   };
 }
 
@@ -129,13 +179,35 @@ export class AppError extends Error {
   readonly code: ErrorCode;
   readonly statusCode: number;
   readonly details: ErrorDetail[] | undefined;
+  /**
+   * What the refused thing looks like **now** – present only where the caller's next move is to
+   * act on it (S09's version conflict, where the editor re-applies their edit onto this version).
+   *
+   * Additive to S01's envelope rather than a second refusal shape: a client that ignores it still
+   * reads `code` and `message` exactly as before. It carries no field a successful read of the same
+   * resource would not have disclosed to this caller, who was authorized before the check that
+   * refused them ran.
+   */
+  readonly current: unknown | undefined;
 
-  constructor(code: ErrorCode, statusCode: number, message: string, details?: ErrorDetail[]) {
+  constructor(
+    code: ErrorCode,
+    statusCode: number,
+    message: string,
+    details?: ErrorDetail[],
+    current?: unknown,
+  ) {
     super(message);
     this.name = 'AppError';
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
+    this.current = current;
+  }
+
+  /** The same refusal, carrying what the thing looks like now. */
+  withCurrent(current: unknown): AppError {
+    return new AppError(this.code, this.statusCode, this.message, this.details, current);
   }
 
   toEnvelope(): ErrorEnvelope {
@@ -144,6 +216,7 @@ export class AppError extends Error {
         code: this.code,
         message: this.message,
         ...(this.details ? { details: this.details } : {}),
+        ...(this.current === undefined ? {} : { current: this.current }),
       },
     };
   }

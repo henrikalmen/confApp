@@ -79,6 +79,26 @@ function toSession(row: SessionRow): Session {
   };
 }
 
+/**
+ * Does this Session belong to this Conference?
+ *
+ * Exported, and taking a `Queryable`, so a caller working inside its own transaction can ask
+ * without reaching into the `sessions` table itself. S07's Session Assignment needs exactly this
+ * question answered under the Conference row lock it already holds, and the table stays owned by
+ * this module – which is the boundary `session-structure.test.ts` asserts.
+ */
+export async function sessionExistsInConference(
+  tx: Queryable,
+  conferenceId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const rows = await tx.query<{ id: string }>(
+    'select id from sessions where id = $1 and conference_id = $2',
+    [sessionId, conferenceId],
+  );
+  return rows[0] !== undefined;
+}
+
 function sessionNotFound(): AppError {
   return new AppError(
     ERROR_CODES.SESSION_NOT_FOUND,
@@ -89,6 +109,14 @@ function sessionNotFound(): AppError {
 
 export interface SessionRepository {
   listForConference(conferenceId: string): Promise<Session[]>;
+  /**
+   * One Session of one Conference, or `null`.
+   *
+   * Scoped by `conference_id` as well as `id` for the same reason every write here is: the caller
+   * was authorized for *that* Conference, and the query is what holds the two together. S09 reads
+   * the row before a write so it can compare the caller's base version against the current one.
+   */
+  findById(conferenceId: string, sessionId: string): Promise<Session | null>;
   /**
    * The Conference's whole-schedule watermark, as an ISO-8601 UTC instant.
    *
@@ -124,6 +152,15 @@ export function createSessionRepository(db: Database): SessionRepository {
   return {
     async listForConference(conferenceId: string): Promise<Session[]> {
       return list(db, conferenceId);
+    },
+
+    async findById(conferenceId: string, sessionId: string): Promise<Session | null> {
+      const rows = await db.query<SessionRow>(
+        `select ${COLUMNS} from sessions where id = $2 and conference_id = $1`,
+        [conferenceId, sessionId],
+      );
+      const row = rows[0];
+      return row === undefined ? null : toSession(row);
     },
 
     async scheduleWatermark(conferenceId: string): Promise<string | null> {

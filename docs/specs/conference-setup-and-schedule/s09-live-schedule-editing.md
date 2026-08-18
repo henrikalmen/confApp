@@ -43,45 +43,45 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01,OC02] [TI01,TI02,TI04,TI09,TI10] A room change on a published Conference reaches an open attendee Schedule within the near-live window with no reload**
+- [x] **S01 [OC01,OC02] [TI01,TI02,TI04,TI09,TI10] A room change on a published Conference reaches an open attendee Schedule within the near-live window with no reload**
   - **Given** the published Conference "Autumn Offsite" is running, and Björn has its Schedule for 2026-09-15 open on his phone showing "Opening Keynote" 09:00–10:30 in "Room A"
   - **When** an Admin edits that Session to 09:30–11:00 in "Room B" and Björn touches nothing
   - **Then** within a few seconds Björn's open view shows 09:30–11:00 and "Room B" – no manual reload, no navigation – the times read exactly as authored with no timezone shift, and the view's staleness indicator resets to "just now" (an elapsed age, not a wall-clock time of day)
 
-- [ ] **S02 [OC01,OC02] [TI01,TI02,TI03,TI10] A Session added and another deleted after publish both appear on an open attendee Schedule**
+- [x] **S02 [OC01,OC02] [TI01,TI02,TI03,TI10] A Session added and another deleted after publish both appear on an open attendee Schedule**
   - **Given** the published Conference "Autumn Offsite" has "Opening Keynote" and "Retrospective" on 2026-09-15, and Björn has that day open
   - **When** an Admin adds "Lightning Talks" 13:00–14:00 on 2026-09-15 and deletes "Retrospective"
   - **Then** Björn's open view gains "Lightning Talks" in start-time order and loses "Retrospective" within a few seconds, and the deletion alone – with no other write – is enough to trigger the refresh
 
-- [ ] **S03 [OC03] [TI04,TI10] Two Admins edit the same Session at once and the second save is refused, not silently applied**
+- [x] **S03 [OC03] [TI04,TI10] Two Admins edit the same Session at once and the second save is refused, not silently applied**
   - **Given** Ida and Björn both open "Opening Keynote" (09:00–10:30) for editing, so both hold the same base `lastUpdatedAt`
   - **When** Ida saves the start time as 09:30 and Björn then saves the location as "Room C" against his now-stale base value
   - **Then** Björn's save is refused with a displayable message stating the Session changed since he opened it, nothing of Björn's edit is persisted, Ida's 09:30 stands, and Björn is shown the current version (start time 09:30) so he can re-apply "Room C" on top of it – a second save carrying the newer base value then succeeds and yields 09:30 in "Room C"
 
-- [ ] **S04 [OC03] [TI05,TI10] A lifecycle transition by one Admin wins over another Admin's in-flight edit**
+- [x] **S04 [OC03] [TI05,TI10] A lifecycle transition by one Admin wins over another Admin's in-flight edit**
   - **Given** Ida has "Opening Keynote" open for editing on the Conference "Autumn Offsite", which is published and past its end date
   - **When** Björn archives the Conference and Ida then saves her edit
   - **Then** Ida's save is refused with a message naming the Conference's new state, **archived**, rather than a generic version conflict, and nothing is persisted
   - **And** the same holds for the publish transition: an edit begun while the Conference was in draft and saved after another Admin published it is refused naming the **published** state
 
-- [ ] **S05 [OC04] [TI06,TI07,TI10] Shortening the date span is refused while Sessions fall outside the new span, naming them**
+- [x] **S05 [OC04] [TI06,TI07,TI10] Shortening the date span is refused while Sessions fall outside the new span, naming them**
   - **Given** the published Conference "Autumn Offsite" spans 2026-09-15 to 2026-09-17 and has "Retrospective" on 2026-09-17
   - **When** an Admin changes the span to 2026-09-15 – 2026-09-16
   - **Then** the change is refused, the span is unchanged, and the message names "Retrospective" on 2026-09-17 as the Session that would be orphaned
   - **And** after "Retrospective" is moved to 2026-09-16, the same span change succeeds and the Conference name may be changed in the same way
 
-- [ ] **S06 [OC04] [TI08] Moving a Session to a day outside the Conference date span is refused, naming the permitted days**
+- [x] **S06 [OC04] [TI08] Moving a Session to a day outside the Conference date span is refused, naming the permitted days**
   - **Given** the published Conference "Autumn Offsite" spans 2026-09-15 to 2026-09-16
   - **When** an Admin edits "Opening Keynote" to sit on 2026-09-18
   - **Then** the save is refused with the permitted days (2026-09-15 and 2026-09-16) named, nothing is persisted, and the refusal is produced by S04's existing day-containment validation rather than a second copy of it
 
-- [ ] **S07 [OC02] [TI02,TI03] A failed refresh leaves the last successful sync on screen rather than blanking the Schedule**
+- [x] **S07 [OC02] [TI02,TI03] A failed refresh leaves the last successful sync on screen rather than blanking the Schedule**
   - **Given** Björn has the Schedule open and it last synced successfully at 09:41
   - **When** the venue wifi drops and the next refresh attempt fails
   - **Then** the Schedule stays on screen exactly as it was at the last successful sync, its staleness indicator keeps counting up as elapsed age ("updated 4 minutes ago", then 5, …), no error replaces the content and no empty state is shown
   - **And** when connectivity returns the next attempt succeeds, any change made in the meantime appears without a manual reload, and the age resets to "just now"
 
-- [ ] **S08 [OC05,OC02] [TI02,TI03] An Attendee online throughout the change is told which Session changed and how – with no push involved**
+- [x] **S08 [OC05,OC02] [TI02,TI03] An Attendee online throughout the change is told which Session changed and how – with no push involved**
   - **Given** Björn has the Schedule for 2026-09-15 open and online, showing "Opening Keynote" 09:00–10:30 in "Room A" and "Retrospective" 15:00–16:00
   - **When** an Admin moves "Opening Keynote" to 09:30–11:00 in "Room B" and deletes "Retrospective", and Björn touches nothing
   - **Then** alongside the refreshed times Björn is shown an in-app change banner naming **"Opening Keynote"** with its time and location as what changed, and **"Retrospective"** as removed – the schedule never simply swaps beneath him unannounced
@@ -93,17 +93,17 @@
 
 > Each criterion is proved by a task Verify line, not a scenario.
 
-- [ ] Session field, range and day-containment validation has exactly one implementation – S04's – and the post-publish edit path calls it; no validation rule is restated or duplicated in this story's handlers.
-- [ ] The lifecycle-state check runs **before** the optimistic-concurrency check on every write path, so an archive or publish during an edit yields the state-named refusal and never a bare version conflict.
-- [ ] The watermark poll target is a single-row database read returning the Conference's watermark (`schedule_watermark_at`, on the wire as `lastUpdatedAt`) and lifecycle state only – it never returns the Schedule payload and holds no in-process state between requests or between replicas.
-- [ ] The attendee refresh replaces S06's schedule envelope in place and renders through S06's existing component tree – no second schedule payload shape, delta format, or parallel render path exists. The change banner is presentation over the diff of two envelopes, not a third payload.
-- [ ] Exactly one envelope-diff function exists – pure, taking a previous and a current S06 envelope and returning added, removed and changed Sessions with the names of the changed fields – exported for S10 to consume for its reconnect summary; no second "what changed" derivation is written here or left for S10 to write.
-- [ ] Wall-clock values survive the refresh path unchanged – no `Date` construction, `Date.parse`, `toLocaleTimeString` or `Intl.DateTimeFormat` is applied to a Session day or time anywhere in the poll/refresh code, and the diff compares them as strings.
-- [ ] The staleness indicator renders an **elapsed age**, never a clock time derived on the client: no timezone conversion of the watermark instant exists anywhere in the view, and if an absolute time is ever displayed it is a naive wall-clock string carried in the envelope beside `serverNow.time` (S06's contract).
-- [ ] The concurrency base sent with a Conference name/date-span edit is `conference.updated_at`; no code path uses `conference.schedule_watermark_at` (wire `conference.lastUpdatedAt`) as an edit precondition, and no code path uses `conference.updated_at` as the poll comparison.
-- [ ] Every refusal added here emits through S01's error envelope with a displayable message and a machine code distinct per reason (version conflict, lifecycle-state change, span would orphan Sessions).
-- [ ] Every endpoint added here obtains its caller through S02's context and its authorization through S03's single provisional per-conference helper; schema changes, if any, are plain PostgreSQL with a reversible migration.
-- [ ] The conflict-resolution UI, the staleness indicator, the change banner and the Conference detail edit form are legible without horizontal scroll at 375px, 768px and 1280px.
+- [x] Session field, range and day-containment validation has exactly one implementation – S04's – and the post-publish edit path calls it; no validation rule is restated or duplicated in this story's handlers.
+- [x] The lifecycle-state check runs **before** the optimistic-concurrency check on every write path, so an archive or publish during an edit yields the state-named refusal and never a bare version conflict.
+- [x] The watermark poll target is a single-row database read returning the Conference's watermark (`schedule_watermark_at`, on the wire as `lastUpdatedAt`) and lifecycle state only – it never returns the Schedule payload and holds no in-process state between requests or between replicas.
+- [x] The attendee refresh replaces S06's schedule envelope in place and renders through S06's existing component tree – no second schedule payload shape, delta format, or parallel render path exists. The change banner is presentation over the diff of two envelopes, not a third payload.
+- [x] Exactly one envelope-diff function exists – pure, taking a previous and a current S06 envelope and returning added, removed and changed Sessions with the names of the changed fields – exported for S10 to consume for its reconnect summary; no second "what changed" derivation is written here or left for S10 to write.
+- [x] Wall-clock values survive the refresh path unchanged – no `Date` construction, `Date.parse`, `toLocaleTimeString` or `Intl.DateTimeFormat` is applied to a Session day or time anywhere in the poll/refresh code, and the diff compares them as strings.
+- [x] The staleness indicator renders an **elapsed age**, never a clock time derived on the client: no timezone conversion of the watermark instant exists anywhere in the view, and if an absolute time is ever displayed it is a naive wall-clock string carried in the envelope beside `serverNow.time` (S06's contract).
+- [x] The concurrency base sent with a Conference name/date-span edit is `conference.updated_at`; no code path uses `conference.schedule_watermark_at` (wire `conference.lastUpdatedAt`) as an edit precondition, and no code path uses `conference.updated_at` as the poll comparison.
+- [x] Every refusal added here emits through S01's error envelope with a displayable message and a machine code distinct per reason (version conflict, lifecycle-state change, span would orphan Sessions).
+- [x] Every endpoint added here obtains its caller through S02's context and its authorization through S03's single provisional per-conference helper; schema changes, if any, are plain PostgreSQL with a reversible migration.
+- [x] The conflict-resolution UI, the staleness indicator, the change banner and the Conference detail edit form are legible without horizontal scroll at 375px, 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -169,50 +169,50 @@ adr    | docs/adrs/ADR-004-containerized-api-and-spa.md                         
 
 ### Implementation Tasks
 
-- [ ] **TI01** A watermark endpoint reports a Conference's current schedule version and lifecycle state
+- [x] **TI01** A watermark endpoint reports a Conference's current schedule version and lifecycle state
   - Single-row read returning the Conference watermark `schedule_watermark_at` – serialized as `lastUpdatedAt`, matching S06's envelope field – and lifecycle state, for a Conference the caller is a member of; caller via S02, authorization via S03's provisional helper; no Schedule payload, no in-process or cross-replica state. Route and error shape per S01, against the container API's plain HTTP framework (ADR-004).
   - **Verify**: `Test: the response body carries only the watermark and lifecycle state; a non-member is refused; the value advances after a Session update and after a Session delete with no other write`
 
-- [ ] **TI02** The attendee Schedule refreshes itself from the watermark without any user action
+- [x] **TI02** The attendee Schedule refreshes itself from the watermark without any user action
   - Polls TI01 on a cadence meeting the ~5s propagation row, refetches S06's envelope only when the watermark advanced, and hands the new envelope to S06's existing component tree at the view boundary – nothing inside that tree fetches, per S06's rendering contract. **Retains the outgoing envelope across the swap and passes it with the refreshed one to TI03's diff function**, which is the only reason both are in hand at once. Pauses while hidden/backgrounded and refreshes immediately on visibility or focus; at most one poll in flight, ticks skipped rather than queued. Consumes S06's envelope unchanged – see Constraints & Gotchas on wall-clock values.
   - **Verify**: `Test: with a Session edited server-side, an already-rendered Schedule shows the new values within the near-live window with no reload or navigation; the refreshed Sessions render through S06's schedule components from S06's envelope shape with no second payload shape or delta format; refreshed times read identically with the client timezone set to UTC-7 and UTC+9; an unchanged watermark triggers no schedule refetch; hiding the view stops polling and revealing it triggers an immediate refresh; the previous envelope is passed to the diff on every swap`
 
-- [ ] **TI03** The Schedule names what changed, states how recently it updated, and survives a failed refresh
+- [x] **TI03** The Schedule names what changed, states how recently it updated, and survives a failed refresh
   - **Envelope diff**: one pure exported function `diffSchedule(previousEnvelope, currentEnvelope)` returning Sessions added, Sessions removed, and Sessions changed with the names of the changed fields (day, start/end time, location, title, kind, description). Compares S04's wall-clock values as strings – no `Date` anywhere. Matching is by Session id, so a Session moved between Conference Days is one *changed* Session, not a remove plus an add. **This function is S10's reconnect summary source too** (see *Execution Contract*), so keep it pure, envelope-in/result-out, and free of view or connection assumptions.
   - **Change banner**: when the diff is non-empty after a refresh, the attendee view shows an in-app banner naming the affected Session(s) and what changed about each ("Opening Keynote moved to 09:30–11:00, now in Room B"; "Retrospective was removed"), dismissible, and not re-raised by a subsequent poll that changed nothing. This is the in-app channel, not push – no device token, notification record or server call is involved.
   - **Staleness indicator**: renders **elapsed age** since the envelope's watermark ("just now", "updated 4 minutes ago"), never a clock time derived on the client – see Constraints & Gotchas. A failed poll or refetch leaves the last successfully synced Schedule on screen with its age continuing to count up, replaces no content, and resumes on the next successful attempt. Depends on TI02.
   - **Verify**: `Test: a Session time+location edit, an added Session and a deleted Session each produce a banner naming that Session and the changed fields; a description-only edit is reported too; a Session moved to another day is reported as changed once, not as a removal plus an addition; the diff is a pure function of two envelopes with no network or clock input; dismissing the banner leaves the refreshed Schedule and an unchanged poll does not re-raise it; no push, device-token or notification-record code exists in the path`
   - **Verify**: `Test: the staleness indicator shows an elapsed age and no timezone conversion of the watermark occurs anywhere in the view – the rendered text is identical with the client timezone set to UTC-7 and UTC+9; with the poll endpoint failing, the previously rendered Sessions remain, the age keeps increasing and no empty or error state replaces them; on recovery the age resets`
 
-- [ ] **TI04** A Session write whose base `lastUpdatedAt` has moved is refused with the current version returned
+- [x] **TI04** A Session write whose base `lastUpdatedAt` has moved is refused with the current version returned
   - Session edit and delete carry the base `lastUpdatedAt` they were loaded with; a mismatch is refused through S01's envelope with a distinct machine code, a displayable "changed since you opened it" message, and the current Session representation in the payload. Nothing is persisted on refusal. Compare the exact serialized value (see Constraints & Gotchas).
   - **Verify**: `Test: two saves from the same base value – the first succeeds, the second is refused with the current version in the payload and the first Admin's change intact; re-saving with the returned base value succeeds; a missing base value is refused rather than treated as a force-write`
 
-- [ ] **TI05** A lifecycle transition during an in-flight edit refuses that edit with the new state named
+- [x] **TI05** A lifecycle transition during an in-flight edit refuses that edit with the new state named
   - One shared precondition step for both write paths, ordered authorization → lifecycle → base version. Calls S03's exported editability guard and state machine; the refusal message names the Conference's current state (archived or published) and carries its own machine code. Depends on TI04 for the ordering it sits ahead of.
   - **Verify**: `Test: an edit saved after another Admin archived the Conference is refused naming the archived state, not as a version conflict; the same after a publish names the published state; both leave the Session unchanged; the version-conflict, lifecycle-state and span-orphan refusals each carry S01's envelope with a displayable message and a machine code distinct from the other two`
 
-- [ ] **TI06** Conference name and date span are editable after publish under the same concurrency and lifecycle rules
+- [x] **TI06** Conference name and date span are editable after publish under the same concurrency and lifecycle rules
   - Extends S03 TI07's detail edit to published Conferences, reusing S03 TI03's name and 1–4 day span validation unchanged. **Concurrency base is `conference.updated_at`** – the value S03 TI06 already returns as `updatedAt` on the Conference read – never `conference.schedule_watermark_at`. S04 guarantees a Session write leaves `updated_at` untouched, so an unrelated schedule edit cannot cause a spurious conflict here; no additional version column is needed. Depends on TI05.
   - **Verify**: `Test: renaming and re-spanning a published Conference succeeds and advances both conference.updated_at and the schedule watermark; a stale updatedAt base value is refused; a 5-day span is still refused by S03's existing rule; a Session insert, update and delete between load and save each leave the pending Conference edit saveable – no spurious conflict`
 
-- [ ] **TI07** Shortening the date span is refused while Sessions fall outside the new span
+- [x] **TI07** Shortening the date span is refused while Sessions fall outside the new span
   - Refusal names the offending Sessions and their days so the recovery path ("move or delete the affected sessions first") is actionable; the span is unchanged. Widening the span is always permitted. Depends on TI06.
   - **Verify**: `Test: shortening a span past a Session's day is refused naming that Session and its day with the span unchanged; after the Session is moved inside, the same change succeeds; widening the span succeeds with Sessions untouched`
 
-- [ ] **TI08** A Session cannot be moved outside the Conference date span, through S04's existing validation
+- [x] **TI08** A Session cannot be moved outside the Conference date span, through S04's existing validation
   - The post-publish edit path routes day changes through S04 TI04's day-containment validator so the refusal names the permitted days; no second implementation of the rule exists.
   - **Verify**: `Test: editing a published Conference's Session onto a day outside the span is refused naming the permitted days; the codebase contains one day-containment rule implementation, not two`
 
-- [ ] **TI09** Change timestamps recorded by a post-publish write are readable by both consumers
+- [x] **TI09** Change timestamps recorded by a post-publish write are readable by both consumers
   - The write returns the affected row's new version (`session.last_updated_at` or `conference.updated_at`) plus the Conference's advanced watermark, and the watermark is carried on S06's envelope as `lastUpdatedAt` – so the Organizer's re-apply flow, the attendee's staleness age and S10's later cache cursor all read the same values. Depends on TI04, TI06.
   - **Verify**: `Test: the watermark returned by a successful edit equals the value TI01 subsequently serves and the value on the next S06 envelope, and is the instant TI03's elapsed age is measured from; the row version returned is accepted as the base value of an immediate follow-up edit`
 
-- [ ] **TI10** The Organizer's schedule view supports post-publish editing and resolves conflicts inline
+- [x] **TI10** The Organizer's schedule view supports post-publish editing and resolves conflicts inline
   - Add, edit and delete affordances available on a published Conference (S04's last-Session delete guard still applies); TI04's and TI05's refusals render inline as the server's displayable message; on a version conflict the current version is shown beside the Admin's unsaved input so the edit can be re-applied and saved against the newer base value. Depends on TI04–TI08.
   - **Verify**: `Test: a conflicting save shows the newer version and the Admin's typed values together and a re-apply save succeeds; an archived-during-edit save shows the state-named message rather than a generic error; a deletion of a published Conference's only Session is still refused`
 
-- [ ] **TI11** The surfaces changed here are responsive at the three target widths
+- [x] **TI11** The surfaces changed here are responsive at the three target widths
   - Conflict-resolution view, staleness indicator, change banner and Conference detail edit form, per the binding NFR row and `AGENTS.md` → Visual Validation Workflow. Depends on TI03, TI10.
   - **Verify**: `Screenshots at 375px, 768px and 1280px show the conflict view, staleness indicator, a multi-session change banner and the detail edit form with no horizontal scroll and legible controls at each width`
 
@@ -233,12 +233,53 @@ adr    | docs/adrs/ADR-004-containerized-api-and-spa.md                         
 
 ## Final Validation Checklist
 
-- [ ] No push-notification surface was introduced – no APNs/FCM integration, device-token storage, notification record, or per-session debounce scheduler exists in this story's output. Push fan-out is deferred with REQ-005 and the Pending push delivery service; an implementation that "helpfully" adds it is scope drift, not completeness. TI03's in-app change banner is the delivered channel and is client-local by construction: if satisfying it required anything server-side beyond the existing schedule read, the implementation went the wrong way.
-- [ ] No client-side timezone conversion was introduced on the watermark – the staleness surface renders an elapsed age, and grep of the poll/refresh/diff/banner code finds no `toLocaleString`, `Intl.DateTimeFormat` or `Date` constructed from a Session or watermark value.
+- [x] No push-notification surface was introduced – no APNs/FCM integration, device-token storage, notification record, or per-session debounce scheduler exists in this story's output. Push fan-out is deferred with REQ-005 and the Pending push delivery service; an implementation that "helpfully" adds it is scope drift, not completeness. TI03's in-app change banner is the delivered channel and is client-local by construction: if satisfying it required anything server-side beyond the existing schedule read, the implementation went the wrong way.
+- [x] No client-side timezone conversion was introduced on the watermark – the staleness surface renders an elapsed age, and grep of the poll/refresh/diff/banner code finds no `toLocaleString`, `Intl.DateTimeFormat` or `Date` constructed from a Session or watermark value.
 
 
 ## Implementation Observations
 
 > _Managed by exec-spec post-implementation – append-only. Spec authors: leave this section empty._
 
-_No observations recorded yet._
+### Run: 2026-08-18 – exec-spec S09
+
+#### DESIGN NOTES (contract extensions this story made)
+
+- **The write base carries the Conference's lifecycle state as well as the row version.** The FIS's
+  Technical Overview names only `session.last_updated_at` and `conference.updated_at` as the inbound
+  base. Acceptance Scenario S04's publish half – "an edit begun while the Conference was in draft and
+  saved after another Admin published it is refused naming the **published** state" – is not
+  detectable from either: publishing is a Conference write and leaves every Session row untouched, so
+  a Session edit's row version is unchanged by it. Remembering per-editor state server-side is
+  forbidden (stateless handlers, ADR-004), so the state the editor *saw* has to arrive with the
+  write. `base` is therefore `{ conferenceState, version }` on both write paths. No Expected Outcome
+  or scenario mechanism changed; this is how S04's stated refusal is reachable at all.
+- **`base` is asserted in the handler, not in the route JSON schema.** Fastify validates before the
+  handler runs, so a schema-level `required` answered 400 to unauthenticated and unauthorized callers
+  who must be answered 401 and 403 – it also placed the base check ahead of authorization, inverting
+  TI05's fixed order. Caught by S04's own "reject an unauthenticated request before any handler logic
+  runs" test.
+- **`conference.updated_at` now serializes in SQL at microsecond precision** (`instantExpression`),
+  matching `session.last_updated_at`. It previously round-tripped through the driver's `Date` and
+  `.toISOString()`, i.e. milliseconds. As the concurrency base for TI06 that truncation is the exact
+  trap the FIS's *Constraints & Gotchas* warns about: it collapses two distinct versions into one and
+  reinstates last-write-wins for the two saves most likely to land in the same millisecond – the
+  concurrent ones.
+- **A Conference detail edit form was added** (`ConferenceDetail` + a reusable `ConferenceForm`).
+  None existed: S03 shipped the PATCH endpoint with no UI, and TI11 names "the Conference detail edit
+  form" as a surface to validate responsively, so OC04 was otherwise unreachable by an Organizer.
+- **S04's "a session outside the shortened span is still listed" test was re-premised.** It shortened
+  the span through the API, which TI07 now refuses by design – S04's own comment said "permitted
+  today; S09 owns refusing it". The span is now shortened by writing the column directly; the
+  Organizer view's tolerance of such rows is still asserted, because the rows remain reachable and a
+  view that dropped them would strand them permanently.
+
+#### NOTICED BUT NOT TOUCHING
+
+- `docs/specs/conference-setup-and-schedule/plan.json` – S03 is recorded as `spec-ready` while S04–S08
+  are `done`. S03's code is plainly built and depended on throughout (the lifecycle guards, the
+  authorization seam, `conference.updated_at`), so this reads as a missed status write rather than
+  missing work. Not corrected here: it is another story's status.
+- Pre-existing Prettier drift in three files this story never touched –
+  `api/test/join-code.test.ts`, `visual/conferences.spec.ts`, `web/src/components/JoinCodePanel.tsx`.
+  Left alone deliberately: formatting them would bundle unrelated churn into this story's diff.

@@ -5,8 +5,14 @@ import type { Clock } from '../conferences/calendar-date.ts';
 import type { ConferenceAuthorization } from '../conferences/authorization.ts';
 import type { Conference, ConferenceRepository } from '../conferences/conference-repository.ts';
 import type { ScheduleGate } from '../conferences/schedule-gate.ts';
-import { validateConferenceDetails } from '../conferences/conference-validation.ts';
-import { assertArchivable, assertEditable, assertPublishable } from '../conferences/lifecycle.ts';
+import type { SessionRepository } from '../sessions/session-repository.ts';
+import { conferenceDays } from '../sessions/session-validation.ts';
+import {
+  validateConferenceDetails,
+  type ConferenceDetails,
+} from '../conferences/conference-validation.ts';
+import { assertArchivable, assertPublishable } from '../conferences/lifecycle.ts';
+import { assertWritePreconditions, requireWriteBase } from '../conferences/write-preconditions.ts';
 
 /**
  * The Conference endpoints.
@@ -16,7 +22,9 @@ import { assertArchivable, assertEditable, assertPublishable } from '../conferen
  *   1. `withAuth` resolves the caller – an unauthenticated or wrong-domain request never reaches
  *      any of this (S02);
  *   2. `requireConferenceRole` asserts the caller's role for the named Conference – the single
- *      provisional helper, never an inline comparison, so S07 replaces one implementation;
+ *      canonical check, never an inline comparison. Every endpoint here declares `Admin`: changing
+ *      a Conference's details, publishing it and archiving it are conference-wide acts, and S07
+ *      replaced that helper's body without touching one of these call sites;
  *   3. the lifecycle module decides whether the change is legal in the Conference's current
  *      state, read fresh from the database on this request.
  *
@@ -28,6 +36,8 @@ import { assertArchivable, assertEditable, assertPublishable } from '../conferen
 export interface ConferenceRouteDependencies {
   withAuth: WithAuth;
   repository: ConferenceRepository;
+  /** Read-only here: a date-span change must know which Sessions it would strand (S09 TI07). */
+  sessions: SessionRepository;
   authorization: ConferenceAuthorization;
   scheduleGate: ScheduleGate;
   clock: Clock;
@@ -42,6 +52,32 @@ const detailsBodySchema = {
     name: { type: 'string' },
     startDate: { type: 'string' },
     endDate: { type: 'string' },
+  },
+} as const;
+
+/**
+ * The same body, plus the base the edit was composed against (S09 TI06).
+ *
+ * `base` is pinned in shape but not listed in `required`: Fastify validates before the handler
+ * runs, so requiring it here would answer 400 to an unauthenticated or unauthorized caller who
+ * must be answered 401 or 403. Its presence is asserted in the handler, after authorization –
+ * which is also the order TI05 fixes for the three checks.
+ */
+const detailsEditBodySchema = {
+  type: 'object',
+  required: ['name', 'startDate', 'endDate'],
+  additionalProperties: false,
+  properties: {
+    ...detailsBodySchema.properties,
+    base: {
+      type: 'object',
+      required: ['conferenceState', 'version'],
+      additionalProperties: false,
+      properties: {
+        conferenceState: { type: 'string' },
+        version: { type: 'string' },
+      },
+    },
   },
 } as const;
 
@@ -80,9 +116,53 @@ function toWire(conference: Conference): Record<string, unknown> {
   };
 }
 
+/** The Sessions a proposed date span would leave with no Conference Day to sit on. */
+function outsideSpan(
+  span: Pick<ConferenceDetails, 'startDate' | 'endDate'>,
+  schedule: readonly { title: string; day: string }[],
+): { title: string; day: string }[] {
+  const days = new Set<string>(conferenceDays(span));
+  return schedule.filter((session) => !days.has(session.day));
+}
+
+/**
+ * Refuses a date-span change that would strand Sessions, naming them and their days.
+ *
+ * Named rather than counted, because the recovery path is "go and move these" and a count would
+ * leave the Organizer opening every day of the schedule to find which. The span is unchanged: the
+ * refusal is raised before the write, so nothing is half-applied.
+ */
+function spanWouldOrphan(stranded: readonly { title: string; day: string }[]): AppError {
+  const named = stranded.map((session) => `"${session.title}" on ${session.day}`).join(', ');
+
+  return new AppError(
+    ERROR_CODES.CONFERENCE_SPAN_ORPHANS_SESSIONS,
+    409,
+    `These dates would leave ${stranded.length === 1 ? 'a session' : 'sessions'} outside the ` +
+      `conference: ${named}. Move or delete ${stranded.length === 1 ? 'it' : 'them'} first, ` +
+      'then change the dates.',
+    /*
+     * Both dates, like every other span refusal (conference-validation.ts): the span is a property
+     * of the pair, and blaming one of them would send the organizer to correct the wrong input.
+     * The message is the same sentence, so the form shows it inline beside the date inputs.
+     */
+    ['startDate', 'endDate'].map((field) => ({
+      field,
+      message: `These dates would leave ${named} outside the conference. Move or delete them first.`,
+    })),
+  );
+}
+
 export function registerConferenceRoutes(
   app: FastifyInstance,
-  { withAuth, repository, authorization, scheduleGate, clock }: ConferenceRouteDependencies,
+  {
+    withAuth,
+    repository,
+    sessions,
+    authorization,
+    scheduleGate,
+    clock,
+  }: ConferenceRouteDependencies,
 ): void {
   /**
    * Loads a Conference the caller has already been authorized for.
@@ -154,13 +234,59 @@ export function registerConferenceRoutes(
    * sequencing consequence, recorded in the FIS, not something to half-implement here.
    */
   app.patch('/api/conferences/:conferenceId', {
-    schema: { params: conferenceParamsSchema, body: detailsBodySchema },
+    schema: { params: conferenceParamsSchema, body: detailsEditBodySchema },
     handler: withAuth(async (request, caller) => {
+      // Step one of three: authorization. `assertEditable` is deliberately *not* called here – the
+      // precondition step below runs it after the state-change check, so an Admin whose conference
+      // was archived under them reads that fact rather than the standing archived rule.
       const conference = await loadAuthorized(request, caller);
-      assertEditable(conference);
+
+      const base = requireWriteBase((request.body as { base?: unknown }).base);
+
+      /*
+       * Steps two and three. The base version is `conference.updated_at` – the Conference row's own
+       * version, which S03 TI06 already returns as `updatedAt` – and never the schedule watermark.
+       * The watermark advances on every Session insert, update and delete, so using it here would
+       * refuse a rename because somebody moved a session in another room: a conflict with nothing.
+       */
+      try {
+        assertWritePreconditions({
+          conference,
+          base,
+          currentVersion: conference.updatedAt,
+          subject: 'conference',
+        });
+      } catch (error) {
+        if (error instanceof AppError && error.code === ERROR_CODES.EDIT_VERSION_CONFLICT) {
+          throw error.withCurrent(toWire(conference));
+        }
+        throw error;
+      }
 
       const details = validateConferenceDetails(request.body as DetailsBody);
-      return toWire(await repository.updateDetails(conference.id, details));
+
+      /*
+       * A span may be widened freely; shortening it past a Session is refused rather than silently
+       * stranding one. The check runs against the *proposed* span, so widening simply finds nothing
+       * outside it and needs no separate branch.
+       */
+      const stranded = outsideSpan(details, await sessions.listForConference(conference.id));
+      if (stranded.length > 0) throw spanWouldOrphan(stranded);
+
+      const saved = await repository.updateDetails(conference.id, details);
+
+      /*
+       * Both timestamps, under the two names they are deliberately kept apart by (S09 TI09).
+       * `updatedAt` is this row's new version, which the form keeps as the base of an immediate
+       * follow-up edit. `lastUpdatedAt` is the schedule watermark, advanced because a name or date
+       * change is a schedule change – the same value the poll endpoint now serves and the next
+       * attendee envelope carries, so the Admin's own client can tell its poll apart from somebody
+       * else's change.
+       */
+      return {
+        ...toWire(saved),
+        lastUpdatedAt: await sessions.scheduleWatermark(conference.id),
+      };
     }),
   });
 

@@ -2,7 +2,11 @@ import { useState } from 'react';
 import type { ApiError, ConferenceDetailsInput } from '../api/client.ts';
 
 /**
- * The create form.
+ * The conference details form – used to create one, and from S09 to edit one after publish.
+ *
+ * One form for both, because the fields and every rule behind them are identical: S03's name and
+ * 1-4 day span validation is what refuses either, and a second form would be a second place for
+ * that refusal to be rendered slightly differently.
  *
  * Its whole job on the refusal path is to put the server's own message next to the field the
  * server named. FR1 asks for the permitted range stated inline; the API already produces that
@@ -19,12 +23,30 @@ export interface ConferenceFormProps {
   busy: boolean;
   /** The refusal from the last attempt, if it was refused. */
   error: ApiError | null;
+  /**
+   * What the fields start as. Absent when creating; the conference's current values when editing.
+   *
+   * Kept in this component's state from the first render on, so a refused save leaves the
+   * organizer's typed values exactly where they were rather than resetting them to the server's -
+   * which is what makes re-applying an edit onto a newer version possible (S09 TI10).
+   */
+  initial?: ConferenceDetailsInput;
+  /** The label on the submit control. "Create conference" unless an edit says otherwise. */
+  submitLabel?: string;
+  onCancel?: () => void;
 }
 
 const EMPTY: ConferenceDetailsInput = { name: '', startDate: '', endDate: '' };
 
-export function ConferenceForm({ onSubmit, busy, error }: ConferenceFormProps): React.JSX.Element {
-  const [details, setDetails] = useState<ConferenceDetailsInput>(EMPTY);
+export function ConferenceForm({
+  onSubmit,
+  busy,
+  error,
+  initial,
+  submitLabel,
+  onCancel,
+}: ConferenceFormProps): React.JSX.Element {
+  const [details, setDetails] = useState<ConferenceDetailsInput>(initial ?? EMPTY);
 
   const fieldError = (field: keyof ConferenceDetailsInput): string | undefined =>
     error?.messageFor(field);
@@ -119,8 +141,19 @@ export function ConferenceForm({ onSubmit, busy, error }: ConferenceFormProps): 
 
       <p className="panel__actions">
         <button className="button button--primary" type="submit" disabled={busy}>
-          {busy ? 'Creating…' : 'Create conference'}
+          {busy ? 'Saving…' : (submitLabel ?? 'Create conference')}
         </button>
+        {onCancel !== undefined ? (
+          <button
+            className="button"
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            data-testid="conference-form-cancel"
+          >
+            Cancel
+          </button>
+        ) : null}
       </p>
     </form>
   );

@@ -67,6 +67,9 @@ const RETRO = session({
   location: 'Room B',
 });
 
+/** The schedule watermark the fixture envelope carries – S09 polls for exactly this value. */
+const WATERMARK = '2026-09-15T07:00:00.123456Z';
+
 function schedule(overrides: Partial<AttendeeSchedule> = {}): AttendeeSchedule {
   return {
     conference: {
@@ -75,7 +78,7 @@ function schedule(overrides: Partial<AttendeeSchedule> = {}): AttendeeSchedule {
       startDate: '2026-09-14',
       endDate: '2026-09-16',
       state: 'published',
-      lastUpdatedAt: '2026-09-15T07:00:00.123456Z',
+      lastUpdatedAt: WATERMARK,
     },
     days: [
       { date: '2026-09-14', dayNumber: 1, sessions: [] },
@@ -396,22 +399,31 @@ describe('the running-Session highlight', () => {
   });
 
   /**
-   * The other half of TI08: the timer re-evaluates and does **not** re-fetch. Keeping the schedule's
-   * *content* fresh is S09's job, and a refresh added here would duplicate it – so the absence of a
-   * third request is asserted rather than assumed.
+   * The other half of TI08: the minute timer re-evaluates and does **not** re-fetch the schedule.
+   *
+   * S09 has since added a watermark poll at this same boundary, so "no request at all" is no longer
+   * the assertion – what must stay true is that the *highlight* needs no data to move. The schedule
+   * payload is therefore counted specifically, and an unchanged watermark must not provoke one.
    */
-  it('re-evaluates on the minute timer without issuing another request', async () => {
+  it('re-evaluates on the minute timer without refetching the schedule', async () => {
     skewedDeviceClock();
     const fetchMock = routeFetch({
       '/me/conferences': { status: 200, body: ONE_CONFERENCE },
       [`/conferences/${KICKOFF}/schedule`]: { status: 200, body: schedule() },
+      [`/conferences/${KICKOFF}/schedule/watermark`]: {
+        status: 200,
+        body: { lastUpdatedAt: WATERMARK, state: 'published' },
+      },
     });
     vi.stubGlobal('fetch', fetchMock);
     render(<AttendeeSchedulePanel />);
 
     await vi.waitFor(() => expect(screen.queryByTestId('attendee-session-list')).not.toBeNull());
+
     const calls = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    expect(calls).toHaveLength(2);
+    const scheduleReads = (): number =>
+      calls.filter((call) => String(call[0]).endsWith('/schedule')).length;
+    expect(scheduleReads()).toBe(1);
 
     // Past the keynote's end, so the highlight genuinely has to change.
     vi.setSystemTime(new Date(SYNC_INSTANT_MILLIS + THREE_HOURS + 60 * 60_000));
@@ -421,8 +433,9 @@ describe('the running-Session highlight', () => {
       expect(screen.getByTestId('attendee-session-keynote').dataset.running).toBe('false'),
     );
     expect(screen.getByTestId('attendee-session-design').dataset.running).toBe('true');
-    // The highlight moved, and nothing was fetched to make it move.
-    expect(calls).toHaveLength(2);
+    // The highlight moved, and no schedule payload was fetched to make it move - the watermark
+    // never advanced, so the poll stopped at its two scalars every time.
+    expect(scheduleReads()).toBe(1);
   });
 
   it('highlights every Session of a Parallel Track that is running, not just the first', async () => {

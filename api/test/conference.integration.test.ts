@@ -135,6 +135,24 @@ describe.skipIf(!reachable)('conference lifecycle against a real PostgreSQL', ()
     return { authorization: `Bearer ${tokenFor(sub)}` };
   }
 
+  /**
+   * The base a Conference edit carries (S09 TI06): the row's own version and its lifecycle state,
+   * read the way a client reads them – from the Conference endpoint itself.
+   */
+  async function conferenceBase(
+    app: FastifyInstance,
+    conferenceId: string,
+    sub: string,
+  ): Promise<{ conferenceState: string; version: string }> {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/conferences/${conferenceId}`,
+      headers: as(sub),
+    });
+    const body = response.json();
+    return { conferenceState: body.lifecycleState, version: body.updatedAt };
+  }
+
   async function createConference(
     app: FastifyInstance,
     sub = IDA,
@@ -335,7 +353,11 @@ describe.skipIf(!reachable)('conference lifecycle against a real PostgreSQL', ()
         method: 'PATCH',
         url: `/api/conferences/${created.id}`,
         headers: as(IDA),
-        payload: { ...DETAILS, name: 'Autumn Kickoff 2026 – revised' },
+        payload: {
+          ...DETAILS,
+          name: 'Autumn Kickoff 2026 – revised',
+          base: await conferenceBase(app, created.id!, IDA),
+        },
       });
 
       expect(renamed.statusCode, renamed.body).toBe(200);
@@ -597,11 +619,17 @@ describe.skipIf(!reachable)('conference lifecycle against a real PostgreSQL', ()
       expect(read.statusCode).toBe(200);
       expect(read.json().lifecycleState).toBe('archived');
 
+      // A current base, so what refuses the rename is the archived guard rather than a stale
+      // version: an archived conference is closed to edits even to a caller whose view is fresh.
       const rename = await app.inject({
         method: 'PATCH',
         url: `/api/conferences/${created.id}`,
         headers: as(IDA),
-        payload: { ...DETAILS, name: 'Renamed after the fact' },
+        payload: {
+          ...DETAILS,
+          name: 'Renamed after the fact',
+          base: await conferenceBase(app, created.id!, IDA),
+        },
       });
 
       expect(rename.statusCode).toBe(409);

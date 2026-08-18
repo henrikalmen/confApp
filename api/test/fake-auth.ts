@@ -28,6 +28,16 @@ export function inMemoryUsers(): InMemoryUsers {
     get upsertCount() {
       return upsertCount;
     },
+    /**
+     * Mirrors the SQL: case-insensitive, and a *list*, because there is no unique index on email.
+     * Returning an array rather than a single row is what lets a test drive the reissued-address
+     * case the grant path has to refuse.
+     */
+    async findByEmail(email: string): Promise<AppUser[]> {
+      const wanted = email.trim().toLowerCase();
+      return [...rows.values()].filter((user) => user.email.toLowerCase() === wanted);
+    },
+
     async upsertFromClaims(claims: VerifiedClaims): Promise<AppUser> {
       upsertCount += 1;
       const existing = rows.get(claims.sub);

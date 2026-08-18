@@ -23,9 +23,10 @@ import { assertJoinable } from '../conferences/lifecycle.ts';
  *   5. a refusal records a failed attempt; a success records nothing, so a legitimate employee's
  *      allowance is never consumed by joining.
  *
- * The two Organizer endpoints go through the provisional per-conference authorization helper exactly
- * as the Conference and Session routes do (`plan.json` → sharedDecisions), never an inline role
- * comparison, so S07 replaces one call-site pattern.
+ * The two Organizer endpoints go through the canonical per-conference authorization check exactly as
+ * the Conference and Session routes do (`plan.json` → sharedDecisions), never an inline role
+ * comparison. Both declare `Admin`: a Join Code is the Organizer's to see and to replace, and S07
+ * implemented that check without touching either call site.
  *
  * Nothing is remembered between requests – no attempt counters, no resolved codes, no caller cache.
  * The API runs as several container replicas with no request affinity (ADR-004).

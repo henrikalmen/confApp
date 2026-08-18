@@ -61,7 +61,11 @@ describe('joinability still has exactly one definition', () => {
    * local check – so the reason function belongs to the same module and to no other.
    */
   it('defines the predicate and its reason only in the lifecycle module', () => {
-    for (const pattern of [/function isJoinable\b/, /function joinRefusalReason\b/, /function assertJoinable\b/]) {
+    for (const pattern of [
+      /function isJoinable\b/,
+      /function joinRefusalReason\b/,
+      /function assertJoinable\b/,
+    ]) {
       const definitions = apiSources().filter((path) =>
         pattern.test(withoutComments(readFileSync(path, 'utf8'))),
       );
@@ -185,7 +189,8 @@ describe('the migration (TI01, TI06, TI11)', () => {
    * holding the old slide would land somewhere else entirely (FR3 → Validation).
    */
   it('makes the join code unique across every row, with no predicate', () => {
-    const index = /create unique index conference_join_code_unique on conference \(join_code\)\s*;/i;
+    const index =
+      /create unique index conference_join_code_unique on conference \(join_code\)\s*;/i;
     expect(sql).toMatch(index);
 
     const statement = index.exec(sql)?.[0] ?? '';
@@ -277,15 +282,26 @@ describe('the join-code routes are authenticated and registered', () => {
     }
   });
 
-  /** Leaving and Admin removal are S08's; this story only ever creates a Membership. */
-  it('adds no endpoint that revokes a membership', async () => {
-    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
-    try {
-      const urls = app.confappRoutes.map((route) => `${route.method} ${route.url}`);
-      expect(urls.some((url) => url.startsWith('DELETE') && url.includes('member'))).toBe(false);
-      expect(urls).not.toContain('POST /api/leave');
-    } finally {
-      await app.close();
-    }
+  /**
+   * This story only ever *creates* a Membership. Ending one is somebody else's.
+   *
+   * The assertion has been narrowed twice, each time because a later story legitimately added a
+   * route the previous, coarser proxy would have reported. It began as "no DELETE route mentions a
+   * member", which held while S05 was the newest story; S07 then added role revocation at
+   * `DELETE …/members/:userSub/roles/:role`, and S08 the two endpoints that genuinely do end a
+   * Membership. A route-table proxy can no longer say anything useful, because the routes it was
+   * watching for now exist and are correct.
+   *
+   * What it was protecting is unchanged and is now stated where it belongs – about **this story's
+   * own module**. The join path writes a Membership row and there is no statement anywhere in it
+   * that deletes one, so regenerating a code, or a refused join, can never clear the room.
+   */
+  it('never deletes a membership from any join-code path', () => {
+    const source = withoutComments(read(apiSrc, 'routes', 'join-code.ts'));
+
+    expect(source).not.toMatch(/delete from membership/i);
+    expect(source).not.toMatch(/app\.delete\(/);
+    // Its only write to the table is the join itself, and that is the repository's insert.
+    expect(source).toMatch(/joinAsAttendee/);
   });
 });

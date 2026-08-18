@@ -181,6 +181,60 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
     return response.json();
   }
 
+  /**
+   * The base an S09 write carries: the row version the editor loaded, and the Conference's
+   * lifecycle state at that moment.
+   *
+   * Read from the database here rather than threaded through every call site, because these
+   * scenarios are about S04's composition rules – the concurrency contract those two values exist
+   * for has its own suite, where the *stale* base is the point.
+   */
+  /**
+   * The base a Conference edit carries (S09 TI06): the row's own version and its lifecycle state,
+   * read the way a client reads them – from the Conference endpoint itself.
+   */
+  async function conferenceBase(
+    app: FastifyInstance,
+    conferenceId: string,
+    sub: string,
+  ): Promise<{ conferenceState: string; version: string }> {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/conferences/${conferenceId}`,
+      headers: as(sub),
+    });
+    const body = response.json();
+    return { conferenceState: body.lifecycleState, version: body.updatedAt };
+  }
+
+  async function baseFor(sessionId: string): Promise<{ conferenceState: string; version: string }> {
+    const rows = await client.query(
+      `select to_char(s.last_updated_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as version,
+              c.lifecycle_state as state
+         from sessions s join conference c on c.id = s.conference_id
+        where s.id = $1`,
+      [sessionId],
+    );
+    return { conferenceState: rows.rows[0].state, version: rows.rows[0].version };
+  }
+
+  /** A DELETE carrying the current base, for the scenarios whose subject is not concurrency. */
+  async function deleteSession(
+    app: FastifyInstance,
+    conferenceId: string,
+    sessionId: string,
+    sub = IDA,
+  ) {
+    const base = await baseFor(sessionId);
+    return app.inject({
+      method: 'DELETE',
+      url:
+        `/api/conferences/${conferenceId}/sessions/${sessionId}` +
+        `?conferenceState=${base.conferenceState}&version=${encodeURIComponent(base.version)}`,
+      headers: as(sub),
+    });
+  }
+
   async function organizerSchedule(
     app: FastifyInstance,
     conferenceId: string,
@@ -249,9 +303,14 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
 
   /**
    * Discovered Requirement (see the FIS's Implementation Observations): a Session can end up
-   * outside the Conference's current span, because S03 lets the dates be shortened past it and
-   * leaves refusing that to S09. It still exists and still counts, so hiding it from the Organizer
-   * would remove the only surface that could move or delete it.
+   * outside the Conference's current span. It still exists and still counts, so hiding it from the
+   * Organizer would remove the only surface that could move or delete it.
+   *
+   * **The way in has since closed.** S03 left the dates shortenable past a Session and handed
+   * refusing it to S09, which now does (S09 TI07) – so the span is shortened here by writing the
+   * column directly rather than through the endpoint, which would be refused. The Organizer view's
+   * tolerance of the state is what this asserts, and it stays worth asserting: the rows can still
+   * be reached this way, and a view that dropped them would strand them permanently.
    */
   it('still lists a session whose day falls outside the shortened conference span', async () => {
     const app = appWith();
@@ -262,14 +321,9 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
     });
     await addSession(app, conference.id!, { ...KEYNOTE, day: '2026-09-18' });
 
-    // The span is shortened past the session – permitted today; S09 owns refusing it.
-    const shortened = await app.inject({
-      method: 'PATCH',
-      url: `/api/conferences/${conference.id}`,
-      headers: as(IDA),
-      payload: { name: 'Autumn Offsite', startDate: '2026-09-15', endDate: '2026-09-16' },
-    });
-    expect(shortened.statusCode, shortened.body).toBe(200);
+    await client.query("update conference set end_date = '2026-09-16' where id = $1", [
+      conference.id,
+    ]);
 
     const schedule = await organizerSchedule(app, conference.id!);
     const days = schedule.days as unknown as { day: string; sessions: { title: string }[] }[];
@@ -301,7 +355,13 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
       method: 'PATCH',
       url: `/api/conferences/${conference.id}/sessions/${retroId}`,
       headers: as(IDA),
-      payload: { ...RETROSPECTIVE, day: '2026-09-15', startTime: '08:00', endTime: '09:00' },
+      payload: {
+        ...RETROSPECTIVE,
+        day: '2026-09-15',
+        startTime: '08:00',
+        endTime: '09:00',
+        base: await baseFor(retroId),
+      },
     });
     expect(moved.statusCode, moved.body).toBe(200);
 
@@ -337,11 +397,7 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
       const app = appWith();
       const { conferenceId, sessionId } = await publishedWithKeynote(app);
 
-      const refused = await app.inject({
-        method: 'DELETE',
-        url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
-        headers: as(IDA),
-      });
+      const refused = await deleteSession(app, conferenceId, sessionId);
 
       expect(refused.statusCode).toBe(409);
       expect(refused.json().error.code).toBe('SESSION_LAST_IN_PUBLISHED_CONFERENCE');
@@ -353,11 +409,7 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
 
       await addSession(app, conferenceId, RETROSPECTIVE);
 
-      const accepted = await app.inject({
-        method: 'DELETE',
-        url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
-        headers: as(IDA),
-      });
+      const accepted = await deleteSession(app, conferenceId, sessionId);
       expect(accepted.statusCode, accepted.body).toBe(200);
 
       const remaining = await client.query('select title from sessions');
@@ -371,11 +423,7 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
       const created = await addSession(app, conference.id!, KEYNOTE);
       const sessionId = (created.session as unknown as { id: string }).id;
 
-      const response = await app.inject({
-        method: 'DELETE',
-        url: `/api/conferences/${conference.id}/sessions/${sessionId}`,
-        headers: as(IDA),
-      });
+      const response = await deleteSession(app, conference.id!, sessionId);
 
       expect(response.statusCode, response.body).toBe(200);
       const rows = await client.query('select count(*)::int as count from sessions');
@@ -394,11 +442,7 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         conferenceId,
       ]);
       for (const row of sessions.rows) {
-        await app.inject({
-          method: 'DELETE',
-          url: `/api/conferences/${conferenceId}/sessions/${row.id}`,
-          headers: as(IDA),
-        });
+        await deleteSession(app, conferenceId, row.id);
       }
 
       const remaining = await client.query(
@@ -650,18 +694,18 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         method: 'PATCH',
         url: `/api/conferences/${conference.id}/sessions/${sessionId}`,
         headers: as(IDA),
-        payload: { ...KEYNOTE, title: 'Opening Keynote, revised' },
+        payload: {
+          ...KEYNOTE,
+          title: 'Opening Keynote, revised',
+          base: await baseFor(sessionId),
+        },
       });
       const afterUpdate = await stamps(conference.id!);
       expect(afterUpdate.watermark > afterInsert.watermark).toBe(true);
 
       // The delete is the one that gets forgotten, and the one S10's offline diff needs most:
       // without it a removed Session lingers in a cache forever.
-      await app.inject({
-        method: 'DELETE',
-        url: `/api/conferences/${conference.id}/sessions/${sessionId}`,
-        headers: as(IDA),
-      });
+      await deleteSession(app, conference.id!, sessionId);
       const afterDelete = await stamps(conference.id!);
       expect(afterDelete.watermark > afterUpdate.watermark).toBe(true);
     });
@@ -704,7 +748,11 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         method: 'PATCH',
         url: `/api/conferences/${conference.id}`,
         headers: as(IDA),
-        payload: { ...AUTUMN, name: 'Autumn Offsite – revised' },
+        payload: {
+          ...AUTUMN,
+          name: 'Autumn Offsite – revised',
+          base: await conferenceBase(app, conference.id!, IDA),
+        },
       });
       expect(renamed.statusCode, renamed.body).toBe(200);
 
@@ -824,6 +872,13 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         expect(response.statusCode, action).toBe(200);
       }
 
+      /*
+       * Each write carries a *current* base, so what refuses it is the archived guard and not a
+       * stale-version or missing-base check. The point of this scenario is that an archived
+       * conference is closed to writes even when the caller's view of it is perfectly fresh.
+       */
+      const base = await baseFor(sessionId);
+
       for (const request of [
         {
           method: 'POST' as const,
@@ -833,11 +888,13 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         {
           method: 'PATCH' as const,
           url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
-          payload: KEYNOTE,
+          payload: { ...KEYNOTE, base },
         },
         {
           method: 'DELETE' as const,
-          url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
+          url:
+            `/api/conferences/${conferenceId}/sessions/${sessionId}` +
+            `?conferenceState=${base.conferenceState}&version=${encodeURIComponent(base.version)}`,
         },
       ]) {
         const response = await app.inject({ ...request, headers: as(IDA) });
@@ -867,9 +924,12 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
       });
       expect(published.statusCode, published.body).toBe(200);
 
+      // A base is carried so the refusal is about the session id, not about a missing base.
       const response = await app.inject({
         method: 'DELETE',
-        url: `/api/conferences/${conference.id}/sessions/00000000-0000-4000-8000-000000000000`,
+        url:
+          `/api/conferences/${conference.id}/sessions/00000000-0000-4000-8000-000000000000` +
+          '?conferenceState=published&version=2026-09-15T09:00:00.000000Z',
         headers: as(IDA),
       });
 
@@ -886,7 +946,7 @@ describe.skipIf(!reachable)('schedule composition against a real PostgreSQL', ()
         method: 'PATCH',
         url: `/api/conferences/${other.id}/sessions/${sessionId}`,
         headers: as(IDA),
-        payload: KEYNOTE,
+        payload: { ...KEYNOTE, base: await baseFor(sessionId) },
       });
 
       expect(response.statusCode).toBe(404);
