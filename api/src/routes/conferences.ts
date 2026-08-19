@@ -12,7 +12,11 @@ import {
   type ConferenceDetails,
 } from '../conferences/conference-validation.ts';
 import { assertArchivable, assertPublishable } from '../conferences/lifecycle.ts';
-import { assertWritePreconditions, requireWriteBase } from '../conferences/write-preconditions.ts';
+import {
+  assertLifecyclePreconditions,
+  requireWriteBase,
+  versionConflict,
+} from '../conferences/write-preconditions.ts';
 
 /**
  * The Conference endpoints.
@@ -241,23 +245,20 @@ export function registerConferenceRoutes(
       // was archived under them reads that fact rather than the standing archived rule.
       const conference = await loadAuthorized(request, caller);
 
-      const base = requireWriteBase((request.body as { base?: unknown }).base);
+      const base = requireWriteBase((request.body as { base?: unknown }).base, 'conference');
 
       /*
-       * Steps two and three. The base version is `conference.updated_at` – the Conference row's own
-       * version, which S03 TI06 already returns as `updatedAt` – and never the schedule watermark.
-       * The watermark advances on every Session insert, update and delete, so using it here would
-       * refuse a rename because somebody moved a session in another room: a conflict with nothing.
+       * Step two: lifecycle, before the version, so an archive under an in-flight edit is named.
+       *
+       * The current representation travels with this refusal too, not only with the version
+       * conflict. Without it the message ("reload it to see where that leaves your edit") named an
+       * action the editor had no way to take: the state they sent is the only signal a race
+       * happened, so every retry resent the stale one and was refused identically, forever.
        */
       try {
-        assertWritePreconditions({
-          conference,
-          base,
-          currentVersion: conference.updatedAt,
-          subject: 'conference',
-        });
+        assertLifecyclePreconditions({ conference, base });
       } catch (error) {
-        if (error instanceof AppError && error.code === ERROR_CODES.EDIT_VERSION_CONFLICT) {
+        if (error instanceof AppError && error.code === ERROR_CODES.CONFERENCE_STATE_CHANGED) {
           throw error.withCurrent(toWire(conference));
         }
         throw error;
@@ -273,7 +274,25 @@ export function registerConferenceRoutes(
       const stranded = outsideSpan(details, await sessions.listForConference(conference.id));
       if (stranded.length > 0) throw spanWouldOrphan(stranded);
 
-      const saved = await repository.updateDetails(conference.id, details);
+      /*
+       * Step three: the base version, compared by the database in the same statement as the write.
+       * The base is `conference.updated_at` - the Conference row's own version, which S03 TI06
+       * returns as `updatedAt` - and never the schedule watermark, which advances on every Session
+       * write and would refuse a rename because somebody moved a session in another room.
+       */
+      const result = await repository.updateDetails(conference.id, details, base.version);
+
+      if (result.outcome === 'missing') {
+        throw new AppError(
+          ERROR_CODES.CONFERENCE_NOT_FOUND,
+          404,
+          'That conference no longer exists.',
+        );
+      }
+      if (result.outcome === 'conflict') {
+        throw versionConflict('conference').withCurrent(toWire(result.current));
+      }
+      const saved = result.conference;
 
       /*
        * Both timestamps, under the two names they are deliberately kept apart by (S09 TI09).

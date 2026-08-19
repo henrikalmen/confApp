@@ -42,6 +42,22 @@
 ## Testing
 
 - **Counting queries at the repository seam cannot catch an N+1** – a one-statement repo call says nothing about a handler looping per day; count across a whole request via a recording Database.
+- **A regression test written beside its fix usually passes without the fix** – revert the fix and re-run before believing the guard; six S09 tests were green against the very defect they named.
+- **A file-list grep is only as good as its longest omission** – S09's "no timezone conversion in the refresh path" guard listed four files and missed `schedule-view-model.ts`, which formats every Session time an Attendee reads. A `toLocaleTimeString` there passed it. Pair any file-list assertion with one behavioural assertion that does not know the list.
+- **Never wait on the value you are about to assert** – a `waitFor` on the expected output fails inside the helper when the defect is present, so the reading is never captured and the comparison that was the point of the test never runs. Wait on something the defect cannot touch.
+- **A structure test that skips when its marker is missing tests nothing** – S09's read-order guard silently no-opped on one of the two routes it named for a whole pass, because the second read lived in a different function than the slice it searched. Assert the marker is found; never `if (found > -1)`.
+
+## React State & Refusals
+
+- **A refusal rendered only inside a component its own handler unmounts is lost** – three consecutive S09 fixes hit this: lifting an archived Conference unmounts the edit form (the only place `saveError` showed), and a recovery re-read that fails swaps the panel for an error box (taking the open editor with it). Before handling a refusal by changing what renders, ask what the refusal was being displayed *inside*. Render it outside that subtree, or keep the subtree.
+- **A recovery re-read must not be able to fail the component** – an extra request made after a refusal is not the component's own load. Give it a `keepOnFailure` path so a network blip leaves the refusal and the typed values on screen instead of replacing them with a generic error.
+
+## Concurrency
+
+- **Optimistic concurrency belongs in the UPDATE predicate** – a version compared in an earlier round trip lets two saves both pass and both write; put the version check in the write statement.
+- **Deleting and editing one Session deadlock** – delete locks conference then session row, edit locks session row then conference via the watermark trigger. Retry SQLSTATE 40P01 once.
+- **`now()` moves a row version backwards under lock contention** – it is transaction-*start* time, captured before the statement waits for a row lock, so a waiter stamps a value from before the write it waited on. Use `GREATEST(clock_timestamp(), col + interval '1 microsecond')` on every writer of a version column, not just the guarded one.
+- **A monotonicity test needs a held row lock, not concurrency** – sequential writes cannot distinguish `now()` from `clock_timestamp()`, and concurrent writes under a version predicate let only one through, which proves no ordering. Take the lock in a second connection, start the write, commit a later value, then release.
 
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.

@@ -8,6 +8,7 @@ import {
   type OrganizerSchedule,
   type OverlapWarning,
   type Session,
+  type LifecycleState,
   type SessionDetailsInput,
   type WriteBase,
 } from '../api/client.ts';
@@ -33,6 +34,15 @@ import { dayLabel, formatTimeRange } from './wall-clock-time.ts';
  */
 
 export interface SchedulePanelProps {
+  /**
+   * The Conference's lifecycle state, as its owner currently holds it.
+   *
+   * Passed in rather than read from this panel's own fetched schedule, because that copy is loaded
+   * once and refreshed only after a *session* save - so publishing from the detail panel above left
+   * this one still believing 'draft', and the very next edit was refused as a lifecycle race that
+   * had not happened. A solo Admin was told a colleague changed the conference under them.
+   */
+  lifecycleState: LifecycleState;
   conferenceId: string;
   /** Archived Conferences stay readable but accept no writes (FR9), so the actions are withheld. */
   readOnly: boolean;
@@ -77,7 +87,11 @@ function asApiError(error: unknown): ApiError {
     : new ApiError('NETWORK_UNREACHABLE', messageOf(error).message);
 }
 
-export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): React.JSX.Element {
+export function SchedulePanel({
+  conferenceId,
+  readOnly,
+  lifecycleState,
+}: SchedulePanelProps): React.JSX.Element {
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>({ open: false });
@@ -93,16 +107,39 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
    * also the base the next save carries - which is what makes that second save succeed.
    */
   const [conflict, setConflict] = useState<Session | null>(null);
+  /**
+   * The Conference's lifecycle state as the *server* last reported it, after refusing a write for
+   * having moved on.
+   *
+   * Null almost always: the `lifecycleState` prop is the parent's Conference and is normally the
+   * fresher of the two. This exists for the one case the prop cannot cover - somebody else publishes
+   * or archives while this panel is open. The prop will not move, because nothing on this page
+   * learned about it, so without this the next save carries the same stale state and is refused for
+   * the same reason, forever. Cleared whenever the prop does move, since the parent then holds a
+   * newer read than this does.
+   */
+  const [observedState, setObservedState] = useState<LifecycleState | null>(null);
 
+  /**
+   * Re-reads the composition view.
+   *
+   * `keepOnFailure` is for the re-reads that are an *extra* rather than the panel's own load - the
+   * recovery after a lifecycle refusal. Letting one of those replace the panel with an error box
+   * would unmount the open editor, taking the admin's typed values and the refusal explaining what
+   * happened with it: a network blip at exactly the wrong moment would turn a recoverable refusal
+   * into silent data loss. The refusal already on screen is the useful thing; a failed extra read
+   * simply leaves the base un-advanced, and the next save is refused the same way rather than
+   * wrongly.
+   */
   const load = useCallback(
-    async (signal?: AbortSignal): Promise<OrganizerSchedule | null> => {
+    async (signal?: AbortSignal, keepOnFailure = false): Promise<OrganizerSchedule | null> => {
       try {
         const schedule = await fetchOrganizerSchedule(conferenceId, signal);
         setState({ kind: 'ready', schedule });
         return schedule;
       } catch (error) {
         if (signal?.aborted) return null;
-        setState({ kind: 'failed', ...messageOf(error) });
+        if (!keepOnFailure) setState({ kind: 'failed', ...messageOf(error) });
         return null;
       }
     },
@@ -154,14 +191,33 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
    * After a conflict the base comes from the version the server handed back, not from the one the
    * form was opened with - that is precisely what "re-apply onto the newer version" means, and
    * without it the second save would be refused exactly like the first.
+   *
+   * The lifecycle half is the prop, unless a refusal has told this panel otherwise more recently.
+   * The prop is the parent's copy of the Conference and nothing here can change it, so an editor
+   * caught by a colleague's publish would resend the state they loaded with on every retry and be
+   * refused identically until they reloaded the page. `observedState` is what the server said when
+   * that refusal was re-read, and it is dropped the moment the parent learns something newer.
    */
   const baseFor = useCallback(
     (session: Session): WriteBase => ({
-      conferenceState: schedule?.conference.lifecycleState ?? 'draft',
+      conferenceState: observedState ?? lifecycleState,
       version: conflict?.id === session.id ? conflict.lastUpdatedAt : session.lastUpdatedAt,
     }),
-    [schedule, conflict],
+    [lifecycleState, observedState, conflict],
   );
+
+  /*
+   * A lifecycle transition changes what this panel may offer and what the server will accept, so the
+   * composition view is re-read when it happens rather than left showing the pre-transition schedule.
+   */
+  useEffect(() => {
+    if (state.kind !== 'ready') return;
+    // The parent has just read the Conference, so whatever this panel observed from a refusal is
+    // now the older of the two.
+    setObservedState(null);
+    void load();
+    // `load` is stable per conference; the transition is what this effect exists to react to.
+  }, [lifecycleState]);
 
   const submit = useCallback(
     async (details: SessionDetailsInput): Promise<void> => {
@@ -200,6 +256,19 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
           setConflict(refused.current);
         }
 
+        /*
+         * A lifecycle transition by somebody else is the other refusal with a way forward, and the
+         * way forward is a re-read: the composition payload carries the Conference's current state,
+         * which is what the next save must be based on. Without this the editor stays open with the
+         * state they loaded with, every retry is refused for the same reason, and the only exit is
+         * reloading the page - the dead end the Conference path already closes its own way, by
+         * being handed the newer Conference to lift.
+         */
+        if (refused.code === 'CONFERENCE_STATE_CHANGED') {
+          const reloaded = await load(undefined, true);
+          if (reloaded !== null) setObservedState(reloaded.conference.lifecycleState);
+        }
+
         // Held as the ApiError so the form can attach each field message to its own control.
         setSaveError(refused);
       } finally {
@@ -217,8 +286,14 @@ export function SchedulePanel({ conferenceId, readOnly }: SchedulePanelProps): R
         await deleteSession(conferenceId, session.id, baseFor(session));
         await load();
       } catch (error) {
+        const refused = asApiError(error);
         // The server's sentence, verbatim – it is the only thing that explains what to do next.
-        setRefusal(asApiError(error).message);
+        setRefusal(refused.message);
+        // A delete races a publish exactly as an edit does, and recovers the same way.
+        if (refused.code === 'CONFERENCE_STATE_CHANGED') {
+          const reloaded = await load(undefined, true);
+          if (reloaded !== null) setObservedState(reloaded.conference.lifecycleState);
+        }
       }
     },
     [conferenceId, load, baseFor],

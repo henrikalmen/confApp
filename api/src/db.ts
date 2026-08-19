@@ -47,6 +47,22 @@ const CONNECTION_ERRNOS = new Set([
   'EAI_AGAIN',
 ]);
 
+/**
+ * PostgreSQL aborted this transaction to break a lock cycle.
+ *
+ * Deliberately not in `UNAVAILABLE_SQLSTATES`: the server is fine, this transaction lost a coin
+ * toss, and the whole of it was rolled back - which is exactly what makes retrying it safe.
+ */
+const DEADLOCK_SQLSTATE = '40P01';
+
+function isDeadlock(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === DEADLOCK_SQLSTATE
+  );
+}
+
 /** PostgreSQL SQLSTATE classes meaning "the server is up but cannot serve us". */
 const UNAVAILABLE_SQLSTATES = new Set([
   '57P01', // admin_shutdown
@@ -85,10 +101,26 @@ export interface Database extends Queryable {
 
 export interface DatabaseLogger {
   error(detail: unknown, message: string): void;
+  /**
+   * Optional, and used for conditions this layer *handled*.
+   *
+   * A deadlock that was retried and then succeeded is not an error: the caller got the answer their
+   * request deserved and nothing was lost. Logging it at `error` puts a page-worthy line in front of
+   * an operator for a condition the code is designed to absorb, which is how a real error comes to
+   * be scrolled past. Optional so the many call sites that only ever needed `error` keep compiling;
+   * where it is absent the line still gets logged, just at the louder level.
+   */
+  warn?(detail: unknown, message: string): void;
 }
 
 export function createDatabase(connectionString: string, logger: DatabaseLogger): Database {
   const pool = new pg.Pool({ connectionString });
+
+  /** A handled condition, at `warn` where the logger has one. */
+  function note(detail: unknown, message: string): void {
+    if (logger.warn === undefined) logger.error(detail, message);
+    else logger.warn(detail, message);
+  }
 
   // An idle client failing (database restarted, network blip) emits on the pool. Without
   // this listener Node treats it as an unhandled 'error' event and kills the process – the
@@ -97,60 +129,108 @@ export function createDatabase(connectionString: string, logger: DatabaseLogger)
     logger.error({ err: error }, 'Idle PostgreSQL client errored; the pool will replace it.');
   });
 
+  async function runQuery<T extends pg.QueryResultRow>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<T[]> {
+    try {
+      const result = await pool.query<T>(text, values as unknown[]);
+      return result.rows;
+    } catch (error) {
+      if (isUnavailable(error)) {
+        // Log the driver detail server-side; the caller gets a message with none of it.
+        logger.error({ err: error }, 'PostgreSQL is unreachable.');
+        throw databaseUnavailable();
+      }
+      throw error;
+    }
+  }
+
+  async function runTransaction<T>(work: (tx: Queryable) => Promise<T>): Promise<T> {
+    let client: pg.PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      if (isUnavailable(error)) {
+        logger.error({ err: error }, 'PostgreSQL is unreachable.');
+        throw databaseUnavailable();
+      }
+      throw error;
+    }
+
+    try {
+      await client.query('begin');
+      const result = await work({
+        async query<T2 extends pg.QueryResultRow>(
+          text: string,
+          values: readonly unknown[] = [],
+        ): Promise<T2[]> {
+          const rows = await client.query<T2>(text, values as unknown[]);
+          return rows.rows;
+        },
+      });
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      // A rollback that itself fails must not replace the error that caused it – that error is
+      // the one the caller needs, and the client is released regardless either way.
+      await client.query('rollback').catch(() => undefined);
+      if (isUnavailable(error)) {
+        logger.error({ err: error }, 'PostgreSQL is unreachable.');
+        throw databaseUnavailable();
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   return {
+    /**
+     * One statement, retried **once** if PostgreSQL aborted it as a deadlock victim.
+     *
+     * A lone statement is its own transaction, so a deadlock abort rolls all of it back and leaves
+     * nothing to compensate for - which is what makes the retry safe. It is needed here and not only
+     * in `transaction` because the losing side of the real lock cycle is often a single guarded
+     * UPDATE: editing a Session takes the Session row lock then reaches the Conference row through
+     * the watermark trigger, while a concurrent delete holds them in the opposite order.
+     */
     async query<T extends pg.QueryResultRow>(
       text: string,
       values: readonly unknown[] = [],
     ): Promise<T[]> {
       try {
-        const result = await pool.query<T>(text, values as unknown[]);
-        return result.rows;
+        return await runQuery<T>(text, values);
       } catch (error) {
-        if (isUnavailable(error)) {
-          // Log the driver detail server-side; the caller gets a message with none of it.
-          logger.error({ err: error }, 'PostgreSQL is unreachable.');
-          throw databaseUnavailable();
-        }
-        throw error;
+        if (!isDeadlock(error)) throw error;
+        note({ err: error }, 'Statement aborted as a deadlock victim; retrying once.');
+        return runQuery<T>(text, values);
       }
     },
 
+    /**
+     * Runs `work` in one transaction, retrying **once** if PostgreSQL aborted it as a deadlock
+     * victim.
+     *
+     * A deadlock is neither a caller error nor an outage: PostgreSQL picks one of two transactions,
+     * rolls it back entirely, and lets the other proceed. Retrying the rolled-back one is safe
+     * precisely because nothing of it survived, and it is the difference between the caller reading
+     * the refusal their request deserves and reading a 500.
+     *
+     * The lock cycle this exists for is reachable in the ordinary two-Admin case: deleting a Session
+     * takes the Conference row lock first and the Session row second, while editing one takes the
+     * Session row first and reaches the Conference row second through the watermark trigger.
+     *
+     * Once, not in a loop - a second deadlock means contention this layer cannot resolve, and
+     * further retries would only bury it.
+     */
     async transaction<T>(work: (tx: Queryable) => Promise<T>): Promise<T> {
-      let client: pg.PoolClient;
       try {
-        client = await pool.connect();
+        return await runTransaction(work);
       } catch (error) {
-        if (isUnavailable(error)) {
-          logger.error({ err: error }, 'PostgreSQL is unreachable.');
-          throw databaseUnavailable();
-        }
-        throw error;
-      }
-
-      try {
-        await client.query('begin');
-        const result = await work({
-          async query<T2 extends pg.QueryResultRow>(
-            text: string,
-            values: readonly unknown[] = [],
-          ): Promise<T2[]> {
-            const rows = await client.query<T2>(text, values as unknown[]);
-            return rows.rows;
-          },
-        });
-        await client.query('commit');
-        return result;
-      } catch (error) {
-        // A rollback that itself fails must not replace the error that caused it – that error is
-        // the one the caller needs, and the client is released regardless either way.
-        await client.query('rollback').catch(() => undefined);
-        if (isUnavailable(error)) {
-          logger.error({ err: error }, 'PostgreSQL is unreachable.');
-          throw databaseUnavailable();
-        }
-        throw error;
-      } finally {
-        client.release();
+        if (!isDeadlock(error)) throw error;
+        note({ err: error }, 'Transaction aborted as a deadlock victim; retrying once.');
+        return runTransaction(work);
       }
     },
 

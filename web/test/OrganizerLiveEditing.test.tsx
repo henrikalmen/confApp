@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SchedulePanel } from '../src/schedule/SchedulePanel.tsx';
@@ -105,7 +106,9 @@ afterEach(() => vi.restoreAllMocks());
 async function openEditor(routes: Record<string, Route | (() => Route)>): Promise<Sent[]> {
   const sent: Sent[] = [];
   globalThis.fetch = routeFetch(routes, sent);
-  render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} />);
+  render(
+    <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="published" />,
+  );
 
   await screen.findByTestId(`session-${KEYNOTE.id}`);
   await userEvent.click(screen.getByTestId(`edit-${KEYNOTE.id}`));
@@ -222,7 +225,9 @@ describe('a published conference', () => {
   it('still offers add, edit and delete on its schedule', async () => {
     const sent: Sent[] = [];
     globalThis.fetch = routeFetch({ [SCHEDULE_PATH]: { status: 200, body: schedule() } }, sent);
-    render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} />);
+    render(
+      <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="published" />,
+    );
 
     await screen.findByTestId(`session-${KEYNOTE.id}`);
 
@@ -355,5 +360,405 @@ describe("the conference's name and dates after publish", () => {
     );
 
     expect(screen.queryByTestId('edit-conference')).toBeNull();
+  });
+});
+
+// ---------- regression: the recovery paths the first implementation lacked ----------
+
+describe('a conference edit refused because somebody else saved first', () => {
+  const CONFERENCE: Conference = {
+    id: CONFERENCE_ID,
+    name: 'Autumn Offsite',
+    startDate: '2026-09-15',
+    endDate: '2026-09-16',
+    lifecycleState: 'published',
+    updatedAt: LOADED_VERSION,
+  };
+
+  const DETAIL_PATH = `PATCH /conferences/${CONFERENCE_ID}`;
+
+  /**
+   * Regression for a dead end: the server attached the current version to the refusal, the client
+   * discarded it, and the base never advanced - so the refusal's own instruction ("re-apply it and
+   * save again") could never be followed. Every retry resent the same stale version and was refused
+   * identically, with no reload control on the Capacitor shells to escape through.
+   */
+  it('shows the newer version beside the typed values, and re-applying succeeds', async () => {
+    let refuse = true;
+    const sent: Sent[] = [];
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: { status: 200, body: schedule() },
+        [DETAIL_PATH]: () =>
+          refuse
+            ? {
+                status: 409,
+                body: {
+                  error: {
+                    code: 'EDIT_VERSION_CONFLICT',
+                    message: 'This conference changed since you opened it.',
+                    current: { ...CONFERENCE, name: 'Renamed by Björn', updatedAt: NEWER_VERSION },
+                  },
+                },
+              }
+            : { status: 200, body: { ...CONFERENCE, updatedAt: NEWER_VERSION } },
+      },
+      sent,
+    );
+
+    render(<ConferenceDetail conference={CONFERENCE} onChanged={() => {}} onBack={() => {}} />);
+
+    await userEvent.click(screen.getByTestId('edit-conference'));
+    const name = screen.getByLabelText('Conference name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed by Ida');
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The server's newer values are on screen...
+    const notice = await screen.findByTestId('conference-conflict');
+    expect(notice.textContent).toContain('Renamed by Björn');
+    // ...and the organizer's typed value is still in the form.
+    expect((screen.getByLabelText('Conference name') as HTMLInputElement).value).toBe(
+      'Renamed by Ida',
+    );
+
+    refuse = false;
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await vi.waitFor(() => expect(screen.queryByTestId('conference-conflict')).toBeNull());
+
+    const patches = sent.filter((call) => call.method === 'PATCH');
+    expect(patches).toHaveLength(2);
+    // The first carried the version the form opened with; the second the one the refusal returned.
+    expect((patches[0]!.body!.base as { version: string }).version).toBe(LOADED_VERSION);
+    expect((patches[1]!.body!.base as { version: string }).version).toBe(NEWER_VERSION);
+  });
+});
+
+describe('the schedule panel after its conference is published', () => {
+  /**
+   * Regression: the panel cached `lifecycleState` from its own one-shot fetch, so publishing from
+   * the detail panel above left it still believing 'draft'. The very next session edit was refused
+   * as a lifecycle race that had not happened - a solo Admin told a colleague changed the conference
+   * under them, on the PRD's primary organizer flow.
+   */
+  it('sends the new lifecycle state on the next edit, not the one it first loaded', async () => {
+    const sent: Sent[] = [];
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: { status: 200, body: schedule('draft') },
+        [EDIT_PATH]: {
+          status: 200,
+          body: {
+            session: session({ lastUpdatedAt: NEWER_VERSION }),
+            overlapWarning: null,
+            conference: { lastUpdatedAt: NEWER_VERSION },
+          },
+        },
+      },
+      sent,
+    );
+
+    const { rerender } = render(
+      <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="draft" />,
+    );
+    await screen.findByTestId(`session-${KEYNOTE.id}`);
+
+    // The conference is published elsewhere on the page; the owner re-renders with the new state.
+    rerender(
+      <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="published" />,
+    );
+    await screen.findByTestId(`session-${KEYNOTE.id}`);
+
+    await userEvent.click(screen.getByTestId(`edit-${KEYNOTE.id}`));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await vi.waitFor(() => expect(sent.some((call) => call.method === 'PATCH')).toBe(true));
+    const patch = sent.find((call) => call.method === 'PATCH')!;
+    expect((patch.body!.base as { conferenceState: string }).conferenceState).toBe('published');
+  });
+});
+
+// ---------- R7/R8: the archive that lands mid-edit, and the base that must not walk backwards ----
+
+describe('a conference edit refused because the conference was archived under it', () => {
+  const CONFERENCE: Conference = {
+    id: CONFERENCE_ID,
+    name: 'Autumn Offsite',
+    startDate: '2026-09-15',
+    endDate: '2026-09-16',
+    lifecycleState: 'published',
+    updatedAt: LOADED_VERSION,
+  };
+
+  const DETAIL_PATH = `PATCH /conferences/${CONFERENCE_ID}`;
+  const ARCHIVED_MESSAGE =
+    'This conference was archived while you were editing, so your change was not saved. ' +
+    'It is now archived. Reload it to see where that leaves your edit.';
+
+  /**
+   * Regression for a defect introduced by an earlier fix, which is the worst kind.
+   *
+   * Lifting the archived Conference to the owner is right - it is how the panel stops offering
+   * edits to a conference that accepts none. But the edit branch renders nothing at all once
+   * `archived` is true, and the form it was rendering was both the only place the refusal message
+   * appeared and the only place the typed values lived. They vanished in the same render: the
+   * organizer watched the panel quietly turn archived, with no statement of what happened to the
+   * save they had just made, and no copy of what they had typed.
+   */
+  it('keeps the refusal and the typed values on screen after the form is gone', async () => {
+    const archived = { ...CONFERENCE, lifecycleState: 'archived' as const };
+    let lifted: Conference = CONFERENCE;
+    const sent: Sent[] = [];
+
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: { status: 200, body: schedule() },
+        [DETAIL_PATH]: {
+          status: 409,
+          body: {
+            error: {
+              code: 'CONFERENCE_STATE_CHANGED',
+              message: ARCHIVED_MESSAGE,
+              current: archived,
+            },
+          },
+        },
+      },
+      sent,
+    );
+
+    function Host(): React.JSX.Element {
+      const [current, setCurrent] = useState<Conference>(CONFERENCE);
+      return (
+        <ConferenceDetail
+          conference={current}
+          onChanged={(next) => {
+            lifted = next;
+            setCurrent(next);
+          }}
+          onBack={() => {}}
+        />
+      );
+    }
+
+    render(<Host />);
+
+    await userEvent.click(screen.getByTestId('edit-conference'));
+    const name = screen.getByLabelText('Conference name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed by Ida');
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The archived conference was lifted, so the form is gone - that part is intended.
+    await vi.waitFor(() => expect(lifted.lifecycleState).toBe('archived'));
+    expect(screen.queryByTestId('conference-form')).toBeNull();
+
+    // What must not be gone: the server's sentence, and what the organizer had typed.
+    const notice = await screen.findByTestId('conference-edit-abandoned');
+    expect(notice.textContent).toContain('archived');
+    expect(notice.textContent).toContain('Renamed by Ida');
+  });
+
+  /**
+   * Regression: `basis` prefers `conflict` over the conference, and nothing cleared `conflict` when
+   * the refusal was a lifecycle change rather than a version conflict. A conflict followed by a
+   * publish therefore walked the base backwards - every later save resent the pre-publish version
+   * and was refused identically, the same dead end reached in two steps instead of one.
+   */
+  it('drops the stale conflict version when the refusal is a lifecycle change', async () => {
+    const published = { ...CONFERENCE, lifecycleState: 'published' as const };
+    const AFTER_PUBLISH = '2026-08-17T10:09:00.111111Z';
+    const sent: Sent[] = [];
+    let step = 0;
+
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: { status: 200, body: schedule() },
+        [DETAIL_PATH]: () => {
+          step += 1;
+          // 1: somebody saved first. 2: somebody published. 3: must be accepted.
+          if (step === 1) {
+            return {
+              status: 409,
+              body: {
+                error: {
+                  code: 'EDIT_VERSION_CONFLICT',
+                  message: 'This conference changed since you opened it.',
+                  current: { ...CONFERENCE, name: 'Renamed by Bjorn', updatedAt: NEWER_VERSION },
+                },
+              },
+            };
+          }
+          if (step === 2) {
+            return {
+              status: 409,
+              body: {
+                error: {
+                  code: 'CONFERENCE_STATE_CHANGED',
+                  message: 'This conference was published while you were editing.',
+                  current: { ...published, updatedAt: AFTER_PUBLISH },
+                },
+              },
+            };
+          }
+          return { status: 200, body: { ...published, updatedAt: AFTER_PUBLISH } };
+        },
+      },
+      sent,
+    );
+
+    function Host(): React.JSX.Element {
+      const [current, setCurrent] = useState<Conference>({
+        ...CONFERENCE,
+        lifecycleState: 'draft',
+      });
+      return <ConferenceDetail conference={current} onChanged={setCurrent} onBack={() => {}} />;
+    }
+
+    render(<Host />);
+
+    await userEvent.click(screen.getByTestId('edit-conference'));
+    const name = screen.getByLabelText('Conference name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed by Ida');
+
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByTestId('conference-conflict');
+
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await vi.waitFor(() => expect(step).toBe(2));
+
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await vi.waitFor(() => expect(step).toBe(3));
+
+    const patches = sent.filter((call) => call.method === 'PATCH');
+    expect(patches).toHaveLength(3);
+    // The third save must carry the version the publish returned - not the one the first conflict
+    // handed back, which the publish has since superseded.
+    expect((patches[2]!.body!.base as { version: string }).version).toBe(AFTER_PUBLISH);
+  });
+});
+
+// ---------- R9: the same dead end on the session write path ----------
+
+describe('a session edit refused because the conference was published under it', () => {
+  /**
+   * Regression: the recovery was built on the Conference path only. A session editor caught by a
+   * colleague's publish got the right sentence and no way forward - `lifecycleState` is a prop, the
+   * parent had not learned about the publish either, so every retry resent 'draft' and was refused
+   * for the same reason. The only exit was reloading the page, which the Capacitor shells offer no
+   * control for.
+   */
+  it('re-reads the conference state so the next save is based on it', async () => {
+    const sent: Sent[] = [];
+    let published = false;
+
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: () => ({
+          status: 200,
+          body: schedule(published ? 'published' : 'draft'),
+        }),
+        [EDIT_PATH]: () => {
+          if (!published) {
+            // The publish lands between the editor opening and this save arriving.
+            published = true;
+            return {
+              status: 409,
+              body: {
+                error: {
+                  code: 'CONFERENCE_STATE_CHANGED',
+                  message: 'This conference was published while you were editing.',
+                },
+              },
+            };
+          }
+          return {
+            status: 200,
+            body: {
+              session: session({ lastUpdatedAt: NEWER_VERSION }),
+              overlapWarning: null,
+              conference: { lastUpdatedAt: NEWER_VERSION },
+            },
+          };
+        },
+      },
+      sent,
+    );
+
+    render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="draft" />);
+    await screen.findByTestId(`session-${KEYNOTE.id}`);
+    await userEvent.click(screen.getByTestId(`edit-${KEYNOTE.id}`));
+
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await vi.waitFor(() => expect(sent.filter((c) => c.method === 'PATCH')).toHaveLength(1));
+
+    // The editor is still open with the admin's values, so the retry is one click - not a reload.
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await vi.waitFor(() => expect(sent.filter((c) => c.method === 'PATCH')).toHaveLength(2));
+
+    const patches = sent.filter((call) => call.method === 'PATCH');
+    expect((patches[0]!.body!.base as { conferenceState: string }).conferenceState).toBe('draft');
+    // The second carries what the server actually holds, so it is accepted rather than refused
+    // identically forever.
+    expect((patches[1]!.body!.base as { conferenceState: string }).conferenceState).toBe(
+      'published',
+    );
+  });
+
+  /**
+   * Regression for a defect the recovery re-read introduced, which is the same shape as the one it
+   * was fixing.
+   *
+   * The re-read after a lifecycle refusal is an extra request, and an extra request can fail. It
+   * used to fail the panel with it - `state` became `failed`, `schedule` became null, and the whole
+   * subtree under it unmounted: the open editor with the admin's typed values, and the refusal
+   * saying what had happened. A network blip in the moment after a recoverable refusal turned it
+   * into silent data loss, on the exact path added to prevent silent data loss.
+   */
+  it('keeps the editor and the refusal when the recovery re-read itself fails', async () => {
+    const sent: Sent[] = [];
+    let loaded = false;
+
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: () => {
+          if (!loaded) {
+            loaded = true;
+            return { status: 200, body: schedule('draft') };
+          }
+          // The re-read after the refusal: the network is gone by the time it is made.
+          return { status: 503, body: { error: { code: 'UPSTREAM', message: 'unreachable' } } };
+        },
+        [EDIT_PATH]: {
+          status: 409,
+          body: {
+            error: {
+              code: 'CONFERENCE_STATE_CHANGED',
+              message: 'This conference was published while you were editing.',
+            },
+          },
+        },
+      },
+      sent,
+    );
+
+    render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="draft" />);
+    await screen.findByTestId(`session-${KEYNOTE.id}`);
+    await userEvent.click(screen.getByTestId(`edit-${KEYNOTE.id}`));
+
+    const location = screen.getByLabelText(/location/i);
+    await userEvent.clear(location);
+    await userEvent.type(location, 'Room C');
+
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await vi.waitFor(() => expect(sent.filter((c) => c.method === 'PATCH')).toHaveLength(1));
+
+    // The re-read failed. The editor must still be there, with what was typed in it...
+    await vi.waitFor(() => expect(screen.queryByTestId('session-form')).not.toBeNull());
+    expect((screen.getByLabelText(/location/i) as HTMLInputElement).value).toBe('Room C');
+    // ...and the reason the save was refused must still be readable.
+    expect(screen.getByTestId('session-form').textContent).toContain('published');
   });
 });

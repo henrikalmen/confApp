@@ -1,6 +1,6 @@
 # Project State
 
-Last Updated: 2026-08-18 09:23
+Last Updated: 2026-08-19 14:16
 
 ## Current Phase
 <!-- Active phase/milestone name and one-line status -->
@@ -32,6 +32,7 @@ Status: On Track
 ## Recent Decisions
 <!-- Key decisions made in the last 1-2 sessions. Keep max ~10. Move older items to ADRs. -->
 
+- S09 closed on a raised evidence standard: a Structural Criterion is earned by a **behavioural** assertion, not by a source grep alone. The grep for "no timezone conversion in the refresh path" listed four files and omitted `schedule-view-model.ts` – the module that formats every Session time an Attendee reads – so a `toLocaleTimeString` there passed it untouched. The two-timezone render test now proves the property; the grep is kept as the cheap guard and its file list corrected (2026-08-19).
 - S05: joinability reason-naming (`joinRefusalReason` / `assertJoinable`) added to S03's `api/src/conferences/lifecycle.ts` in place rather than as a second mapping in S05 – keeps exactly one definition of joinability, as the FIS Constraints section directs. `isJoinable` now delegates to it, and S03's pre-existing lifecycle tests still pass unmodified, so the refactor is regression-guarded on behavioural equivalence (2026-08-17).
 - Plan created: Conference setup & schedule (13 stories, 3 phases, all spec-ready) (2026-08-16).
 - FR7 split: post-publish schedule editing planned; push notification deferred pending REQ-005 and the push delivery service decision – in-app propagation is the primary channel (2026-08-16).

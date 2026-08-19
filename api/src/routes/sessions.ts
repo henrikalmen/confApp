@@ -8,14 +8,18 @@ import type {
 } from '../conferences/authorization.ts';
 import type { Conference, ConferenceRepository } from '../conferences/conference-repository.ts';
 import { assertEditable } from '../conferences/lifecycle.ts';
-import type { Session, SessionRepository } from '../sessions/session-repository.ts';
+import type { GuardedWrite, Session, SessionRepository } from '../sessions/session-repository.ts';
 import {
   conferenceDays,
   validateSessionDetails,
   type SessionDetailsInput,
 } from '../sessions/session-validation.ts';
 import { overlappingPairs, overlapsWith } from '../sessions/overlap.ts';
-import { assertWritePreconditions, requireWriteBase } from '../conferences/write-preconditions.ts';
+import {
+  assertLifecyclePreconditions,
+  requireWriteBase,
+  versionConflict,
+} from '../conferences/write-preconditions.ts';
 
 /**
  * The schedule-composition endpoints.
@@ -186,6 +190,31 @@ function overlapWarning(
   };
 }
 
+/**
+ * Turns a version-guarded write's outcome into either the saved row or this API's refusal.
+ *
+ * The conflict carries the current representation, so the editor re-applies their change onto it
+ * rather than reloading and retyping it from memory - the recovery path the PRD's edge-case table
+ * asks for.
+ */
+function requireSaved(result: GuardedWrite, subject: string): Session {
+  if (result.outcome === 'saved') return result.session;
+
+  if (result.outcome === 'conference-missing') {
+    throw new AppError(ERROR_CODES.CONFERENCE_NOT_FOUND, 404, 'That conference no longer exists.');
+  }
+
+  if (result.outcome === 'missing') {
+    throw new AppError(
+      ERROR_CODES.SESSION_NOT_FOUND,
+      404,
+      'That session no longer exists in this conference.',
+    );
+  }
+
+  throw versionConflict(subject).withCurrent(toWire(result.current));
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   { withAuth, conferences, sessions, authorization }: SessionRouteDependencies,
@@ -263,11 +292,32 @@ export function registerSessionRoutes(
   app.get('/api/conferences/:conferenceId/schedule/organizer', {
     schema: { params: conferenceParamsSchema },
     handler: withAuth(async (request, caller) => {
+      const { conferenceId } = request.params as ConferenceParams;
       // Readable while archived – archiving makes a Conference read-only, not invisible (FR9).
-      const conference = await loadAuthorized(request, caller);
+      await authorization.requireConferenceRole(caller, conferenceId, 'Admin');
+
+      /*
+       * The watermark is read **before** the Conference row and before the Session list, and the
+       * order is load-bearing in one direction only.
+       *
+       * Separate statements with no transaction, so a write can land between any two. Read this way
+       * the payload may carry a watermark slightly *older* than the data beside it, which costs one
+       * wasted refetch and then agrees. Read the other way round it carries a *newer* watermark over
+       * older data, and any client that compares that value to decide whether to refetch compares
+       * equal forever and never sees the change. Stale-low is self-correcting; stale-high is not.
+       */
+      const watermark = await sessions.scheduleWatermark(conferenceId);
+
+      const conference = await conferences.findById(conferenceId);
+      if (conference === null) {
+        throw new AppError(
+          ERROR_CODES.CONFERENCE_NOT_FOUND,
+          404,
+          'That conference no longer exists.',
+        );
+      }
 
       const schedule = await sessions.listForConference(conference.id);
-      const watermark = await sessions.scheduleWatermark(conference.id);
 
       /*
        * Conference Days are derived from the date span, never stored (PRD → Data Requirements),
@@ -340,50 +390,37 @@ export function registerSessionRoutes(
       const { sessionId } = request.params as SessionParams;
       /*
        * Authorization first – step one of the three, and the only one that is not in the
-       * precondition module. `loadWritable` also applies S03's standing archived guard, which
-       * refuses an editor who never had a stale view; the precondition step below is what
-       * distinguishes the editor who did.
+       * precondition module.
+       *
+       * `loadAuthorized`, deliberately not `loadWritable`: the standing archived guard runs inside
+       * `assertLifecyclePreconditions` below, *after* the state-change check, so an editor whose
+       * Conference was archived under them reads that fact rather than the standing rule. Applying
+       * it here would refuse them first and the race would be invisible.
        */
       const conference = await loadAuthorized(request, caller, 'PresenterFacilitator', {
         sessionId,
       });
 
-      const base = requireWriteBase((request.body as { base?: unknown }).base);
-
-      const existing = await sessions.findById(conference.id, sessionId);
-      if (existing === null) {
-        throw new AppError(
-          ERROR_CODES.SESSION_NOT_FOUND,
-          404,
-          'That session no longer exists in this conference.',
-        );
-      }
+      const base = requireWriteBase((request.body as { base?: unknown }).base, 'session');
 
       /*
-       * Steps two and three, in the module that owns their order. Both run before validation and
-       * before any write, so a refused save persists nothing – the edge-case table's "nothing of
-       * the second edit is applied".
+       * Step two: lifecycle. Decided here, before the write, so an archive or publish landing under
+       * an in-flight edit produces the state-named refusal rather than a bare version conflict.
        */
-      try {
-        assertWritePreconditions({
-          conference,
-          base,
-          currentVersion: existing.lastUpdatedAt,
-          subject: 'session',
-        });
-      } catch (error) {
-        // The current representation travels with the refusal so the editor can re-apply their
-        // change onto it, rather than reloading and retyping it from memory.
-        if (error instanceof AppError && error.code === ERROR_CODES.EDIT_VERSION_CONFLICT) {
-          throw error.withCurrent(toWire(existing));
-        }
-        throw error;
-      }
+      assertLifecyclePreconditions({ conference, base });
 
       const details = validateSessionDetails(request.body as SessionDetailsInput, conference);
-      const updated = await sessions.update(conference.id, sessionId, details);
 
-      return savedSession(updated, await sessions.listForConference(conference.id), conference.id);
+      /*
+       * Step three: the base version - and it is the *database* that compares it, in the same
+       * statement as the write. Comparing here and writing afterwards would be two statements with
+       * nothing holding between them, which is how two concurrent saves both pass the check and
+       * the second silently overwrites the first.
+       */
+      const result = await sessions.update(conference.id, sessionId, details, base.version);
+      const saved = requireSaved(result, 'session');
+
+      return savedSession(saved, await sessions.listForConference(conference.id), conference.id);
     }),
   });
 
@@ -404,34 +441,13 @@ export function registerSessionRoutes(
 
       // A delete is a write like any other and races the same way: the Session it names may have
       // been edited, and the Conference may have been archived, since the Admin last looked.
-      const base = requireWriteBase(request.query);
+      const base = requireWriteBase(request.query, 'session');
 
-      const existing = await sessions.findById(conference.id, sessionId);
-      if (existing === null) {
-        throw new AppError(
-          ERROR_CODES.SESSION_NOT_FOUND,
-          404,
-          'That session no longer exists in this conference.',
-        );
-      }
+      assertLifecyclePreconditions({ conference, base });
 
-      try {
-        assertWritePreconditions({
-          conference,
-          base,
-          currentVersion: existing.lastUpdatedAt,
-          subject: 'session',
-        });
-      } catch (error) {
-        if (error instanceof AppError && error.code === ERROR_CODES.EDIT_VERSION_CONFLICT) {
-          throw error.withCurrent(toWire(existing));
-        }
-        throw error;
-      }
-
-      // The "a published conference keeps at least one session" refusal is raised inside the
-      // repository, where the count and the delete share a transaction and a lock.
-      await sessions.remove(conference.id, sessionId);
+      // The version comparison, the last-session count and the delete all share one transaction and
+      // one row lock inside the repository - so nothing can move between them.
+      requireSaved(await sessions.remove(conference.id, sessionId, base.version), 'session');
       return {
         deleted: sessionId,
         conference: { lastUpdatedAt: await sessions.scheduleWatermark(conference.id) },

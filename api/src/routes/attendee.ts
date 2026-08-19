@@ -119,10 +119,27 @@ export function registerAttendeeRoutes(
   async function loadReadable(
     request: FastifyRequest,
     caller: AuthenticatedCaller,
-  ): Promise<Conference> {
+  ): Promise<{ conference: Conference; watermark: string | null }> {
     const { conferenceId } = request.params as ConferenceParams;
 
     await authorization.requireMembership(caller, conferenceId);
+
+    /*
+     * The watermark is read **before** the Conference row, and before the Session list, and the
+     * order is load-bearing in one direction only.
+     *
+     * These are separate statements with no transaction, so a write can land between any two. Read
+     * this way the envelope may carry a watermark slightly *older* than the data beside it, which
+     * costs one wasted refetch on the next poll and then agrees. Read the other way round it carries
+     * a *newer* watermark over older data - and the client stores that value as its comparison
+     * basis, so every later poll compares equal and the change never arrives. Silently, for the rest
+     * of the conference. Stale-low is self-correcting; stale-high is not.
+     *
+     * This matters for the Conference row too, not only the Session list: the watermark advances on
+     * a name, date-span or lifecycle change, and a stale span drops Sessions from the envelope
+     * outright, because the days they sit on are no longer emitted.
+     */
+    const watermark = await sessions.scheduleWatermark(conferenceId);
 
     const conference = await conferences.findById(conferenceId);
     if (conference === null) {
@@ -139,7 +156,7 @@ export function registerAttendeeRoutes(
     // Conference read-only, not invisible (FR9). Only a draft is refused.
     if (conference.lifecycleState === 'draft') throw notReadable(conference.name);
 
-    return conference;
+    return { conference, watermark };
   }
 
   /**
@@ -148,7 +165,7 @@ export function registerAttendeeRoutes(
   app.get('/api/conferences/:conferenceId/schedule', {
     schema: { params: conferenceParamsSchema },
     handler: withAuth(async (request, caller) => {
-      const conference = await loadReadable(request, caller);
+      const { conference, watermark } = await loadReadable(request, caller);
 
       /*
        * One query for the Sessions, whatever the span (TI03). A per-day or per-Session round trip
@@ -156,7 +173,6 @@ export function registerAttendeeRoutes(
        * would give S10 a payload it could not cache as one thing.
        */
       const schedule = await sessions.listForConference(conference.id);
-      const watermark = await sessions.scheduleWatermark(conference.id);
 
       // `serverNow` is taken once, here, and carried into the envelope – both frames from one
       // reading, so a request landing on the stroke of midnight cannot report today's day beside
@@ -190,12 +206,9 @@ export function registerAttendeeRoutes(
   app.get('/api/conferences/:conferenceId/schedule/watermark', {
     schema: { params: conferenceParamsSchema },
     handler: withAuth(async (request, caller) => {
-      const conference = await loadReadable(request, caller);
+      const { conference, watermark } = await loadReadable(request, caller);
 
-      return {
-        lastUpdatedAt: await sessions.scheduleWatermark(conference.id),
-        state: conference.lifecycleState,
-      };
+      return { lastUpdatedAt: watermark, state: conference.lifecycleState };
     }),
   });
 }

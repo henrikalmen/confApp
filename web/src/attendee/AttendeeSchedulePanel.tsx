@@ -190,50 +190,65 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
   /** At most one poll in flight; a tick arriving while one is outstanding is skipped, not queued. */
   const pollingRef = useRef(false);
 
-  const syncIfChanged = useCallback(async (): Promise<void> => {
-    const rendered = renderedRef.current;
-    if (conferenceId === null || rendered === null || pollingRef.current) return;
+  const syncIfChanged = useCallback(
+    async (signal: AbortSignal): Promise<void> => {
+      const rendered = renderedRef.current;
+      if (conferenceId === null || rendered === null || pollingRef.current) return;
 
-    pollingRef.current = true;
-    try {
-      const watermark = await fetchScheduleWatermark(conferenceId);
+      pollingRef.current = true;
+      try {
+        const watermark = await fetchScheduleWatermark(conferenceId, signal);
 
-      /*
-       * The whole point of the watermark: an unchanged value costs two scalars and stops here. Only
-       * a value that has actually moved is worth the schedule payload.
-       */
-      if (watermark.lastUpdatedAt === rendered.conference.lastUpdatedAt) return;
+        /*
+         * The whole point of the watermark: an unchanged value costs two scalars and stops here.
+         * Only a value that has actually moved is worth the schedule payload.
+         */
+        if (watermark.lastUpdatedAt === rendered.conference.lastUpdatedAt) return;
 
-      const refreshed = await fetchAttendeeSchedule(conferenceId);
-      // The device clock at receipt, read here for the same reason the initial fetch does: "at
-      // receipt" is a fact about this moment, and reading it later folds the wait into the offset.
-      const deviceClockAtReceipt = Date.now();
+        const refreshed = await fetchAttendeeSchedule(conferenceId, signal);
+        // The device clock at receipt, read here for the same reason the initial fetch does: "at
+        // receipt" is a fact about this moment, and reading it later folds the wait into the offset.
+        const deviceClockAtReceipt = Date.now();
 
-      /*
-       * The one moment both envelopes are in hand, which is the entire reason "what changed" is
-       * derived on the client. The outgoing one is read from the ref before the swap.
-       */
-      const diff = diffSchedule(rendered, refreshed);
+        /*
+         * Two round trips have happened since this poll started, and the person may have moved on.
+         * Without these guards a slow poll for the conference just left resolves last and paints
+         * its schedule under the new conference's name - and then diffs across two different
+         * conferences, announcing every session of one as removed and every session of the other as
+         * added. Aborting is not enough on its own: the abort races the resolution, so the identity
+         * of what came back is checked too.
+         */
+        if (signal.aborted) return;
+        if (renderedRef.current !== rendered) return;
+        if (refreshed.conference.id !== rendered.conference.id) return;
 
-      setPhase({
-        kind: 'ready',
-        schedule: refreshed,
-        clock: clockFromSync(refreshed.serverNow, deviceClockAtReceipt),
-      });
-      // An unchanged poll never reaches here, so a dismissed banner is not re-raised by one.
-      if (!isEmptyDiff(diff)) setChanges(diff);
-    } catch {
-      /*
-       * A failed poll or refetch changes nothing on screen (Acceptance Scenario S07). The last
-       * successfully synced Schedule stays exactly as it was, its age keeps counting up, and the
-       * next attempt tries again - the PRD's rule that the view as of its last successful sync is
-       * the source of truth. Replacing it with an error would take the schedule away from someone
-       * standing in a corridor deciding where to go next.
-       */
-    } finally {
-      pollingRef.current = false;
-    }
-  }, [conferenceId]);
+        /*
+         * The one moment both envelopes are in hand, which is the entire reason "what changed" is
+         * derived on the client. The outgoing one is read from the ref before the swap.
+         */
+        const diff = diffSchedule(rendered, refreshed);
+
+        setPhase({
+          kind: 'ready',
+          schedule: refreshed,
+          clock: clockFromSync(refreshed.serverNow, deviceClockAtReceipt),
+        });
+        // An unchanged poll never reaches here, so a dismissed banner is not re-raised by one.
+        if (!isEmptyDiff(diff)) setChanges(diff);
+      } catch {
+        /*
+         * A failed poll or refetch changes nothing on screen (Acceptance Scenario S07). The last
+         * successfully synced Schedule stays exactly as it was, its age keeps counting up, and the
+         * next attempt tries again - the PRD's rule that the view as of its last successful sync is
+         * the source of truth. Replacing it with an error would take the schedule away from someone
+         * standing in a corridor deciding where to go next.
+         */
+      } finally {
+        pollingRef.current = false;
+      }
+    },
+    [conferenceId],
+  );
 
   useEffect(() => {
     if (phase.kind !== 'ready') return;
@@ -244,8 +259,9 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
      * visible or focused refreshes **immediately** rather than waiting for the next tick, because
      * an attendee returning to the app expects current data at once.
      */
+    const controller = new AbortController();
     const tick = (): void => {
-      if (!document.hidden) void syncIfChanged();
+      if (!document.hidden) void syncIfChanged(controller.signal);
     };
 
     const timer = setInterval(tick, POLL_INTERVAL_MS);
@@ -254,10 +270,15 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
 
     return () => {
       clearInterval(timer);
+      // Any request still in flight belongs to the conference being left, so it is cancelled rather
+      // than allowed to resolve into the next one's view. The in-flight flag is *not* cleared here:
+      // the aborted poll's own `finally` owns it, and clearing it from the cleanup could release a
+      // flag a newly started poll already holds, breaking the one-in-flight guarantee.
+      controller.abort();
       document.removeEventListener('visibilitychange', tick);
       window.removeEventListener('focus', tick);
     };
-  }, [phase.kind, syncIfChanged]);
+  }, [phase.kind, conferenceId, syncIfChanged]);
 
   // ---------- the highlight's heartbeat ----------
 

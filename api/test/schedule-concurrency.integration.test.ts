@@ -815,4 +815,268 @@ describe.skipIf(!reachable)('live schedule editing', () => {
       expect(moved.json().session.day).toBe('2026-09-16');
     });
   });
+
+  // ---------- C1: the interleaved case the sequential tests cannot reach ----------
+
+  describe('two saves that genuinely overlap', () => {
+    /**
+     * The regression guard for the defect this story shipped with.
+     *
+     * Every other test here issues its second save only after the first has fully resolved, which
+     * proves the *serialized* case. It cannot see the one that matters: two requests in flight at
+     * once, both reading the same version before either writes. Under the original check-then-act
+     * implementation both passed the comparison and both wrote - reproducibly, roughly one run in
+     * six - and the loser was told their save succeeded.
+     *
+     * Ten rounds, because the interleaving is timing-dependent: a single round passed against the
+     * defect most of the time.
+     */
+    it('accept exactly one and refuse the other, ten rounds running', async () => {
+      const app = appWith();
+
+      for (let round = 0; round < 10; round += 1) {
+        const { conferenceId, sessionId } = await seed();
+        const base = await openForEditing(conferenceId, sessionId);
+
+        const [first, second] = await Promise.all([
+          save(app, conferenceId, sessionId, IDA, { ...KEYNOTE, startTime: '09:30', base }),
+          save(app, conferenceId, sessionId, BJORN, { ...KEYNOTE, location: 'Room C', base }),
+        ]);
+
+        const statuses = [first.statusCode, second.statusCode].sort();
+        expect(statuses, `round ${round}: ${first.body} | ${second.body}`).toEqual([200, 409]);
+
+        // The refused one carries the version to re-apply onto, exactly as the sequential case does.
+        const refused = first.statusCode === 409 ? first : second;
+        expect(refused.json().error.code).toBe('EDIT_VERSION_CONFLICT');
+        expect(refused.json().error.current.lastUpdatedAt).not.toBe(base.version);
+
+        // And the winner's change is intact - not half of each.
+        const row = await sessionRow(sessionId);
+        // Exactly one of the two is 200 (asserted above), so this identifies the winner outright.
+        const idaWon = first.statusCode === 200;
+        expect(idaWon ? row.start_time === '09:30' : row.location === 'Room C').toBe(true);
+
+        await client.query('delete from conference');
+      }
+    });
+
+    /**
+     * The delete path under genuine interleaving, not the sequential shape the first version used.
+     *
+     * A delete and an edit of the same Session take their locks in opposite orders - the delete
+     * takes the Conference row first and the Session row second, the edit the reverse via the
+     * watermark trigger - so PostgreSQL aborts one as a deadlock victim. That abort must surface as
+     * this API's refusal, never as a 500: `db.transaction` retries the rolled-back transaction once,
+     * and the retry then sees the committed state and answers properly.
+     */
+    it('answer a delete racing an edit with a refusal, never a 500, ten rounds running', async () => {
+      const app = appWith();
+
+      for (let round = 0; round < 10; round += 1) {
+        const { conferenceId, sessionId } = await seed();
+        const base = await openForEditing(conferenceId, sessionId);
+
+        const [deleted, edited] = await Promise.all([
+          app.inject({
+            method: 'DELETE',
+            url:
+              `/api/conferences/${conferenceId}/sessions/${sessionId}` +
+              `?conferenceState=${base.conferenceState}&version=${encodeURIComponent(base.version)}`,
+            headers: as(IDA),
+          }),
+          save(app, conferenceId, sessionId, BJORN, {
+            ...KEYNOTE,
+            location: 'Room C',
+            base,
+          }),
+        ]);
+
+        for (const response of [deleted, edited]) {
+          expect(response.statusCode, `round ${round}: ${response.body}`).not.toBe(500);
+          expect([200, 404, 409]).toContain(response.statusCode);
+        }
+        // Exactly one may have won: both succeeding would mean an edit applied to a deleted row.
+        const succeeded = [deleted, edited].filter((r) => r.statusCode === 200);
+        expect(succeeded.length, `round ${round}`).toBe(1);
+
+        await client.query('delete from conference');
+      }
+    });
+
+    /** The sequential case, kept because it pins the refusal's shape rather than the race. */
+    it('refuse a delete whose base has moved, leaving the session in place', async () => {
+      const app = appWith();
+      const { conferenceId, sessionId } = await seed();
+
+      const stale = await openForEditing(conferenceId, sessionId);
+      await client.query("update sessions set location = 'Room B' where id = $1", [sessionId]);
+
+      const refused = await app.inject({
+        method: 'DELETE',
+        url:
+          `/api/conferences/${conferenceId}/sessions/${sessionId}` +
+          `?conferenceState=${stale.conferenceState}&version=${encodeURIComponent(stale.version)}`,
+        headers: as(IDA),
+      });
+
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error.code).toBe('EDIT_VERSION_CONFLICT');
+
+      // Not merely reported as refused - the row is still there.
+      const rows = await client.query('select count(*)::int as count from sessions where id = $1', [
+        sessionId,
+      ]);
+      expect(rows.rows[0].count).toBe(1);
+    });
+
+    it('refuse a delete carrying no base at all', async () => {
+      const app = appWith();
+      const { conferenceId, sessionId } = await seed();
+
+      const refused = await app.inject({
+        method: 'DELETE',
+        url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
+        headers: as(IDA),
+      });
+
+      expect(refused.statusCode).toBe(400);
+      const rows = await client.query('select count(*)::int as count from sessions where id = $1', [
+        sessionId,
+      ]);
+      expect(rows.rows[0].count).toBe(1);
+    });
+
+    /**
+     * `updated_at` must be strictly increasing per write, like `session.last_updated_at` already is.
+     * `now()` returns transaction-start time, so two edits could share a version and let a stale
+     * base compare equal to a moved row.
+     */
+    /**
+     * Two concurrent detail edits from one base: exactly one writes, and its new version is strictly
+     * past the base both started from.
+     *
+     * This pins the *conflict* guarantee, not monotonicity - the version predicate lets only one of
+     * the pair through, and a single write can demonstrate no ordering property at all. The test
+     * below is the one that pins the column's monotonicity, and it took a held row lock to do it.
+     */
+    it('let exactly one of two concurrent edits write, past the base both started from', async () => {
+      const app = appWith();
+
+      for (let round = 0; round < 5; round += 1) {
+        const { conferenceId } = await seed();
+        const base = await conferenceBase(app, conferenceId);
+
+        const [first, second] = await Promise.all([
+          editConference(app, conferenceId, {
+            name: 'Renamed by Ida',
+            startDate: '2026-09-15',
+            endDate: '2026-09-17',
+            base,
+          }),
+          editConference(app, conferenceId, {
+            name: 'Renamed by Björn',
+            startDate: '2026-09-15',
+            endDate: '2026-09-17',
+            base,
+          }),
+        ]);
+
+        expect([first.statusCode, second.statusCode].sort(), `round ${round}`).toEqual([200, 409]);
+
+        const winner = first.statusCode === 200 ? first : second;
+        // Strictly greater than the base both started from - never equal to it.
+        expect(winner.json().updatedAt > base.version, `round ${round}`).toBe(true);
+
+        await client.query('delete from conference');
+      }
+    });
+
+    /**
+     * The property under a **held row lock**, which is the only place it was ever at risk.
+     *
+     * Two earlier versions of this test could not fail. Three sequential edits cannot: each is a
+     * separate round trip, so `now()` and `clock_timestamp()` are indistinguishable. Two concurrent
+     * edits cannot either: the version predicate lets exactly one of them write, and one write
+     * demonstrates nothing about ordering. `now()` is *transaction start* time, so the way to
+     * expose it is to make a transaction start, then wait, then write - which is what waiting for
+     * somebody else's row lock does.
+     *
+     * The sequence: a transaction takes the row lock; a publish begins and blocks on it, capturing
+     * its `now()` **before** the wait; the lock holder then stamps a later `updated_at` and commits;
+     * the publish proceeds. Stamped with `now()` it writes the value it captured before the wait and
+     * the column moves **backwards** - a base read in between compares equal again afterwards, and
+     * the stale save that should be refused is accepted. Stamped through `ADVANCE_UPDATED_AT` it
+     * cannot.
+     */
+    it('advance the conference row version even when the write waited on somebody elses lock', async () => {
+      const app = appWith();
+      const { conferenceId } = await seed('draft');
+
+      const holder = new pg.Client({ connectionString: url });
+      await holder.connect();
+      let publishing: Promise<unknown>;
+      let stamped: string;
+      try {
+        await holder.query('begin');
+        await holder.query('select id from conference where id = $1 for update', [conferenceId]);
+
+        // Blocks on the lock above. Its transaction timestamp is taken here, before the wait.
+        publishing = app.inject({
+          method: 'POST',
+          url: `/api/conferences/${conferenceId}/publish`,
+          headers: as(IDA),
+        });
+
+        // Long enough that the publish is genuinely queued behind the lock rather than racing it,
+        // and long enough that the two timestamps are far apart in microseconds.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const held = await holder.query<{ stamped: string }>(
+          `update conference set updated_at = clock_timestamp() where id = $1
+           returning to_char(updated_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as stamped`,
+          [conferenceId],
+        );
+        stamped = held.rows[0]!.stamped;
+        await holder.query('commit');
+      } finally {
+        await holder.end();
+      }
+
+      const published = (await publishing) as { statusCode: number; body: string };
+      expect(published.statusCode, published.body).toBe(200);
+
+      const after = await client.query<{ version: string }>(
+        `select to_char(updated_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as version
+           from conference where id = $1`,
+        [conferenceId],
+      );
+      // Strictly later than the value that was committed while this write was waiting.
+      expect(after.rows[0]!.version > stamped, `${after.rows[0]!.version} vs ${stamped}`).toBe(
+        true,
+      );
+    });
+
+    /** A malformed version can match no row, so it is refused as a conflict rather than a 500. */
+    it.each([
+      ['not a timestamp at all', 'not-a-timestamp'],
+      // Shape-valid to the digit, and not an instant that exists. It used to pass the regex, reach
+      // `$n::timestamptz` and raise SQLSTATE 22008 - a 500 for a value no row could ever hold.
+      ['a date that is not on the calendar', '2026-13-45T25:61:61.000000Z'],
+      ['31 February, which only a day-count check catches', '2026-02-31T09:00:00.000000Z'],
+    ])('refuse %s as a conflict, not an internal error', async (_name, version) => {
+      const app = appWith();
+      const { conferenceId, sessionId } = await seed();
+
+      const refused = await save(app, conferenceId, sessionId, IDA, {
+        ...KEYNOTE,
+        location: 'Room Z',
+        base: { conferenceState: 'published', version },
+      });
+
+      expect(refused.statusCode, refused.body).toBe(409);
+      expect(refused.json().error.code).toBe('EDIT_VERSION_CONFLICT');
+      expect((await sessionRow(sessionId)).location).toBe('Room A');
+    });
+  });
 });

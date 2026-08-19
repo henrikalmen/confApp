@@ -98,7 +98,7 @@ function serving(payload: OrganizerSchedule): Record<string, Route> {
 
 async function renderPanel(routes: Record<string, Route>, readOnly = false): Promise<void> {
   globalThis.fetch = routeFetch(routes);
-  render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={readOnly} />);
+  render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={readOnly} lifecycleState="draft" />);
   await screen.findByTestId('day-nav');
 }
 
@@ -414,7 +414,9 @@ describe('SchedulePanel', () => {
       };
       const fetchSpy = routeFetch(routes);
       globalThis.fetch = fetchSpy;
-      render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} />);
+      render(
+        <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="draft" />,
+      );
       await screen.findByTestId('day-nav');
 
       await userEvent.click(screen.getByTestId('add-session'));
@@ -510,7 +512,7 @@ describe('SchedulePanel', () => {
         },
       },
     });
-    render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} />);
+    render(<SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="draft" />);
 
     const alert = await screen.findByTestId('schedule-error');
     expect(alert.textContent).toContain('temporarily unable to reach its database');

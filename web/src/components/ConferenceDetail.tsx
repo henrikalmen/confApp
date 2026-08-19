@@ -40,6 +40,28 @@ type Action = 'publish' | 'archive';
  * Shortening the span past a session is refused too, naming the sessions that would be stranded -
  * and because that refusal names both date fields, the message lands beside the inputs it is about.
  */
+/**
+ * Is this the current Conference representation a version conflict carries?
+ *
+ * Checked rather than cast: the payload arrives from the network, and a conflict whose body was not
+ * what this expects must degrade to the plain refusal message rather than render `undefined` at the
+ * organizer.
+ */
+function isConference(value: unknown): value is Conference {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  // Every field the caller goes on to read, not a sample of them - the point of the guard is that
+  // nothing `undefined` reaches the organizer's screen or the next request's base.
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.updatedAt === 'string' &&
+    typeof candidate.startDate === 'string' &&
+    typeof candidate.endDate === 'string' &&
+    typeof candidate.lifecycleState === 'string'
+  );
+}
+
 function detailsOf(conference: Conference): ConferenceDetailsInput {
   return {
     name: conference.name,
@@ -58,6 +80,29 @@ export function ConferenceDetail({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
+  /**
+   * The conference as the server holds it now, after somebody else saved first.
+   *
+   * Held beside the form rather than replacing it: the organizer's typed values stay put and these
+   * are shown next to them, so re-applying the edit is a decision rather than a retype. It is also
+   * the base the next save carries - which is what makes that second save succeed. Without it the
+   * refusal's own instruction ("re-apply it and save again") could never be followed: every retry
+   * would resend the same stale version and be refused identically.
+   */
+  const [conflict, setConflict] = useState<Conference | null>(null);
+  /**
+   * What was typed, and why it was refused, when the form itself is about to go.
+   *
+   * Archiving closes a Conference to edits, so the edit branch below renders nothing at all once
+   * the archived Conference is lifted - and the form was both the only place `saveError` was shown
+   * and the only place the typed values existed. They disappeared together, leaving the organizer
+   * watching the panel quietly turn archived with no statement of what happened to their save. Kept
+   * here from the values `saveDetails` was already handed, so the refusal outlives the form.
+   */
+  const [abandoned, setAbandoned] = useState<{
+    details: ConferenceDetailsInput;
+    message: string;
+  } | null>(null);
 
   const archived = conference.lifecycleState === 'archived';
 
@@ -65,26 +110,63 @@ export function ConferenceDetail({
     setSaving(true);
     setSaveError(null);
     try {
+      // After a conflict the base is the version the server handed back, not the one the form was
+      // opened with - that is precisely what "re-apply onto the current version" means.
+      const basis = conflict ?? conference;
       const updated = await updateConference(conference.id, details, {
-        conferenceState: conference.lifecycleState,
-        version: conference.updatedAt,
+        conferenceState: basis.lifecycleState,
+        version: basis.updatedAt,
       });
       onChanged(updated);
       setEditing(false);
+      setConflict(null);
     } catch (error) {
       /*
        * Held as the ApiError so the form attaches each message to the control it is about. A
        * version conflict and a span that would strand sessions are two different situations with
        * two different next actions, and the server's sentence is the only thing that says which.
        */
-      setSaveError(
+      const refused =
         error instanceof ApiError
           ? error
           : new ApiError(
               'NETWORK_UNREACHABLE',
               'The app could not reach the server. Check your connection and try again.',
-            ),
-      );
+            );
+
+      if (refused.code === 'EDIT_VERSION_CONFLICT' && isConference(refused.current)) {
+        setConflict(refused.current);
+      }
+      /*
+       * A lifecycle transition is not a version conflict - there is no newer version of *this* edit
+       * to re-apply onto - but the editor still has to be able to move. The refusal carries the
+       * Conference as it now stands, so it is lifted to the owner: that re-renders this component
+       * with the new state, and the next save carries a state the server will accept instead of
+       * being refused identically forever.
+       */
+      if (refused.code === 'CONFERENCE_STATE_CHANGED' && isConference(refused.current)) {
+        /*
+         * The stale conflict goes with it. `basis` prefers `conflict` over `conference`, so a
+         * version conflict followed by a publish would keep sending the pre-publish version as the
+         * base forever - every later save refused identically, which is the dead end this branch
+         * exists to close, reached by two steps instead of one.
+         */
+        setConflict(null);
+
+        /*
+         * An archive is where the form goes away, so what it held is captured first. There is no
+         * re-apply for an archived Conference - it accepts no edit at any version - so the typed
+         * values are kept to be read and copied, not to be resubmitted.
+         */
+        if (refused.current.lifecycleState === 'archived') {
+          setAbandoned({ details, message: refused.message });
+          setEditing(false);
+        }
+
+        onChanged(refused.current);
+      }
+
+      setSaveError(refused);
     } finally {
       setSaving(false);
     }
@@ -136,6 +218,34 @@ export function ConferenceDetail({
          * Editing is offered while the conference is not archived - draft and published alike.
          * Archiving makes it read-only, so the control is absent rather than present-and-refused.
          */}
+        {/*
+         * What the server holds now, beside what the organizer typed. Both are on screen at once on
+         * purpose: the edit is re-applied by choice, and a notice that only said "somebody else
+         * changed this" would leave the newer values to be hunted for.
+         */}
+        {conflict !== null && editing ? (
+          <div className="edit-conflict" role="status" data-testid="conference-conflict">
+            <p className="edit-conflict__current">
+              <strong>{conflict.name}</strong> now runs {conflict.startDate} – {conflict.endDate}.
+              Your changes are still below – save again to apply them on top of this version.
+            </p>
+            <p className="edit-conflict__actions">
+              <button
+                className="button button--quiet"
+                type="button"
+                data-testid="conference-conflict-discard"
+                onClick={() => {
+                  setConflict(null);
+                  setEditing(false);
+                  setSaveError(null);
+                }}
+              >
+                Discard my changes
+              </button>
+            </p>
+          </div>
+        ) : null}
+
         {archived ? null : editing ? (
           <ConferenceForm
             onSubmit={saveDetails}
@@ -146,6 +256,7 @@ export function ConferenceDetail({
             onCancel={() => {
               setEditing(false);
               setSaveError(null);
+              setConflict(null);
             }}
           />
         ) : (
@@ -157,6 +268,7 @@ export function ConferenceDetail({
               onClick={() => {
                 setEditing(true);
                 setSaveError(null);
+                setConflict(null);
               }}
             >
               Edit name and dates
@@ -178,6 +290,34 @@ export function ConferenceDetail({
             </dd>
           </div>
         </dl>
+
+        {/*
+         * The refusal that outlived the form, with what was typed beside it. Rendered here rather
+         * than inside the edit branch precisely because that branch is gone by now: an archive
+         * landing under an in-flight edit is the one refusal whose form does not survive to show it.
+         */}
+        {abandoned !== null ? (
+          <div className="alert" role="alert" data-testid="conference-edit-abandoned">
+            <p>{abandoned.message}</p>
+            <p className="edit-conflict__current">
+              Your unsaved changes were: <strong>{abandoned.details.name}</strong>,{' '}
+              {abandoned.details.startDate} – {abandoned.details.endDate}
+            </p>
+            <p className="edit-conflict__actions">
+              <button
+                className="button button--quiet"
+                type="button"
+                data-testid="conference-edit-abandoned-dismiss"
+                onClick={() => {
+                  setAbandoned(null);
+                  setSaveError(null);
+                }}
+              >
+                Dismiss
+              </button>
+            </p>
+          </div>
+        ) : null}
 
         {archived ? (
           <p className="panel__hint" data-testid="archived-note">
@@ -238,7 +378,11 @@ export function ConferenceDetail({
        * order the work happens in: a conference is created, its schedule is composed, and only then
        * can it be published – the Publish button above is refused until this panel holds a session.
        */}
-      <SchedulePanel conferenceId={conference.id} readOnly={archived} />
+      <SchedulePanel
+        conferenceId={conference.id}
+        readOnly={archived}
+        lifecycleState={conference.lifecycleState}
+      />
 
       {/*
        * Members and roles come last because that is the order the work happens in: the schedule has

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -96,11 +96,19 @@ function schedule(
 interface Route {
   status: number;
   body: unknown;
+  /** When present, the response waits on this before resolving. */
+  hold?: Promise<void>;
 }
 
 function routeFetch(routes: Record<string, Route | (() => Route)>): typeof fetch {
-  return vi.fn(async (input: unknown) => {
+  return vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
+
+    /*
+     * The signal is honoured, not discarded. A mock that ignored it could not tell a component that
+     * aborts its in-flight requests from one that does not - which is exactly the guard under test.
+     */
+    if (init?.signal?.aborted === true) throw new DOMException('Aborted', 'AbortError');
     // Longest match first, so '/schedule/watermark' is not captured by '/schedule'.
     const match = Object.keys(routes)
       .sort((a, b) => b.length - a.length)
@@ -110,6 +118,18 @@ function routeFetch(routes: Record<string, Route | (() => Route)>): typeof fetch
     const entry = routes[match]!;
     const route = typeof entry === 'function' ? entry() : entry;
     if (route.status >= 400 && route.body === undefined) throw new Error('network down');
+
+    // A route may hold its response open, so a test can keep a request in flight across an action
+    // and release it afterwards.
+    if (route.hold !== undefined) {
+      await new Promise<void>((resolve, reject) => {
+        route.hold!.then(resolve, reject);
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+        );
+      });
+    }
+
     return {
       ok: route.status < 400,
       status: route.status,
@@ -484,6 +504,216 @@ describe('switching to another conference', () => {
   });
 });
 
+// ---------- regression: a poll still in flight when the conference changes ----------
+
+describe('a poll outstanding across a conference switch', () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+
+  const TWO = {
+    conferences: [
+      ONE_CONFERENCE.conferences[0]!,
+      {
+        id: OTHER,
+        name: 'Product Days',
+        startDate: '2026-11-02',
+        endDate: '2026-11-03',
+        state: 'published',
+      },
+    ],
+    defaultConferenceId: KICKOFF,
+  };
+
+  /**
+   * Regression, and this time the request really is in flight across the switch.
+   *
+   * The first version of this test resolved everything before switching, so neither the abort nor
+   * any of the three post-await guards was reached - it passed with the guards deleted. Here the
+   * first conference's schedule refetch is held open, the attendee switches, and only then is it
+   * released: the exact interleaving where a slow poll used to paint the conference just left over
+   * the one now on screen, and diff two different conferences into a nonsense banner.
+   */
+  it('never paints the previous conference over the new one', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let scheduleReads = 0;
+
+    vi.stubGlobal(
+      'fetch',
+      routeFetch({
+        '/me/conferences': { status: 200, body: TWO },
+        [`/conferences/${KICKOFF}/schedule/watermark`]: () => watermark(SECOND_WATERMARK),
+        /*
+         * The first call is the initial load and resolves at once; the second is the poll's refetch
+         * and is held open, so the switch below happens with that request genuinely in flight.
+         */
+        [`/conferences/${KICKOFF}/schedule`]: () => {
+          scheduleReads += 1;
+          return scheduleReads === 1
+            ? { status: 200, body: schedule([KEYNOTE, RETRO]) }
+            : { status: 200, body: schedule([KEYNOTE, RETRO], SECOND_WATERMARK), hold: held };
+        },
+        [`/conferences/${OTHER}/schedule/watermark`]: watermark(FIRST_WATERMARK),
+        [`/conferences/${OTHER}/schedule`]: {
+          status: 200,
+          body: schedule([session({ id: 'other-open', title: 'Product Kickoff' })]),
+        },
+      }),
+    );
+
+    render(<AttendeeSchedulePanel />);
+    await vi.waitFor(() => expect(screen.queryByTestId('attendee-session-list')).not.toBeNull());
+
+    // Start the poll. Its watermark resolves, its schedule refetch blocks on `held`.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    vi.useRealTimers();
+    await userEvent.selectOptions(screen.getByTestId('attendee-conference-picker'), OTHER);
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('attendee-session-other-open')).not.toBeNull(),
+    );
+
+    /*
+     * Let the stale poll finish, and flush only the microtasks its resolution schedules - not a
+     * further poll interval. Advancing a full tick would let the *new* conference's poll repaint the
+     * correct schedule and mask a stale paint that did happen, which is how the first two versions
+     * of this test passed against the very defect they name.
+     */
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(screen.queryByTestId('attendee-session-other-open')).not.toBeNull();
+    expect(screen.queryByTestId('attendee-session-keynote')).toBeNull();
+    expect(screen.queryByTestId('attendee-session-retro')).toBeNull();
+
+    // And no banner diffed across two different conferences.
+    const banner = screen.queryByTestId('schedule-change-banner');
+    if (banner !== null) {
+      expect(banner.textContent).not.toContain('Retrospective');
+      expect(banner.textContent).not.toContain('Product Kickoff');
+    }
+  });
+});
+
+// ---------- TI02 / TI03 Verify: the same reading in every timezone ----------
+
+/**
+ * The behavioural half of SC6 and SC7, which the source grep below cannot reach.
+ *
+ * That grep proves the refresh path *contains* no conversion. It cannot prove the rendered output
+ * is timezone-invariant: a conversion introduced through S06's component tree, a formatter added to
+ * a shared helper, or a `day` routed through anything offset-aware would all satisfy it and still
+ * show a session at 02:00 to an attendee whose phone is set to Denver. TI02 and TI03 both ask for
+ * the same evidence instead - the rendered text, read under two client timezones sixteen hours
+ * apart, byte for byte identical.
+ *
+ * UTC-7 and UTC+9 are the FIS's own values, and they straddle the venue: 09:00 in Stockholm is the
+ * previous evening in Denver and the same evening in Tokyo, so a date that shifted would shift in
+ * opposite directions and a time that shifted could not agree with either.
+ */
+describe('the refreshed schedule read from a device in another timezone', () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ;
+  });
+
+  interface Reading {
+    sessions: string;
+    day: string;
+    staleness: string;
+    banner: string;
+  }
+
+  /**
+   * One full pass of the story's own flow - open, an Admin edit lands, the poll picks it up, time
+   * passes - captured as text. Deliberately the whole flow rather than one component: the claim is
+   * about what the attendee ends up reading, not about which function formats it.
+   */
+  async function readUnder(zone: string): Promise<Reading> {
+    process.env.TZ = zone;
+    vi.setSystemTime(new Date(SYNC_INSTANT_MILLIS));
+
+    let current = FIRST_WATERMARK;
+    let body = schedule([KEYNOTE, RETRO]);
+
+    vi.stubGlobal(
+      'fetch',
+      routeFetch({
+        '/me/conferences': { status: 200, body: ONE_CONFERENCE },
+        [`/conferences/${KICKOFF}/schedule/watermark`]: () => watermark(current),
+        [`/conferences/${KICKOFF}/schedule`]: () => ({ status: 200, body }),
+      }),
+    );
+
+    await openSchedule();
+
+    // The Admin moves the keynote across the hour boundary and changes the room.
+    body = schedule(
+      [session({ id: 'keynote', startTime: '09:30', endTime: '11:00', location: 'Room B' }), RETRO],
+      SECOND_WATERMARK,
+    );
+    current = SECOND_WATERMARK;
+
+    await waitOnePoll();
+    /*
+     * Waited on the *location*, deliberately. Waiting on the new time would make this wait the
+     * assertion: a conversion would fail it here, inside the helper, before either reading was
+     * captured - and the comparison below would never run at all, which is a comparison that cannot
+     * fail. The room is a plain string no formatter touches, so it says only "the poll landed".
+     */
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('attendee-session-keynote').textContent).toContain('Room B'),
+    );
+
+    // Four minutes on from the watermark the refresh carried, so the age is a real elapsed
+    // duration rather than the "just now" every reading would share by default.
+    vi.setSystemTime(new Date(SYNC_INSTANT_MILLIS + 4 * 60_000));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const reading: Reading = {
+      sessions: screen.getByTestId('attendee-session-list').textContent ?? '',
+      day: screen.getByTestId('attendee-day-2026-09-15').textContent ?? '',
+      staleness: screen.getByTestId('schedule-staleness').textContent ?? '',
+      banner: screen.queryByTestId('schedule-change-banner')?.textContent ?? '',
+    };
+
+    cleanup();
+    return reading;
+  }
+
+  it('reads identically at UTC-7 and UTC+9, times, day and elapsed age alike', async () => {
+    const denver = await readUnder('America/Denver');
+    const tokyo = await readUnder('Asia/Tokyo');
+
+    // The claim itself, first: sixteen hours of client offset change nothing that is read.
+    expect(tokyo.sessions).toBe(denver.sessions);
+    expect(tokyo.day).toBe(denver.day);
+    expect(tokyo.staleness).toBe(denver.staleness);
+    expect(tokyo.banner).toBe(denver.banner);
+
+    /*
+     * And the fixture actually said something, in both readings. Two identical empty strings would
+     * satisfy every comparison above, and so would a conversion that shifted both readings by the
+     * same fixed amount - the guard is what separates "agrees" from "agrees on the right value".
+     */
+    for (const [zone, reading] of [
+      ['denver', denver],
+      ['tokyo', tokyo],
+    ] as const) {
+      expect(reading.sessions, zone).toContain('09:30–11:00');
+      expect(reading.sessions, zone).toContain('Room B');
+      expect(reading.day, zone).toContain('2026-09-15');
+      expect(reading.staleness, zone).toMatch(/just now|minutes? ago/);
+      expect(reading.banner, zone).not.toBe('');
+    }
+  });
+});
+
 // ---------- the structural half: no push, no timezone conversion ----------
 
 describe('the refresh path', () => {
@@ -492,6 +722,14 @@ describe('the refresh path', () => {
     'attendee/ScheduleChangeBanner.tsx',
     'attendee/schedule-diff.ts',
     'attendee/staleness.ts',
+    /*
+     * The two that render the refreshed envelope, and the reason the behavioural test above exists.
+     * They were missing from this list, so a `toLocaleTimeString` in `timeRange` - the function that
+     * formats every Session time an Attendee reads - passed this guard untouched. A file list is
+     * only as good as its longest omission.
+     */
+    'attendee/ScheduleView.tsx',
+    'attendee/schedule-view-model.ts',
   ].map((relative) => ({
     relative,
     code: readFileSync(join(webSrc, relative), 'utf8')

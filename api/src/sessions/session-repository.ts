@@ -99,13 +99,26 @@ export async function sessionExistsInConference(
   return rows[0] !== undefined;
 }
 
-function sessionNotFound(): AppError {
-  return new AppError(
-    ERROR_CODES.SESSION_NOT_FOUND,
-    404,
-    'That session no longer exists in this conference.',
-  );
-}
+/**
+ * What a version-guarded write did (S09 C1).
+ *
+ * Three outcomes, kept apart because they are three different answers to the caller: the write
+ * landed; the row moved under it and here is what it looks like now; or the row is gone. Returning
+ * a result rather than throwing keeps the error envelope and the wire shape in the route, where the
+ * rest of this API's refusals are built.
+ */
+export type GuardedWrite =
+  | { outcome: 'saved'; session: Session }
+  | { outcome: 'conflict'; current: Session }
+  | { outcome: 'missing' }
+  /**
+   * The **Conference** is gone, not the Session.
+   *
+   * Kept apart from `missing` because the two produce different sentences. Answering "that session
+   * no longer exists in this conference" to an Admin whose whole Conference was removed under them
+   * sends them looking for a Session, and hides the fact that there is nothing left to look in.
+   */
+  | { outcome: 'conference-missing' };
 
 export interface SessionRepository {
   listForConference(conferenceId: string): Promise<Session[]>;
@@ -127,7 +140,22 @@ export interface SessionRepository {
    */
   scheduleWatermark(conferenceId: string): Promise<string | null>;
   create(conferenceId: string, details: SessionDetails): Promise<Session>;
-  update(conferenceId: string, sessionId: string, details: SessionDetails): Promise<Session>;
+  /**
+   * Edits a Session **only if** its row version still equals `expectedVersion`.
+   *
+   * The version predicate is part of the UPDATE rather than a check the caller makes first. Reading
+   * the row, comparing in JavaScript and then writing is three statements with no lock between
+   * them: two concurrent saves both read the same version, both compare equal, and both write - so
+   * the second silently overwrites the first while being told it succeeded. That is last-write-wins
+   * reappearing inside the mechanism built to prevent it, and it is reachable in exactly the case
+   * this story is named for.
+   */
+  update(
+    conferenceId: string,
+    sessionId: string,
+    details: SessionDetails,
+    expectedVersion: string,
+  ): Promise<GuardedWrite>;
   /**
    * Removes a Session, refusing to remove the last one from a published Conference.
    *
@@ -136,7 +164,7 @@ export interface SessionRepository {
    * well as a publish, and checking then deleting in two round trips would let two concurrent
    * requests each see two Sessions and each remove one.
    */
-  remove(conferenceId: string, sessionId: string): Promise<void>;
+  remove(conferenceId: string, sessionId: string, expectedVersion: string): Promise<GuardedWrite>;
 }
 
 export function createSessionRepository(db: Database): SessionRepository {
@@ -203,12 +231,19 @@ export function createSessionRepository(db: Database): SessionRepository {
       conferenceId: string,
       sessionId: string,
       details: SessionDetails,
-    ): Promise<Session> {
+      expectedVersion: string,
+    ): Promise<GuardedWrite> {
+      /*
+       * `last_updated_at = $10` is the whole concurrency guarantee, and it is here rather than in
+       * the caller because only the database can compare and write in one indivisible step. The
+       * comparison is against the exact serialized value the editor was given - the column is
+       * formatted at microsecond precision on the way out precisely so this equality is exact.
+       */
       const rows = await db.query<SessionRow>(
         `update sessions
             set title = $3, description = $4, kind = $5, day = $6,
                 start_time = $7, end_time = $8, location = $9
-          where id = $2 and conference_id = $1
+          where id = $2 and conference_id = $1 and last_updated_at = $10::timestamptz
          returning ${COLUMNS}`,
         [
           conferenceId,
@@ -220,16 +255,31 @@ export function createSessionRepository(db: Database): SessionRepository {
           details.startTime,
           details.endTime,
           details.location,
+          expectedVersion,
         ],
       );
 
       const row = rows[0];
-      if (row === undefined) throw sessionNotFound();
-      return toSession(row);
+      if (row !== undefined) return { outcome: 'saved', session: toSession(row) };
+
+      // No row matched: either the version moved or the Session is gone. One further read tells
+      // the caller which, and carries the current values the editor re-applies onto.
+      const current = await db.query<SessionRow>(
+        `select ${COLUMNS} from sessions where id = $2 and conference_id = $1`,
+        [conferenceId, sessionId],
+      );
+      const existing = current[0];
+      return existing === undefined
+        ? { outcome: 'missing' }
+        : { outcome: 'conflict', current: toSession(existing) };
     },
 
-    async remove(conferenceId: string, sessionId: string): Promise<void> {
-      await db.transaction(async (tx) => {
+    async remove(
+      conferenceId: string,
+      sessionId: string,
+      expectedVersion: string,
+    ): Promise<GuardedWrite> {
+      return db.transaction<GuardedWrite>(async (tx) => {
         /*
          * The Conference row is locked first, and every delete against this Conference queues
          * behind that lock. Without it two Admins each deleting one of the last two Sessions
@@ -241,7 +291,7 @@ export function createSessionRepository(db: Database): SessionRepository {
           [conferenceId],
         );
         const conference = conferences[0];
-        if (conference === undefined) throw sessionNotFound();
+        if (conference === undefined) return { outcome: 'conference-missing' };
 
         /*
          * "Does this session exist" is answered before "may the last one be removed", so a
@@ -250,11 +300,24 @@ export function createSessionRepository(db: Database): SessionRepository {
          * a session id that never existed — a refusal about a session other than the one they
          * asked about, and advice ("add another session first") that would not help them.
          */
-        const existing = await tx.query<{ id: string }>(
-          'select id from sessions where id = $2 and conference_id = $1',
+        const existing = await tx.query<SessionRow>(
+          `select ${COLUMNS} from sessions where id = $2 and conference_id = $1`,
           [conferenceId, sessionId],
         );
-        if (existing[0] === undefined) throw sessionNotFound();
+        const found = existing[0];
+        if (found === undefined) return { outcome: 'missing' };
+
+        /*
+         * The same version guarantee the edit path has. A delete is a write like any other: the
+         * Session may have been edited since the Admin last looked at it, and removing it on a view
+         * that stale is the silent overwrite in its most destructive form.
+         *
+         * Compared inside the transaction that already holds the conference row lock, so nothing
+         * can move between this check and the delete below.
+         */
+        if (found.last_updated_at !== expectedVersion) {
+          return { outcome: 'conflict', current: toSession(found) };
+        }
 
         const counts = await tx.query<{ count: number }>(
           'select count(*)::int as count from sessions where conference_id = $1',
@@ -276,7 +339,8 @@ export function createSessionRepository(db: Database): SessionRepository {
           'delete from sessions where id = $2 and conference_id = $1 returning id',
           [conferenceId, sessionId],
         );
-        if (deleted[0] === undefined) throw sessionNotFound();
+        if (deleted[0] === undefined) return { outcome: 'missing' };
+        return { outcome: 'saved', session: toSession(found) };
       });
     },
   };

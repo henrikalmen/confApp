@@ -440,3 +440,66 @@ for (const viewport of VIEWPORTS) {
     });
   });
 }
+
+/**
+ * The refusal that outlives its form, at all three widths.
+ *
+ * An archive landing under an in-flight edit closes the form - an archived Conference accepts no
+ * edit - so the server's sentence and the organizer's typed values are re-rendered outside it. Both
+ * are long: a full explanatory sentence, and a conference name the organizer chose. On a 375px
+ * phone that is exactly the text that pushes a panel sideways, and this is the one surface in the
+ * story with no form around it to constrain the line length.
+ */
+for (const viewport of VIEWPORTS) {
+  test(`the archived-mid-edit refusal stays legible at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await stubOrganizerApi(page);
+
+    await page.route(`**/api/conferences/${CONFERENCE_ID}`, (route) =>
+      route.request().method() === 'PATCH'
+        ? route.fulfill({
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              error: {
+                code: 'CONFERENCE_STATE_CHANGED',
+                message:
+                  'This conference was archived while you were editing, so your change was not ' +
+                  'saved. It is now archived. Reload it to see where that leaves your edit.',
+                current: {
+                  id: CONFERENCE_ID,
+                  name: 'Autumn Offsite',
+                  startDate: '2026-09-15',
+                  endDate: '2026-09-16',
+                  lifecycleState: 'archived',
+                  updatedAt: '2026-09-15T07:41:00.000000Z',
+                },
+              },
+            }),
+          })
+        : route.fallback(),
+    );
+
+    await page.goto('/');
+    await page.getByText('Autumn Offsite').click();
+    await expect(page.getByTestId('schedule')).toBeVisible();
+
+    await page.getByTestId('edit-conference').click();
+    const name = page.getByLabel('Conference name');
+    await name.fill('Autumn Offsite: strategy, retrospective and planning days');
+    await page.getByRole('button', { name: /save changes/i }).click();
+
+    const notice = page.getByTestId('conference-edit-abandoned');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('archived');
+    await expect(notice).toContainText('strategy, retrospective and planning days');
+
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await assertWithinViewport(page, 'conference-edit-abandoned', viewport.width);
+
+    await page.screenshot({
+      path: `screenshots/live-editing-archived-mid-edit-${viewport.name}.png`,
+      fullPage: true,
+    });
+  });
+}

@@ -23,6 +23,9 @@ const db = createDatabase(config.databaseUrl, {
   error(detail, message) {
     logHolder.logger?.error(detail, message);
   },
+  warn(detail, message) {
+    logHolder.logger?.warn(detail, message);
+  },
 });
 
 const discovery = createDiscovery({ discoveryUrl: authConfig.discoveryUrl });

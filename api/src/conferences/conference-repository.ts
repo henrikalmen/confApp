@@ -99,6 +99,23 @@ function columnList(prefix = ''): string {
 
 const COLUMNS = columnList();
 
+/**
+ * How every writer of this row advances `updated_at` – one fragment, because four of them do.
+ *
+ * `clock_timestamp()` guarded by `GREATEST(…, updated_at + 1µs)`, never `now()`. `now()` is
+ * *transaction start* time, captured before the statement blocks on a row lock, so a transaction
+ * that waits for a lock stamps a value from before the write it waited on and moves the column
+ * **backwards**. A row version that can go backwards is not a version: a base read before the
+ * regression compares equal again afterwards, and the stale save it should have refused is accepted.
+ *
+ * Written once rather than in each statement because the four writers drifting apart is exactly how
+ * this got here – `updateDetails` was guarded and the other three were left on `now()`, so the
+ * property held on one path and not on the row. S04 solves the same problem for `sessions` with a
+ * trigger, which is stronger still; see the deferred note in the S09 review report.
+ */
+const ADVANCE_UPDATED_AT =
+  "updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')";
+
 /** PostgreSQL's unique-violation SQLSTATE, and the constraint a minted code can collide with. */
 const UNIQUE_VIOLATION = '23505';
 const JOIN_CODE_UNIQUE = 'conference_join_code_unique';
@@ -128,6 +145,15 @@ function toConference(row: ConferenceRow): Conference {
   };
 }
 
+/**
+ * What a version-guarded Conference write did (S09 C1) - the same three outcomes the Session write
+ * has, for the same reason: the comparison belongs in the write statement, not ahead of it.
+ */
+export type GuardedConferenceWrite =
+  | { outcome: 'saved'; conference: Conference }
+  | { outcome: 'conflict'; current: Conference }
+  | { outcome: 'missing' };
+
 export interface ConferenceRepository {
   create(details: ConferenceDetails, createdBySub: string): Promise<Conference>;
   findById(conferenceId: string): Promise<Conference | null>;
@@ -152,7 +178,18 @@ export interface ConferenceRepository {
    * the composition view instead.
    */
   listJoinedAndReadable(sub: string): Promise<AttendeeConference[]>;
-  updateDetails(conferenceId: string, details: ConferenceDetails): Promise<Conference>;
+  /**
+   * Edits name and dates **only if** `updated_at` still equals `expectedVersion`.
+   *
+   * The predicate is in the UPDATE rather than in a check the caller makes first: reading the row,
+   * comparing in JavaScript and then writing leaves a window in which two concurrent saves both
+   * compare equal and both write, so the second silently overwrites the first.
+   */
+  updateDetails(
+    conferenceId: string,
+    details: ConferenceDetails,
+    expectedVersion: string,
+  ): Promise<GuardedConferenceWrite>;
   updateLifecycleState(conferenceId: string, state: LifecycleState): Promise<Conference>;
   /** The draft → published transition, which is also where the Conference's code is minted. */
   publish(conferenceId: string): Promise<Conference>;
@@ -331,29 +368,49 @@ export function createConferenceRepository(
       });
     },
 
-    /** A write to the Conference row, so `updated_at` moves with it. */
-    async updateDetails(conferenceId: string, details: ConferenceDetails): Promise<Conference> {
+    /**
+     * A write to the Conference row, so `updated_at` moves with it - through `ADVANCE_UPDATED_AT`,
+     * which is what makes the version strictly increasing per write and matches the guarantee S04's
+     * trigger already gives `session.last_updated_at`.
+     */
+    async updateDetails(
+      conferenceId: string,
+      details: ConferenceDetails,
+      expectedVersion: string,
+    ): Promise<GuardedConferenceWrite> {
       const rows = await db.query<ConferenceRow>(
         `update conference
-            set name = $2, start_date = $3, end_date = $4, updated_at = now()
-          where id = $1
+            set name = $2, start_date = $3, end_date = $4, ${ADVANCE_UPDATED_AT}
+          where id = $1 and updated_at = $5::timestamptz
          returning ${COLUMNS}`,
-        [conferenceId, details.name, details.startDate, details.endDate],
+        [conferenceId, details.name, details.startDate, details.endDate, expectedVersion],
       );
 
       const row = rows[0];
-      if (row === undefined) throw new Error(`conference ${conferenceId} vanished mid-update.`);
-      return toConference(row);
+      if (row !== undefined) return { outcome: 'saved', conference: toConference(row) };
+
+      // No row matched: either the version moved or the Conference is gone. One further read says
+      // which, and carries the current values the editor re-applies onto.
+      const current = await db.query<ConferenceRow>(
+        `select ${COLUMNS} from conference where id = $1`,
+        [conferenceId],
+      );
+      const existing = current[0];
+      return existing === undefined
+        ? { outcome: 'missing' }
+        : { outcome: 'conflict', current: toConference(existing) };
     },
 
     /**
-     * Also a write to the Conference row, so `updated_at` moves here too. Only a Session write
-     * must leave it alone, and Sessions are S04's – this column is never touched from there.
+     * Also a write to the Conference row, so `updated_at` moves here too - by the same guarded
+     * expression as every other writer, because the column's monotonicity is a property of the row
+     * and not of one path to it. Only a Session write must leave it alone, and Sessions are S04's –
+     * this column is never touched from there.
      */
     async updateLifecycleState(conferenceId: string, state: LifecycleState): Promise<Conference> {
       const rows = await db.query<ConferenceRow>(
         `update conference
-            set lifecycle_state = $2, updated_at = now()
+            set lifecycle_state = $2, ${ADVANCE_UPDATED_AT}
           where id = $1
          returning ${COLUMNS}`,
         [conferenceId, state],
@@ -381,7 +438,7 @@ export function createConferenceRepository(
       return withMintedCode(
         conferenceId,
         `update conference
-            set lifecycle_state = 'published', join_code = $2, updated_at = now()
+            set lifecycle_state = 'published', join_code = $2, ${ADVANCE_UPDATED_AT}
           where id = $1 and lifecycle_state = 'draft'
          returning ${COLUMNS}`,
       );
@@ -396,7 +453,8 @@ export function createConferenceRepository(
      * existing Membership is untouched by construction – there is no delete in this statement.
      *
      * `updated_at` moves because this is a write to the Conference row, which is the whole rule for
-     * that column (`plan.json` → sharedDecisions → "three fields, four consumers", field 3). The
+     * that column (`plan.json` → sharedDecisions → "three fields, four consumers", field 3) - and it
+     * moves through `ADVANCE_UPDATED_AT` like every other writer of the row. The
      * schedule watermark does not, and cannot: S04's trigger fires only on the Conference's own
      * name, dates and lifecycle state, and a code is none of those.
      */
@@ -404,7 +462,7 @@ export function createConferenceRepository(
       return withMintedCode(
         conferenceId,
         `update conference
-            set join_code = $2, updated_at = now()
+            set join_code = $2, ${ADVANCE_UPDATED_AT}
           where id = $1
          returning ${COLUMNS}`,
       );
