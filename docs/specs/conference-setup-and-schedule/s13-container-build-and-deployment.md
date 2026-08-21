@@ -243,18 +243,34 @@ url    | https://docs.docker.com/engine/storage/volumes/                  | name
 - **Lower severity, recorded alongside it: `CACHE_NAME` is a constant while Vite's asset names are fingerprinted**, so Cache Storage accumulates one `/assets/*` entry set per deployment. Bounded and harmless for an under-100-employee conference, but versioning `CACHE_NAME` per build would evict superseded sets.
 - **Suggested verification.** Assert the deployed container returns a no-cache-family `Cache-Control` on `/sw.js`, in the same place this story already asserts `/config.js` is `no-store`.
 
-
-## Deferred Decisions
-
-#### DEFERRED DECISION: container-build-toolchain
+#### DECISION NOTE: container-build-toolchain
 
 Decision-Key: container-build-toolchain
 Altitude: fis-local
 Affected surface: Implementation Plan → TI01 (image build and publication), and every downstream task that depends on published digests (TI02, TI04–TI11).
-Decision: Deferred as a signed-off execution hold – the container toolchain is not restored mid-run. Intended route for the next execution run: install Docker Engine inside the existing Ubuntu WSL2 distro (already Running), which supplies a builder and daemon without reinstalling Docker Desktop and keeps S01's `api/Dockerfile`, `web/Dockerfile` and `docker-compose.yml` usable unchanged. Hold clears when an image builder is available and `docker build` succeeds against both S01 Dockerfiles.
-Rationale: No container image builder exists on the execution machine, so TI01 cannot run and every downstream task is unreachable; the owner signed off on deferring rather than restoring the toolchain mid-run.
-Evidence: Verified 2026-08-20 – `docker.exe` absent from Program Files; the `docker-desktop` WSL distro present but Stopped; no `podman`, `nerdctl` or `buildah` on PATH; only leftover data directories remain at `C:\ProgramData\DockerDesktop` and `%LOCALAPPDATA%\Docker\wsl`.
-Signed-off-by: Henrik Almen (owner) – 2026-08-20
+Decision: **Resolved 2026-08-21 – hold cleared and never validly blocking.** The stated clearing condition ("an image builder is available and `docker build` succeeds against both S01 Dockerfiles") is met: Docker Engine 29.1.3 in the `Ubuntu` WSL2 distro built `api/Dockerfile` and `web/Dockerfile` successfully, twice each with `--no-cache`. No route change was needed – the "install Docker Engine in the Ubuntu WSL2 distro" intent recorded on 2026-08-20 described something already present. This supersedes the deferred block of the same key recorded on 2026-08-20; TI01 remains unchecked because only the reproducibility half of its Verify clause is earned (see the run block below).
+Rationale: The hold rested on an environment claim that was false when it was written, so the blocking condition never actually held. Clearing it unblocks TI01's build half only – the publish half stays blocked behind the still-open `registry-and-credentials` and `deploy-target-platform` holds, so this closes no Pending decision in `docs/DECISIONS.md`.
+Evidence: **Original evidence was wrong and is corrected here (2026-08-21).** It described only the Windows side – `docker.exe` absent from Program Files, the `docker-desktop` WSL distro Stopped, no `podman`/`nerdctl`/`buildah` on the Windows PATH – and never checked the `Ubuntu` WSL2 distro, where Docker Engine 29.1.3 was running the whole time with the confApp composed stack up (`confapp-db-1` since 2026-08-16, `confapp-web-1` and `confapp-api-1` since 2026-08-17). No image builder was ever missing.
+
+### Run: 2026-08-21 11:15 UTC – observations
+
+#### TI01 REPRODUCIBILITY EVIDENCE (PARTIAL; PUBLISH HALF NOT ATTEMPTED)
+
+**TI01 is NOT complete and its checkbox stays unchecked.** Its Verify clause has two halves; only the first was earned. The second – "the digest the platform reports running matches the digest recorded for that commit" – requires a registry and a running platform, neither of which exists yet (`registry-and-credentials` and `deploy-target-platform` remain deferred).
+
+**Reproducibility: proven.** The same clean checkout at commit `ca09d8f` was built twice per image with `--no-cache`, and application content compared by per-file SHA-256 rather than by image digest – digests differ on metadata alone even when content is identical, which is why TI01's clause is worded around content. Results: `api/Dockerfile` produced **3744 files with identical paths and identical content hashes** across both builds; `web/Dockerfile` produced **10 files identical** across both (the served asset tree plus `default.conf.template`, `40-runtime-config.sh` and `05-resolvers.envsh`). Image IDs differed between builds in both cases, as expected.
+
+**Both Dockerfiles build unmodified**, satisfying the `container-build-toolchain` hold's clearing condition. Neither was edited.
+
+#### NOTICED BUT NOT TOUCHING
+
+- **The legacy builder is in use, not BuildKit.** `docker build` emits "the legacy builder is deprecated"; `buildx` is not installed. Install `docker-buildx` before the publish half of TI01 is attempted, and record which builder produced the digests that get published – a digest produced by the legacy builder is not necessarily reproducible against one produced by BuildKit.
+- **The `# syntax=docker/dockerfile:1` directive is inert in both Dockerfiles, and not only because of the legacy builder.** Verified 2026-08-21: in both `api/Dockerfile` and `web/Dockerfile` the directive sits on **line 4**, preceded by three comment lines. A parser directive is only honoured when it precedes all other comments, blank lines and instructions, so once BuildKit is installed the directive will still be read as an ordinary comment unless it is moved to line 1. Installing `buildx` alone will therefore not activate it. Nothing currently depends on it, but any future cache-mount or multi-platform build will. Not moved here – the Dockerfiles are a TI01/TI02 surface and this run was scoped to evidence gathering.
+- **The build context grew by S11.** The context sent to the daemon is 18MB, of which roughly 3.7MB is `web/android` (~1.9MB) and `web/ios` (~1.8MB), created by S11 TI01. `web/Dockerfile` does `COPY web web`, so both native trees enter the build stage; they cannot reach the shipped image because the runtime stage copies only `web/dist`, so this is build cost rather than image bloat. The repository `.dockerignore` exists and lists neither path; adding `web/android` and `web/ios` to it would trim the context. Not done here – `.dockerignore` is a TI01/TI02 surface.
+- **`confapp-api-1` has been crash-looping since 2026-08-17, and it explains S09's open note.** The container restarts continuously with `WildcardAudienceError: GOOGLE_AUDIENCE_ALLOWLIST entry "<paste client ID>" is a wildcard or pattern`. The repository `.env` still holds S02's literal placeholder. **This is S02's startup guard working exactly as specified**, not a defect – it refuses to boot rather than accept a non-literal entry that would widen the audience allow-list. It also resolves the S09 observation that "the SPA container's proxy returns 502 locally while the API answers 200 on 8080": the proxy is not misconfigured, it has no upstream, and the API answering on 8080 was a separately-run dev process rather than the container. Supplying a real web client ID in `.env` should restore the three `shell.spec.ts` signed-in visual cases S09 recorded as unverifiable. Not fixed here: a real OAuth client ID is owner-supplied configuration and must not be committed.
+
+
+## Deferred Decisions
 
 #### DEFERRED DECISION: deploy-target-platform
 
