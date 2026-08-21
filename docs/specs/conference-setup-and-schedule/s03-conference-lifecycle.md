@@ -42,46 +42,46 @@
 
 ## Acceptance Scenarios
 
-- [ ] **S01 [OC01,OC04] [TI01,TI04,TI05,TI06,TI11] A signed-in employee creates a Conference and is both a member of it and its Admin**
+- [x] **S01 [OC01,OC04] [TI01,TI04,TI05,TI06,TI11] A signed-in employee creates a Conference and is both a member of it and its Admin**
   - **Given** Ida is signed in with her company Google account and is a member of no Conference
   - **When** she creates a Conference named "Autumn Kickoff 2026" running 2026-09-14 to 2026-09-16
   - **Then** the Conference is persisted in state **draft**, Ida holds **both** a Membership and an Admin Role Assignment for it, each keyed on her `sub`, and it appears in her Conference list marked as a draft
   - **And** no other signed-in employee sees that draft Conference in their list
   - **And** the Conference read carries an `updatedAt` row version that a later edit can be based on
 
-- [ ] **S02 [OC01] [TI03,TI05,TI11] Invalid Conference details are refused with the permitted range stated**
+- [x] **S02 [OC01] [TI03,TI05,TI11] Invalid Conference details are refused with the permitted range stated**
   - **Given** Ida is signed in
   - **When** she submits a Conference spanning 2026-09-14 to 2026-09-18 (five days), and separately one whose name is blank after trimming
   - **Then** each attempt is refused, nothing is persisted, and the response carries a displayable message identifying the offending field – the span refusal states the permitted 1–4 day range, the name refusal states that a name is required
   - **And** a 4-day span and a 120-character name are both accepted, while a 121-character name is refused
 
-- [ ] **S03 [OC02] [TI02,TI08] Publishing is gated on the Conference having at least one Session**
+- [x] **S03 [OC02] [TI02,TI08] Publishing is gated on the Conference having at least one Session**
   - **Given** "Autumn Kickoff 2026" is in draft and its schedule gate reports zero Sessions
   - **When** Ida publishes it
   - **Then** the transition is refused, the Conference stays in draft, and the message explains that a schedule with at least one Session is required
   - **And** when the schedule gate reports one Session, the same action moves the Conference to **published**
 
-- [ ] **S04 [OC02] [TI02] Lifecycle transitions run one way only**
+- [x] **S04 [OC02] [TI02] Lifecycle transitions run one way only**
   - **Given** "Autumn Kickoff 2026" is published
   - **When** Ida attempts to return it to draft
   - **Then** the transition is refused with the current and requested states named, and the Conference remains published
   - **And** the same refusal applies to any transition out of **archived** – archived is terminal
 
-- [ ] **S05 [OC02] [TI02,TI09] Archiving is restricted to published Conferences past their end date**
+- [x] **S05 [OC02] [TI02,TI09] Archiving is restricted to published Conferences past their end date**
   - **Given** today is 2026-09-15 and "Autumn Kickoff 2026" is published, ending 2026-09-16
   - **When** Ida archives it
   - **Then** the attempt is refused and the message states the earliest permitted date, 2026-09-17
   - **And** archiving a Conference still in draft is refused whatever the date, because a draft never became visible to anyone
   - **And** on 2026-09-17 the published Conference archives successfully
 
-- [ ] **S06 [OC03] [TI01,TI07,TI10,TI11] An archived Conference stays readable but refuses edits and joins**
+- [x] **S06 [OC03] [TI01,TI07,TI10,TI11] An archived Conference stays readable but refuses edits and joins**
   - **Given** "Autumn Kickoff 2026" is archived and Ida is its Admin
   - **When** she opens it, renames it, and a signed-in employee attempts to join it
   - **Then** the Conference and its stored data are still retrievable, its list and detail views mark it as archived and visually distinct from active Conferences, the rename is refused with an explanation naming the archived state, and the joinability guard reports it as not joinable
   - **And** the Conference row, its Memberships, its Role Assignments and its `startDate`/`endDate` are unchanged by archiving – nothing is deleted
   - **And** a Conference still in **published** state whose end date has already passed also reports as not joinable – joinability ends with the end date, not with the manual archive step
 
-- [ ] **S07 [OC04] [TI04,TI05,TI07,TI08,TI09] A non-Admin cannot change or advance another employee's Conference**
+- [x] **S07 [OC04] [TI04,TI05,TI07,TI08,TI09] A non-Admin cannot change or advance another employee's Conference**
   - **Given** "Autumn Kickoff 2026" is a draft created by Ida, and Björn is a signed-in employee with no Role Assignment for it
   - **When** Björn calls the rename, publish and archive endpoints for that Conference directly, bypassing the UI
   - **Then** each call is refused as unauthorized through the same authorization helper, no state changes, and the response does not disclose Conference details Björn is not entitled to
@@ -92,16 +92,16 @@
 
 > Each criterion is proved by a task Verify line, not a scenario.
 
-- [ ] Every per-Conference authorization decision in this story's handlers goes through the single provisional helper – no inline role or creator comparisons in handler bodies, so S07 replaces one implementation.
-- [ ] The schema uses plain PostgreSQL only – no provider-specific extensions – and the migration is reversible in both directions.
-- [ ] Conference `startDate` and `endDate` are naive calendar dates that survive the database → API → client round trip unchanged, with no timezone coercion at any layer.
-- [ ] Membership and Role Assignment rows are keyed on the user's `sub` claim; no column keys, joins on, or uniquely identifies a user by email.
-- [ ] Membership means "is in this conference" for **every** role without exception – no code path treats an Admin, or the creator, as a member-by-implication rather than by a Membership row.
-- [ ] Exactly one joinability predicate exists in the codebase, exported from the lifecycle module, and it tests lifecycle state **and** end date; no second implementation of the rule appears anywhere.
-- [ ] `conference.updated_at` is the Conference row's own version and is advanced only by writes to the Conference row itself.
-- [ ] Every refusal in this story emits through S01's error envelope with a displayable message and a distinct machine code per refusal reason.
-- [ ] Multiple Conferences may exist and more than one may be published at a time – no constraint or guard enforces a single active Conference.
-- [ ] The Conference list, create and detail surfaces render without horizontal scroll and remain legible at 375px, 768px and 1280px.
+- [x] Every per-Conference authorization decision in this story's handlers goes through the single provisional helper – no inline role or creator comparisons in handler bodies, so S07 replaces one implementation.
+- [x] The schema uses plain PostgreSQL only – no provider-specific extensions – and the migration is reversible in both directions.
+- [x] Conference `startDate` and `endDate` are naive calendar dates that survive the database → API → client round trip unchanged, with no timezone coercion at any layer.
+- [x] Membership and Role Assignment rows are keyed on the user's `sub` claim; no column keys, joins on, or uniquely identifies a user by email.
+- [x] Membership means "is in this conference" for **every** role without exception – no code path treats an Admin, or the creator, as a member-by-implication rather than by a Membership row.
+- [x] Exactly one joinability predicate exists in the codebase, exported from the lifecycle module, and it tests lifecycle state **and** end date; no second implementation of the rule appears anywhere.
+- [x] `conference.updated_at` is the Conference row's own version and is advanced only by writes to the Conference row itself.
+- [x] Every refusal in this story emits through S01's error envelope with a displayable message and a distinct machine code per refusal reason.
+- [x] Multiple Conferences may exist and more than one may be published at a time – no constraint or guard enforces a single active Conference.
+- [x] The Conference list, create and detail surfaces render without horizontal scroll and remain legible at 375px, 768px and 1280px.
 
 
 ## Scope & Boundaries
@@ -169,53 +169,53 @@ adr    | docs/adrs/ADR-004-containerized-api-and-spa.md                  | The A
 
 ### Implementation Tasks
 
-- [ ] **TI01** Conference, Membership and Role Assignment tables exist with a reversible migration
+- [x] **TI01** Conference, Membership and Role Assignment tables exist with a reversible migration
   - Conference: name, start date, end date as plain `date` columns, lifecycle state constrained to `draft | published | archived`, creator `sub`, `created_at`, and `updated_at` – **the Conference row's own version**, advanced only by writes to the Conference row itself (`plan.json#sharedDecisions` → *three fields, four consumers*, field 3). The watermark column `schedule_watermark_at` is **not** created here; S04 adds it, and the two names are kept visibly different on purpose. **Membership**: conference, user `sub`, joined timestamp, unique per (conference, sub) – this story owns the table; S05 writes join rows into it and S08 revokes them. Role Assignment: conference, user `sub`, role constrained to `Admin | PresenterFacilitator | Attendee`, unique per (conference, sub, role). Plain PostgreSQL only per ADR-003; no join-code column yet (S05).
   - **Verify**: `Test: migration applies and rolls back cleanly against the Docker Compose database; inserting a lifecycle state or role outside the permitted sets is rejected by the database; a second Membership for the same (conference, sub) is rejected by the unique constraint; a Conference written with startDate 2026-09-14 reads back as 2026-09-14; the Conference table has exactly one timestamp column named updated_at and no column named schedule_watermark_at`
 
-- [ ] **TI02** A lifecycle module is the single authority on legal Conference transitions and on editability and joinability
+- [x] **TI02** A lifecycle module is the single authority on legal Conference transitions and on editability and joinability
   - Exposes the permitted transitions (draft → published, published → archived) and refuses every other pair, including any return to draft and any transition out of archived, naming current and requested state in a displayable message. Also exposes the editability and joinability predicates TI07 and S05 consume. **Joinable means lifecycle state `published` AND end date not in the past** – this is the single, whole definition of the invariant, absorbing the end-date rule so S05 extends this predicate instead of writing a second one. Holds no in-process state – state is read from the database per request (ADR-004: replicas, not sticky requests).
   - **Verify**: `Test: each illegal transition pair is refused with a message naming both states; draft → published and published → archived are permitted; an archived Conference reports not editable and not joinable; a draft Conference reports not joinable; a published Conference whose end date has passed reports not joinable; a published Conference within its span reports joinable`
 
-- [ ] **TI03** Conference field validation refuses invalid names and spans with field-level displayable messages
+- [x] **TI03** Conference field validation refuses invalid names and spans with field-level displayable messages
   - Name non-empty after trimming and at most 120 characters; end date on or after start date; span 1–4 consecutive days inclusive. Refusals name the field and state the permitted range, per FR1's Error Handling prose, and emit through S01's envelope.
   - **Verify**: `Test: a 5-day span is refused with a message stating the 1–4 day range; a blank/whitespace name is refused naming the name field; a 4-day span and a 120-character name are accepted; a 121-character name is refused; each refusal body carries S01's envelope with a displayable message and a machine code distinct from the other refusal reasons`
 
-- [ ] **TI04** A single provisional per-conference authorization helper exists and is the only authorization path in this story's handlers
+- [x] **TI04** A single provisional per-conference authorization helper exists and is the only authorization path in this story's handlers
   - Signature as pinned in Constraints & Gotchas; resolves the caller's Role Assignment for the Conference (only the creator's Admin seed exists at this point) and throws an authorization error mapped to S01's envelope. Consumes S02's authenticated caller unchanged; adds no token validation. S07 replaces the body, not the call sites.
   - **Verify**: `Test: a caller with no Role Assignment for the Conference is refused by the helper; grep of this story's handler modules finds no inline creator/role comparison – every check is a call to the helper`
 
-- [ ] **TI05** Creating a Conference persists it in draft and seeds the creator's Membership **and** Admin Role Assignment atomically
+- [x] **TI05** Creating a Conference persists it in draft and seeds the creator's Membership **and** Admin Role Assignment atomically
   - Any authenticated employee may create; no instance-level permission is consulted. All three rows – Conference, Membership, Admin Role Assignment – are written in one transaction, the latter two keyed on the verified `sub`, never on email. The Membership is not optional: Membership means "is in this conference" for every role, so the creator is visible in their own member list (S07), can be granted or removed (S07/S08), can leave once a second Admin exists (FR6), and can open the attendee view of their own Conference (S06). Validation from TI03 runs before any write. Depends on TI01, TI03, TI04.
   - **Verify**: `Test: creation returns the persisted draft Conference and the creator holds both a Membership and an Admin Role Assignment for it, each keyed on sub; a validation failure leaves none of the three rows behind; no email value is written to either key`
 
-- [ ] **TI06** `GET /conferences` is the Organizer list, and the Conference read returns the row version
+- [x] **TI06** `GET /conferences` is the Organizer list, and the Conference read returns the row version
   - **Route split, deliberate – two endpoints, not a collision.** `GET /conferences` is the **Organizer** list and belongs to this story: the Conferences the caller holds a Role Assignment for, **including drafts**, each with its lifecycle state so the client can distinguish archived ones. The **Attendee** list is a different result set – joined Conferences in `published` or `archived` state – and lives at `GET /me/conferences`, owned by S06. Do not merge or overload them; a reader seeing both should see two intended endpoints.
   - The single-Conference read returns `updatedAt`, the Conference row version from TI01. S09 cannot base a name or date-span edit on a version it was never sent, so this field is load-bearing, not decorative. No watermark field is present on this read; S04's schedule watermark surfaces separately via S06's envelope as `lastUpdatedAt`. Depends on TI01, TI04.
   - **Verify**: `Test: a second signed-in employee's GET /conferences omits another employee's draft Conference; the creator's includes it with state draft; each entry carries its lifecycle state; the single-Conference read body carries updatedAt and no watermark field; renaming the Conference changes the updatedAt value returned by the next read`
 
-- [ ] **TI07** Conference name and date span can be changed while the Conference is not archived
+- [x] **TI07** Conference name and date span can be changed while the Conference is not archived
   - Applies TI03's validation and TI02's editability predicate; refused with an explanation naming the archived state when the Conference is archived. A successful edit advances `conference.updated_at`. Post-publish concurrency and the orphaned-Session rule are S09's and are deliberately absent here. Depends on TI02, TI03, TI04.
   - **Known gap, accepted:** between this story (W3) and S09 (W7) a date span may be shortened so that Sessions fall outside it, because the orphan check does not exist yet. The invariant is genuinely violable in that window – this is a sequencing consequence, not an oversight, and Sessions themselves only appear in S04 (W4). S09 adds the refusal; nothing here should attempt a partial version of it, and no data written in the interim is assumed to satisfy the invariant.
   - **Verify**: `Test: renaming a draft and a published Conference succeeds and the Conference's updatedAt advances; renaming an archived Conference is refused with a message naming the archived state and the stored name and updatedAt are unchanged`
 
-- [ ] **TI08** Publishing moves a draft Conference to published only when the schedule gate reports at least one Session
+- [x] **TI08** Publishing moves a draft Conference to published only when the schedule gate reports at least one Session
   - Defines the schedule-gate port (`hasAtLeastOneSession(conferenceId)`); its production binding returns `false` until S04 supplies the real Session count. Refusal message explains that a schedule with at least one Session is required. Depends on TI02, TI04.
   - **Verify**: `Test: with the gate reporting zero the publish is refused and the Conference stays draft with a message about needing a Session; with the gate stubbed to report one the Conference becomes published; two Conferences can be published concurrently – nothing enforces a single active Conference`
 
-- [ ] **TI09** Archiving moves a published Conference to archived only after its end date
+- [x] **TI09** Archiving moves a published Conference to archived only after its end date
   - Refuses a draft Conference whatever the date, and refuses a published Conference on or before its end date with the earliest permitted date stated. Comparison against the server's current calendar date in the stored naive frame. Depends on TI02, TI04.
   - **Verify**: `Test: with today 2026-09-15 archiving a Conference ending 2026-09-16 is refused stating 2026-09-17; archiving a draft is refused; with today 2026-09-17 the published Conference becomes archived`
 
-- [ ] **TI10** The editability and joinability guards are exported for S05 and S09 to consume
+- [x] **TI10** The editability and joinability guards are exported for S05 and S09 to consume
   - Public, documented entry points on TI02's module so S05's join endpoint and S09's edit path assert refusal against the same rule rather than re-deriving it. The exported joinability guard carries the **whole** definition – state `published` and end date not in the past – so S05 consumes or extends it and never restates the end-date rule. Two implementations of one invariant is precisely what S07's retrofit exists to prevent.
   - **Verify**: `Test: the guards are importable from outside the lifecycle module; the joinability guard reports not-joinable for an archived Conference, for a draft, and for a published Conference past its end date, and joinable for a published Conference within its span; the editability guard reports not-editable for an archived Conference`
 
-- [ ] **TI11** Organizer surfaces cover the Conference list, creation and lifecycle actions with refusals shown
+- [x] **TI11** Organizer surfaces cover the Conference list, creation and lifecycle actions with refusals shown
   - List distinguishes archived Conferences visually from active ones (not by text alone); create form renders TI03's field-level messages inline; detail view offers publish and archive and renders the server's refusal message verbatim. The UI may disable an affordance but never substitutes for the server guard. Depends on TI05–TI09.
   - **Verify**: `Test: an archived Conference is rendered with its distinguishing treatment in the list; a 5-day span submission shows the permitted-range message on the date field; a refused publish shows the server's message rather than a generic error`
 
-- [ ] **TI12** The organizer surfaces are responsive across the three target widths
+- [x] **TI12** The organizer surfaces are responsive across the three target widths
   - Per the binding NFR row and `AGENTS.md` → Visual Validation Workflow. Depends on TI11.
   - **Verify**: `Screenshots of the Conference list, create form and detail view at 375px, 768px and 1280px show no horizontal scroll and legible controls at each width`
 

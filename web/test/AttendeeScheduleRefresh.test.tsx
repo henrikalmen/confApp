@@ -423,6 +423,15 @@ describe('the in-app change banner', () => {
     expect(banner).toContain('Room B');
     expect(banner).toContain('Retrospective');
     expect(banner).toMatch(/removed/i);
+
+    /*
+     * The sentence, pinned. This banner appears on a view the attendee was already watching when
+     * the session moved, so the time they last saw is the one they just read - naming it back to
+     * them costs a line on a 375px phone and tells them nothing. S10's reconnect summary is the
+     * surface that does name both sides, because its reader was offline while it happened.
+     */
+    expect(banner).toContain('now runs 09:30–11:00');
+    expect(banner).not.toContain('instead of');
   });
 
   it('is dismissible, and an unchanged poll does not raise it again', async () => {

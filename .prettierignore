@@ -10,3 +10,10 @@ playwright-report/
 package-lock.json
 docs/
 *.md
+
+# Capacitor's native projects (S11 TI01): generated scaffolds plus the SPA bundle that
+# `cap sync` copies into them. Formatting a synced copy of an already-formatted build is
+# meaningless, and the generated Xcode/Gradle JSON is not ours to restyle. Mirrors the same
+# two entries in eslint.config.js and Capacitor's own .gitignore files.
+web/android/
+web/ios/

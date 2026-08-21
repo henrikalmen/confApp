@@ -170,7 +170,7 @@ url    | https://developer.chrome.com/docs/android/custom-tabs                  
 
 ### Implementation Tasks
 
-- [ ] **TI01** Capacitor wraps the existing web build, with committed Android and iOS projects and no second copy of the app
+- [x] **TI01** Capacitor wraps the existing web build, with committed Android and iOS projects and no second copy of the app
   - `capacitor.config` sets a stable reverse-DNS `appId`, `appName`, `webDir` = S01's web build output, and the scheme/hostname pair; `android/` and `ios/` are tracked while their build outputs are ignored. Assets enter the shells only via the web build + `cap sync`.
   - **Verify**: `After the documented build+sync flow both native projects serve the freshly built assets; changing a visible SPA string and repeating the flow changes it in both; no built web asset is tracked inside android/ or ios/`
 
@@ -239,4 +239,26 @@ url    | https://developer.chrome.com/docs/android/custom-tabs                  
 
 > _Managed by exec-spec post-implementation – append-only. Spec authors: leave this section empty._
 
-_No observations recorded yet._
+### Run: 2026-08-20 – partial run (TI01 only), hardware-gated remainder
+
+**Scope of this run.** Only TI01 was attempted. The owner scoped execution to the hardware-free half after preflight established that this machine cannot satisfy the story's device criteria. S11 remains `spec-ready`; nothing here claims a device-named criterion.
+
+**TI01 — complete and verified.** Capacitor 8.5.0 wraps S01's existing Vite build. `web/capacitor.config.ts` sets `appId: se.ithuset.confapp`, `appName: confApp`, `webDir: dist`, and pins the scheme/hostname pair explicitly (`iosScheme: capacitor`, `androidScheme: https`, `hostname: localhost`) rather than inheriting defaults, because those four values compose the WebView origin that partitions S10's IndexedDB cache. All three Verify clauses were observed, not asserted:
+
+1. Both native projects serve freshly built assets — `cap sync` copied `dist` into `web/android/app/src/main/assets/public` and `web/ios/App/App/public`.
+2. Propagation proven by mutation — a probe string was added to the `app__brand` heading in `web/src/App.tsx`, rebuilt and synced; the new bundle `index-DtvCEURa.js` carried the string into BOTH native projects and the previous bundle `index-DvCNZggL.js` was gone from both, so there is no stale-asset accumulation. The probe was then reverted and `web/src/App.tsx` verified clean against HEAD.
+3. No built web asset is tracked — `git check-ignore` confirms `app/src/main/assets/public`, `App/App/public` and both generated `capacitor.config.json` files are ignored by Capacitor's own generated `.gitignore` files. 73 native project files are addable; zero bundle assets among them.
+
+**Native projects live under `web/`, not the repository root** — `web/android/` and `web/ios/` — because `capacitor.config.ts` sits beside the SPA whose `dist` is its `webDir`.
+
+**Capacitor 8 removes the CocoaPods barrier to scaffolding.** `npx cap add ios` succeeded on Windows: Capacitor 8 generates a Swift Package Manager `Package.swift` instead of running `pod install`, so the iOS project can be created and can receive synced assets without macOS. This narrows — but does not remove — the story's macOS constraint: scaffolding and asset sync work anywhere, while compiling, signing and running still require macOS + Xcode.
+
+**Toolchain gaps found on the execution machine (all pre-existing, none introduced here).** No Java, no `ANDROID_HOME`/`ANDROID_SDK_ROOT`, no Android SDK directory and no `adb` — so the Android project can be scaffolded and synced but cannot be compiled, installed or run. No macOS/Xcode — the entire iOS half is out of reach. No Docker (`docker.exe` absent, `docker-desktop` WSL distro stopped, no podman/nerdctl/buildah) — so the API container cannot be started, which additionally blocks TI04, whose Verify is an end-to-end acceptance "against the running API".
+
+**Lint and format needed ignore rules for the synced trees.** `cap sync` copies the built bundle and the service worker into the native projects, and both ESLint and Prettier walked those copies: ESLint reported 2088 errors, mostly the service worker evaluated against a window global scope it does not run in. Fixed by ignoring `web/android/**` and `web/ios/**` in `eslint.config.js` and `web/android/`, `web/ios/` in `.prettierignore`, mirroring Capacitor's own `.gitignore` files. Nothing hand-authored is skipped — native code here is Kotlin/Swift, which neither tool lints. Any future `cap` platform added elsewhere will need the same pair of entries.
+
+**TI11's web-build half is already covered by earlier stories.** S09 and S10 established fresh-process `TZ` probes asserting wall-clock rendering (`web/test/AttendeeScheduleRefresh.test.tsx`, `web/test/schedule-cache-probe.ts`, `web/test/schedule-diff-probe.ts`, `web/test/AttendeeScheduleOffline.test.tsx`). Re-asserting it here would test earlier stories twice while leaving this story's actual deliverable — the same property inside the device WebView — untested. TI11's remaining work is therefore the on-device half only.
+
+**Gates after this run:** typecheck clean, lint clean, build clean, 815/815 tests across 50 files. Prettier reports three files drifted — `api/test/join-code.test.ts`, `visual/conferences.spec.ts`, `web/src/components/JoinCodePanel.tsx` — all confirmed clean against HEAD and therefore pre-existing drift already logged in `docs/TECH-DEBT-BACKLOG.md` during the S10 run; none is touched by this story.
+
+**Outstanding for a later run:** TI02–TI11. TI02 additionally needs the shell-build step that materializes the runtime `config.js` artefact into `webDir` before `cap sync` (the container's `web/docker-entrypoint.d/40-runtime-config.sh` equivalent). TI04 needs two Google OAuth clients registered in Google Cloud Console plus a running API. TI03 and TI05–TI11 need physical devices, and every iOS criterion needs macOS + Xcode.

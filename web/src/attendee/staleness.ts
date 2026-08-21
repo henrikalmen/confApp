@@ -19,6 +19,7 @@ import { instantToMillis, type EffectiveClock } from '../clock/effective-clock.t
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 /** Anything fresher than this reads as "just now" rather than "0 minutes ago". */
 const JUST_NOW = 45_000;
@@ -48,8 +49,19 @@ export function stalenessLabel(age: number): string {
     return `Updated ${minutes} minute${minutes === 1 ? '' : 's'} ago`;
   }
 
-  const hours = Math.floor(age / HOUR);
-  return `Updated ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  if (age < DAY) {
+    const hours = Math.floor(age / HOUR);
+    return `Updated ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+
+  /*
+   * Days, because S10 shows this label on a cache that may not have been refreshed since the
+   * conference started – and "updated 76 hours ago" is a number an attendee has to divide before it
+   * means anything. Still an elapsed age, and still a duration: no timezone is involved at any
+   * tier, which is the property the whole module exists to keep (S10 Acceptance Scenario S02).
+   */
+  const days = Math.floor(age / DAY);
+  return `Updated ${days} day${days === 1 ? '' : 's'} ago`;
 }
 
 /**

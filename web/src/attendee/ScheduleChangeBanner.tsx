@@ -1,4 +1,5 @@
-import type { ChangedSession, DatedSession, ScheduleDiff } from './schedule-diff.ts';
+import type { ScheduleDiff } from './schedule-diff.ts';
+import { changeLines } from './schedule-change-lines.ts';
 
 /**
  * The in-app change banner (S09 TI03) – what changed, named, after a refresh.
@@ -20,53 +21,11 @@ export interface ScheduleChangeBannerProps {
   onDismiss: () => void;
 }
 
-/** "09:30–11:00", from the authored strings. */
-function timeRange(session: DatedSession): string {
-  return `${session.startTime}–${session.endTime}`;
-}
-
-/**
- * What changed about one Session, in the words an attendee reads.
- *
- * Built from the named fields rather than from a generic "was updated", because the reason the
- * banner exists is that a silent swap is the failure: "Opening Keynote was updated" leaves someone
- * comparing the screen against their memory to find out what moved.
- */
-function describeChange(change: ChangedSession): string {
-  const { session, previous, fields } = change;
-  const moved = fields.includes('startTime') || fields.includes('endTime');
-  const clauses: string[] = [];
-
-  if (fields.includes('day')) clauses.push(`moved to ${session.day}`);
-  if (moved) clauses.push(`now runs ${timeRange(session)}`);
-  if (fields.includes('location')) clauses.push(`now in ${session.location}`);
-  if (fields.includes('title')) clauses.push(`is now called “${session.title}”`);
-  if (fields.includes('kind')) clauses.push(`is now a ${session.kind}`);
-  if (fields.includes('description')) clauses.push('has an updated description');
-
-  // The title the attendee last saw, so a renamed Session is recognisable as the one they knew.
-  const name = fields.includes('title') ? previous.title : session.title;
-  return `${name} ${clauses.join(', ')}.`;
-}
-
 export function ScheduleChangeBanner({
   diff,
   onDismiss,
 }: ScheduleChangeBannerProps): React.JSX.Element {
-  const lines = [
-    ...diff.changed.map((change) => ({
-      key: `changed-${change.session.id}`,
-      text: describeChange(change),
-    })),
-    ...diff.added.map((session) => ({
-      key: `added-${session.id}`,
-      text: `${session.title} was added on ${session.day} at ${timeRange(session)}.`,
-    })),
-    ...diff.removed.map((session) => ({
-      key: `removed-${session.id}`,
-      text: `${session.title} was removed.`,
-    })),
-  ];
+  const lines = changeLines(diff);
 
   return (
     <div

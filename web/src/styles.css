@@ -1167,3 +1167,33 @@ body {
   gap: 0.5rem;
   margin: 0;
 }
+
+/* ---------- offline schedule access (S10) ---------- */
+
+/*
+ * The cached-data statement. Louder than the online staleness age it sits in place of, because it
+ * says something the attendee has to act on - what is on screen is not current and may have moved.
+ * Still a statement rather than an alert: the schedule below it is readable and correct as of when
+ * it was saved, which is the whole point of showing it.
+ *
+ * It wraps and never truncates. The sentence carries the age, and an age clipped off the end of a
+ * line is exactly the part somebody needs in order to judge the rest.
+ */
+.schedule__staleness--cached {
+  padding: 0.5rem 0.75rem;
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius);
+  color: var(--notice-text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The reconnect summary shares the change banner's shape and palette - it reports the same class of
+ * fact through the other channel, and an attendee should not have to learn two visual languages for
+ * "the schedule moved". The accent edge is what marks it as the catch-up rather than the live one.
+ */
+.schedule-changes--reconnect {
+  border-left: 4px solid var(--accent);
+}

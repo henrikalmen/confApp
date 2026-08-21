@@ -26,6 +26,7 @@
 - **jsdom 30 has `crypto.subtle` but no Web Storage** – `localStorage`/`sessionStorage` are `undefined`; polyfill a minimal `Storage` in `web/test/setup.ts`, don't design it out.
 - **StrictMode double-mount races a one-shot OIDC redirect handler** – guard with a `useRef`; make the liveness flag a ref too, as cleanup clears a `let active` before the first call resolves.
 - **No jest-dom in the web workspace** – `.toBeDisabled()`/`.toBeInTheDocument()` throw "not a function"; assert plain DOM props (`.disabled`, `.value`, `queryByTestId() === null`).
+- **A `waitFor` on synchronously-set state resolves too early** – an `online` event dispatched on it hits a window where the poll listener is down. Wait on content only the settled phase renders.
 
 ## PostgreSQL Date/Time via node-postgres
 
@@ -45,6 +46,7 @@
 - **A regression test written beside its fix usually passes without the fix** – revert the fix and re-run before believing the guard; six S09 tests were green against the very defect they named.
 - **A file-list grep is only as good as its longest omission** – S09's "no timezone conversion in the refresh path" guard listed four files and missed `schedule-view-model.ts`, which formats every Session time an Attendee reads. A `toLocaleTimeString` there passed it. Pair any file-list assertion with one behavioural assertion that does not know the list.
 - **Never wait on the value you are about to assert** – a `waitFor` on the expected output fails inside the helper when the defect is present, so the reading is never captured and the comparison that was the point of the test never runs. Wait on something the defect cannot touch.
+- **Assert cache contents, not the requests issued** – S10's guard dispatched exactly the right navigation and then asserted only that a fetch happened; it was green while the cache key was wrong.
 - **A structure test that skips when its marker is missing tests nothing** – S09's read-order guard silently no-opped on one of the two routes it named for a whole pass, because the second read lived in a different function than the slice it searched. Assert the marker is found; never `if (found > -1)`.
 
 ## React State & Refusals
@@ -58,6 +60,17 @@
 - **Deleting and editing one Session deadlock** – delete locks conference then session row, edit locks session row then conference via the watermark trigger. Retry SQLSTATE 40P01 once.
 - **`now()` moves a row version backwards under lock contention** – it is transaction-*start* time, captured before the statement waits for a row lock, so a waiter stamps a value from before the write it waited on. Use `GREATEST(clock_timestamp(), col + interval '1 microsecond')` on every writer of a version column, not just the guarded one.
 - **A monotonicity test needs a held row lock, not concurrency** – sequential writes cannot distinguish `now()` from `clock_timestamp()`, and concurrent writes under a version predicate let only one through, which proves no ordering. Take the lock in a second connection, start the write, commit a later value, then release.
+
+## Service Workers / Cache Storage
+
+- **A navigate-mode cache branch caches the query string** – the OIDC `?code=…` lands in Cache Storage, outside IndexedDB purges and `activate`'s name-keyed cleanup.
+- **Re-keying does not shed a URL** – a `Response` keeps its own `url`, so `caches.match(key).url` still holds `?code=…`. Rebuild it: `new Response(body)` has an empty url. See `storeShell` in `web/public/sw.js`.
+- **`request.mode === 'navigate'` does not mean the response is HTML** – `try_files $uri` serves real files, so a top-level hit on `/config.js` can be filed as the app shell. Check `content-type` before storing.
+
+## Capacitor Mobile Shells
+
+- **`cap sync` copies the SPA bundle and `sw.js` into the native projects** – ESLint/Prettier lint the copies (2088 errors). Ignore `web/android/**` + `web/ios/**` in both configs.
+- **Capacitor 8 scaffolds iOS on Windows** – it emits a SwiftPM `Package.swift` instead of `pod install`, so `cap add ios` and asset sync need no macOS; only compiling and signing do.
 
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.
@@ -74,3 +87,4 @@
 - ...
 - **Git Bash mangles `/api` env values into Windows paths** – `API_BASE_URL=/api` becomes `C:/Program Files/Git/api`, so fetches fail as `file:///…`. Set `MSYS_NO_PATHCONV=1` or drop the override.
 - **A test helper named `join` shadows `node:path`'s `join`** – surfaces as `app.inject is not a function` far from the cause. Name domain helpers `submit`/`post` in modules importing node:path.
+- **A deferred FIS ends with `## Deferred Decisions`, below `## Implementation Observations`** – append later observations inside Observations, not at EOF. S13 is in this state.

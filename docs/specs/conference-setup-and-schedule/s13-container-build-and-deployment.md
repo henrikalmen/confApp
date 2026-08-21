@@ -234,4 +234,54 @@ url    | https://docs.docker.com/engine/storage/volumes/                  | name
 
 ## Implementation Observations
 
-_No observations recorded yet._
+### Run: 2026-08-20 08:02 UTC – discovered-requirements
+
+#### DISCOVERED REQUIREMENTS
+
+- **The SPA container must serve `/sw.js` with a no-cache (or `no-store`) `Cache-Control` header.** S10 introduced a service worker at `web/public/sw.js`; this story owns the container that serves it, and the header is the only place the update path can be fixed – it is served, not built, so no change to the worker source can substitute for it. Verified state of the repo as of S10's completion: `web/nginx/default.conf.template` sets `add_header Cache-Control "no-store" always;` for `location = /config.js` only, and `/sw.js` falls through to `location /` with `try_files $uri $uri/ /index.html;` and no explicit cache header. A browser that has HTTP-cached a service worker script may reuse it for up to 24 hours before refetching, so without an explicit no-cache header a deployment shipping a corrected or updated worker may not take effect on returning devices for a day – a change made during the conference date span that returning attendees never receive is the same failure the rolling-update posture (TI08) exists to prevent, arriving through the browser instead of the platform.
+- **What is already handled and must not be re-solved.** `sw.js` treats `/index.html`, `/config.js` and all navigations as network-first precisely so a redeploy cannot pin a browser to a previous build's assets or API base URL. The stale-deployment hazard at the application layer is therefore closed, and re-solving it in the container – or weakening the network-first strategy to compensate – would undo S10's work. The residual is only the worker script's own update path at the HTTP layer.
+- **Lower severity, recorded alongside it: `CACHE_NAME` is a constant while Vite's asset names are fingerprinted**, so Cache Storage accumulates one `/assets/*` entry set per deployment. Bounded and harmless for an under-100-employee conference, but versioning `CACHE_NAME` per build would evict superseded sets.
+- **Suggested verification.** Assert the deployed container returns a no-cache-family `Cache-Control` on `/sw.js`, in the same place this story already asserts `/config.js` is `no-store`.
+
+
+## Deferred Decisions
+
+#### DEFERRED DECISION: container-build-toolchain
+
+Decision-Key: container-build-toolchain
+Altitude: fis-local
+Affected surface: Implementation Plan → TI01 (image build and publication), and every downstream task that depends on published digests (TI02, TI04–TI11).
+Decision: Deferred as a signed-off execution hold – the container toolchain is not restored mid-run. Intended route for the next execution run: install Docker Engine inside the existing Ubuntu WSL2 distro (already Running), which supplies a builder and daemon without reinstalling Docker Desktop and keeps S01's `api/Dockerfile`, `web/Dockerfile` and `docker-compose.yml` usable unchanged. Hold clears when an image builder is available and `docker build` succeeds against both S01 Dockerfiles.
+Rationale: No container image builder exists on the execution machine, so TI01 cannot run and every downstream task is unreachable; the owner signed off on deferring rather than restoring the toolchain mid-run.
+Evidence: Verified 2026-08-20 – `docker.exe` absent from Program Files; the `docker-desktop` WSL distro present but Stopped; no `podman`, `nerdctl` or `buildah` on PATH; only leftover data directories remain at `C:\ProgramData\DockerDesktop` and `%LOCALAPPDATA%\Docker\wsl`.
+Signed-off-by: Henrik Almen (owner) – 2026-08-20
+
+#### DEFERRED DECISION: deploy-target-platform
+
+Decision-Key: deploy-target-platform
+Altitude: fis-local
+Affected surface: Implementation Plan → TI02 and TI04–TI11; Architecture Decision (one parameterized deployment definition); Structural Criteria 2 and 3.
+Decision: Deferred as a signed-off execution hold. Intended target for the next execution run: Azure Container Apps, recorded as the *current, intended* target only – `docs/DECISIONS.md` → Pending must continue to list "Container platform" unresolved, and this hold closes neither Pending entry. TI02 must remain one parameterized definition whose target-specific values are supplied as inputs; Bicep or ARM as the sole deployment definition would fail the story. Hold clears when a reachable Container Apps environment exists and every target-specific value is suppliable as configuration.
+Rationale: No deployment target is provisioned, so TI02 and TI04–TI11 cannot be observed. The FIS Execution Contract names the target as an owner-supplied exec-time input, not a decision this story closes. Executor trap to carry forward: this FIS's Architecture Decision section explicitly rejects a platform-native descriptor, naming "an ARM/Bicep template" as the alternative that "closes the container-platform decision by implementation and forfeits exactly the portability that ADR-003 and ADR-004 both exist to protect", and Structural Criterion 3 still requires the published digests to start and serve under S01's `docker-compose.yml` unchanged.
+Evidence: Verified 2026-08-20 – no provisioned container-platform environment identified for confApp; the FIS Execution Contract lists "a reachable container target" among the owner-supplied exec-time inputs, and `docs/DECISIONS.md` → Pending still carries "Container platform" unresolved.
+Signed-off-by: Henrik Almen (owner) – 2026-08-20
+
+#### DEFERRED DECISION: registry-and-credentials
+
+Decision-Key: registry-and-credentials
+Altitude: fis-local
+Affected surface: Implementation Plan → TI01 (publish step) and TI03 (registry-credential handling).
+Decision: Deferred as a signed-off execution hold. Intended registry for the next execution run: Azure Container Registry, consistent with the intended Container Apps target and recorded as an intended target only, closing no Pending decision. Hold clears when a subscription, resource group and registry exist for confApp and credentials reach the deploy step from the environment rather than any tracked file (TI03; `AGENTS.md` – "Never commit `.env` files or credentials").
+Rationale: No image registry is provisioned for confApp and no credential path is established, blocking TI01's publish step and TI03's registry-credential handling.
+Evidence: Environment state verified 2026-08-20 – the Azure CLI is installed (2.87.0) and an Azure MCP server is configured, but no confApp subscription, resource group or registry has been identified. Separately, the gcloud SDK is authenticated as the owner but its active project is `beleco-europe-mvp-live`, an unrelated live project, and its tokens are expired – nothing in this story may deploy into it.
+Signed-off-by: Henrik Almen (owner) – 2026-08-20
+
+#### DEFERRED DECISION: deployed-postgres-host
+
+Decision-Key: deployed-postgres-host
+Altitude: fis-local
+Affected surface: Implementation Plan → TI07 (dump/restore portability drill), TI10 (container-independent storage) and TI11 (durability drill).
+Decision: Deferred as a signed-off execution hold. Intended shape for the next execution run: Azure Database for PostgreSQL – i.e. TI10's managed path, where "the service supplies the guarantee and no volume is declared", rather than the named-volume container path – recorded as an intended target only, closing no Pending decision. Consequence to carry forward: TI11's durability drill then runs as a restart or failover of the managed instance rather than replacing a database container against surviving named-volume storage; the FIS supports both shapes and this fixes which one the next run must evidence. Hold clears when a reachable instance exists and its connection details are suppliable as configuration.
+Rationale: No deployed PostgreSQL instance exists, blocking TI07's dump/restore portability drill and TI10/TI11's durability work. TI10's requirement that both hosting shapes stay reachable through the same definition by configuration change alone still binds, so neither Pending decision closes. ADR-003's boundary also still applies: whichever instance backs a live conference runs on attended, backed-up infrastructure, and TI08 must name the backup mechanism, its schedule and its owner.
+Evidence: Verified 2026-08-20 – no deployed PostgreSQL instance identified for confApp; `docs/DECISIONS.md` → Pending still carries "Production database hosting" unresolved, and the FIS Execution Contract lists "a PostgreSQL host" among the owner-supplied exec-time inputs.
+Signed-off-by: Henrik Almen (owner) – 2026-08-20

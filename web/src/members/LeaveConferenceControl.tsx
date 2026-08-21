@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ApiError, leaveConference } from '../api/client.ts';
+import { useOnline } from '../offline/use-online.ts';
 
 /**
  * Leaving a conference, as two deliberate acts.
@@ -33,29 +34,6 @@ export interface LeaveConferenceControlProps {
   archived?: boolean;
   /** Called once the membership is gone, so the surrounding view can reload what is left. */
   onLeft(): void;
-}
-
-/**
- * Whether the browser believes it has a connection.
- *
- * `navigator.onLine` is only a hint – it reports the link, not whether the API is reachable – which
- * is why it is used to *disable* an affordance and never to decide anything. A leave that gets as
- * far as the network and fails still surfaces the server's or the transport's own message.
- */
-function useOnline(): boolean {
-  const [online, setOnline] = useState(() => navigator.onLine);
-
-  useEffect(() => {
-    const update = (): void => setOnline(navigator.onLine);
-    window.addEventListener('online', update);
-    window.addEventListener('offline', update);
-    return () => {
-      window.removeEventListener('online', update);
-      window.removeEventListener('offline', update);
-    };
-  }, []);
-
-  return online;
 }
 
 type Step = 'idle' | 'confirming' | 'leaving';

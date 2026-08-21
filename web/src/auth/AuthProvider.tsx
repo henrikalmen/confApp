@@ -10,6 +10,11 @@ import {
 import { createAuthSession, type AuthSession, type SessionUser } from './session.ts';
 import { setTokenSource } from '../api/client.ts';
 import { resolveAuthConfig } from '../config.ts';
+import {
+  adoptCacheOwner,
+  purgeScheduleCache,
+  setCacheIdentity,
+} from '../offline/schedule-cache.ts';
 
 /**
  * Binds the session to React.
@@ -96,12 +101,39 @@ export function AuthProvider({
 
     // The credential source for every authenticated request in the app.
     setTokenSource(() => session.validToken());
+    /*
+     * And the identity every cached Schedule is keyed under (S10 TI01). The `sub` claim, never the
+     * email – emails change and `sub` does not (AGENTS.md). Supplied the same way as the token
+     * source, so no panel has to reach for a session to read its own cache.
+     */
+    setCacheIdentity(() => session.current()?.user.sub ?? null);
+
+    /*
+     * **The privacy half of S10, wired to S02's one hook.** Sign-out and a different employee
+     * signing in both clear user-scoped device state, and this story registers the schedule cache
+     * on that hook rather than building a second auth teardown path (S02 TI10).
+     */
+    const unsubscribe = session.onSessionCleared(() => {
+      void purgeScheduleCache();
+    });
+
+    /**
+     * The other half of the purge, and the one an event cannot cover.
+     *
+     * A session that ended because the app was killed never ran the sign-out path, so the previous
+     * employee's rows would still be there when the next one signs in. Here the store is asked whose
+     * it is and empties itself when the answer is somebody else – driven by the identity presented
+     * at sign-in differing, not by a sign-out having happened (S10 TI08).
+     */
+    const claim = (user: SessionUser): void => {
+      void adoptCacheOwner(user.sub);
+    };
 
     // A redirect is single-use, so it is processed once per page load and not once per effect
     // run. Two concurrent `completeRedirect` calls would race for the same one-shot PKCE
     // attempt, the loser reporting "this sign-in did not start in this tab" over a sign-in that
     // had in fact just succeeded.
-    if (redirectHandled.current) return;
+    if (redirectHandled.current) return unsubscribe;
     redirectHandled.current = true;
 
     const search = initialSearch ?? (typeof location === 'undefined' ? '' : location.search);
@@ -115,6 +147,7 @@ export function AuthProvider({
         if (typeof history !== 'undefined' && typeof location !== 'undefined') {
           history.replaceState(null, '', outcome.returnTo || location.pathname);
         }
+        claim(outcome.user);
         setState({ kind: 'signed-in', user: outcome.user });
         return;
       }
@@ -131,6 +164,9 @@ export function AuthProvider({
       }
 
       const existing = session.current();
+      // A session restored from storage on a cold launch claims the store too – that launch is
+      // exactly the case where the previous session ended without a sign-out.
+      if (existing !== null) claim(existing.user);
       setState(
         existing === null ? { kind: 'signed-out' } : { kind: 'signed-in', user: existing.user },
       );
@@ -138,6 +174,7 @@ export function AuthProvider({
 
     return () => {
       mounted.current = false;
+      unsubscribe();
     };
   }, [session, initialSearch]);
 

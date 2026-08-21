@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ApiError, joinConference, type JoinedConference } from '../api/client.ts';
+import { primeScheduleCache } from '../offline/schedule-data.ts';
+import { useOnline } from '../offline/use-online.ts';
 
 /**
  * The join-code entry screen.
@@ -43,10 +45,17 @@ export function JoinConferencePanel(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [joined, setJoined] = useState<JoinedConference | null>(null);
+  const online = useOnline();
 
   const rateLimited = refusal?.code === RATE_LIMITED;
-  // Nothing to submit while the box is empty, and nothing worth submitting while paused.
-  const canSubmit = !busy && code.trim() !== '' && !rateLimited;
+  /*
+   * Nothing to submit while the box is empty, nothing worth submitting while paused, and **nothing
+   * to submit later** while offline. Joining is a write, and offline scope is read-only (FR8): the
+   * control says a connection is required rather than accepting a code into a queue nobody would
+   * be told about. No outbox, no replay, no deferred submission – an anti-goal, not a shortcut
+   * (`docs/PRODUCT.md#anti-goals`).
+   */
+  const canSubmit = !busy && code.trim() !== '' && !rateLimited && online;
 
   /**
    * Editing the code lifts a rate-limit pause.
@@ -78,9 +87,18 @@ export function JoinConferencePanel(): React.JSX.Element {
     setRefusal(null);
     setJoined(null);
     try {
-      setJoined(await joinConference(code));
+      const conference = await joinConference(code);
+      setJoined(conference);
       // Only a success clears the box – a refusal leaves it exactly as typed to be corrected.
       setCode('');
+      /*
+       * Joining online is enough to read the Schedule offline afterwards (S10 TI03). The Schedule
+       * is fetched and cached here rather than waiting for the employee to open the schedule view –
+       * somebody who joins in the lobby and loses signal in the hall has still never opened it, and
+       * that is precisely the person the offline story is for. Quiet on failure: the cache warms
+       * itself on the next online read, and nothing is queued for later.
+       */
+      void primeScheduleCache(conference.id);
     } catch (error) {
       setRefusal(refusalOf(error));
     } finally {
@@ -150,6 +168,18 @@ export function JoinConferencePanel(): React.JSX.Element {
           </button>
         </p>
       </form>
+
+      {/*
+       * Why the control cannot be used, rather than a button that silently does nothing. Offline is
+       * the common case at a venue, and an attendee needs to know the code is not lost and nothing
+       * is waiting to be sent on their behalf.
+       */}
+      {!online ? (
+        <p className="panel__hint" data-testid="join-offline">
+          You are offline, so you cannot join a conference right now. Nothing is saved to send later
+          – try again when you have a connection.
+        </p>
+      ) : null}
 
       {/*
        * One region, replaced rather than appended. `role="alert"` announces each new refusal, and

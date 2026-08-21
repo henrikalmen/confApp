@@ -1,7 +1,10 @@
+import 'fake-indexeddb/auto';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { IDBFactory } from 'fake-indexeddb';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { JoinConferencePanel } from '../src/components/JoinConferencePanel.tsx';
+import { readCachedSchedule, setCacheIdentity } from '../src/offline/schedule-cache.ts';
 
 /**
  * TI10 – the join-code entry screen, and what it leaves an employee able to do after a refusal.
@@ -75,6 +78,39 @@ const KICKOFF = {
 
 const JOINED: Route = { status: 200, body: { conference: KICKOFF } };
 
+const NADIA = 'google-sub-nadia';
+
+/** A real schedule envelope, so the priming write has something the cache will accept. */
+const ENVELOPE = {
+  conference: {
+    id: KICKOFF.id,
+    name: KICKOFF.name,
+    startDate: KICKOFF.startDate,
+    endDate: KICKOFF.endDate,
+    state: 'published',
+    lastUpdatedAt: '2026-09-15T08:00:00.000000Z',
+  },
+  days: [
+    {
+      date: '2026-09-15',
+      dayNumber: 1,
+      sessions: [
+        {
+          id: 'keynote',
+          title: 'Opening Keynote',
+          description: null,
+          kind: 'Presentation',
+          startTime: '09:00',
+          endTime: '10:30',
+          location: 'Main Hall',
+          concurrentWith: [],
+        },
+      ],
+    },
+  ],
+  serverNow: { instant: '2026-09-15T07:40:12.345678Z', day: '2026-09-15', time: '09:40' },
+};
+
 /** The server's own envelope, in the server's own words – this suite never invents a message. */
 function refused(status: number, code: string, message: string): Route {
   return { status, body: { error: { code, message } } };
@@ -102,6 +138,17 @@ function renderPanel(routes: Record<string, Route | Route[]>): Harness {
   return harness;
 }
 
+/**
+ * Only the join attempts.
+ *
+ * A successful join now also primes the offline Schedule cache (S10 TI03), which is a second,
+ * deliberately quiet request on the same path. These assertions are about what the *employee's*
+ * submission sent, so the cache warm-up is filtered out rather than being allowed to make the code
+ * this panel posted harder to read.
+ */
+const joinCalls = (harness: Harness): Call[] =>
+  harness.calls.filter((call) => call.method === 'POST' && call.path === '/join');
+
 const input = (): HTMLInputElement => screen.getByTestId('join-code-input') as HTMLInputElement;
 const submitButton = (): HTMLButtonElement =>
   screen.getByTestId('join-submit') as HTMLButtonElement;
@@ -111,10 +158,13 @@ describe('JoinConferencePanel', () => {
 
   beforeEach(() => {
     window.__CONFAPP_CONFIG__ = { apiBaseUrl: '/api' };
+    globalThis.indexedDB = new IDBFactory();
+    setCacheIdentity(() => NADIA);
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
+    setCacheIdentity(() => null);
     vi.restoreAllMocks();
   });
 
@@ -135,7 +185,9 @@ describe('JoinConferencePanel', () => {
 
       // Sent verbatim: trimming, hyphens and case are the server's single normalization, and a
       // second copy here is how "works in the browser, not on the phone" happens.
-      expect(harness.calls).toEqual([{ method: 'POST', path: '/join', body: { code: 'k7rm4p' } }]);
+      expect(joinCalls(harness)).toEqual([
+        { method: 'POST', path: '/join', body: { code: 'k7rm4p' } },
+      ]);
 
       const success = await screen.findByTestId('join-success');
       expect(success.textContent).toContain('Kickoff 2026');
@@ -197,7 +249,7 @@ describe('JoinConferencePanel', () => {
       // The refusal is gone, replaced by the answer to the code now in the box.
       expect(screen.queryByTestId('join-refusal')).toBeNull();
 
-      expect(harness.calls.map((call) => call.body)).toEqual([
+      expect(joinCalls(harness).map((call) => call.body)).toEqual([
         { code: 'K7RM4X' },
         { code: 'K7RM4P' },
       ]);
@@ -315,7 +367,7 @@ describe('JoinConferencePanel', () => {
       // And it genuinely works – the attempt reaches the server rather than being swallowed.
       await userEvent.click(submitButton());
       await screen.findByTestId('join-success');
-      expect(harness.calls.map((call) => call.body)).toEqual([
+      expect(joinCalls(harness).map((call) => call.body)).toEqual([
         { code: 'ZZZ999' },
         { code: 'K7RM4P' },
       ]);
@@ -379,7 +431,95 @@ describe('JoinConferencePanel', () => {
       await screen.findByTestId('join-refusal');
 
       await userEvent.click(submitButton());
-      expect(harness.calls).toHaveLength(1);
+      expect(joinCalls(harness)).toHaveLength(1);
+    });
+  });
+
+  // ---------- S10 TI03 and TI09: priming the cache, and refusing to queue anything ----------
+
+  describe('a successful join', () => {
+    /**
+     * Joining online has to be enough to read the Schedule offline afterwards, so the join primes
+     * the cache instead of waiting for the employee to open the schedule view. Somebody who joins in
+     * the lobby and loses signal in the hall has still never opened it, and is exactly the person
+     * the offline story exists for.
+     */
+    it('caches the schedule, so joining online is enough to read it offline', async () => {
+      const harness = renderPanel({
+        'POST /join': JOINED,
+        [`GET /conferences/${KICKOFF.id}/schedule`]: { status: 200, body: ENVELOPE },
+      });
+
+      await userEvent.type(input(), 'K7RM4P');
+      await userEvent.click(submitButton());
+      await screen.findByTestId('join-success');
+
+      await waitFor(() =>
+        expect(
+          harness.calls.some(
+            (call) => call.method === 'GET' && call.path === `/conferences/${KICKOFF.id}/schedule`,
+          ),
+        ).toBe(true),
+      );
+
+      /*
+       * The request alone proves nothing - the whole claim is that an *entry* exists afterwards, so
+       * an attendee who never opens the schedule view can still read it with no connection. An
+       * earlier version of this test stubbed an empty body, which the cache quietly refused, and it
+       * stayed green with the write removed entirely.
+       */
+      await waitFor(async () => {
+        const cached = await readCachedSchedule(NADIA, KICKOFF.id);
+        expect(cached).not.toBeNull();
+        expect(cached!.envelope.days[0]!.sessions[0]!.startTime).toBe('09:00');
+      });
+    });
+
+    /** A failure to warm a cache nobody asked for is not something to put on the join screen. */
+    it('still reports the join when the cache could not be warmed', async () => {
+      renderPanel({ 'POST /join': JOINED });
+
+      await userEvent.type(input(), 'K7RM4P');
+      await userEvent.click(submitButton());
+
+      const success = await screen.findByTestId('join-success');
+      expect(success.textContent).toContain('Kickoff 2026');
+      expect(screen.queryByTestId('join-refusal')).toBeNull();
+    });
+  });
+
+  describe('while the device is offline', () => {
+    beforeEach(() => {
+      Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+    });
+
+    /**
+     * Joining is a write, and offline scope is read-only (FR8). The control says a connection is
+     * required rather than accepting a code into a queue nobody would be told about - a queue is
+     * the first step into sync and conflict resolution, which the product rejects outright.
+     */
+    it('refuses to join, says a connection is required, and queues nothing', async () => {
+      const harness = renderPanel({ 'POST /join': JOINED });
+
+      await userEvent.type(input(), 'K7RM4P');
+
+      expect(submitButton().disabled).toBe(true);
+      expect(screen.getByTestId('join-offline').textContent).toMatch(
+        /nothing is saved to send later/i,
+      );
+
+      await userEvent.click(submitButton());
+      expect(harness.calls).toEqual([]);
+
+      // And the connection returning submits nothing that was typed while it was gone.
+      Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+      window.dispatchEvent(new Event('online'));
+      await waitFor(() => expect(submitButton().disabled).toBe(false));
+      expect(harness.calls).toEqual([]);
     });
   });
 });
