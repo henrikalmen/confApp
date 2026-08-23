@@ -48,6 +48,7 @@
 - **Never wait on the value you are about to assert** – a `waitFor` on the expected output fails inside the helper when the defect is present, so the reading is never captured and the comparison that was the point of the test never runs. Wait on something the defect cannot touch.
 - **Assert cache contents, not the requests issued** – S10's guard dispatched exactly the right navigation and then asserted only that a fetch happened; it was green while the cache key was wrong.
 - **A structure test that skips when its marker is missing tests nothing** – S09's read-order guard silently no-opped on one of the two routes it named for a whole pass, because the second read lived in a different function than the slice it searched. Assert the marker is found; never `if (found > -1)`.
+- **Piping Playwright through `tail` masks the exit code and eats the `N failed` line** – a failing run reads as exit 0 and looks interrupted. Redirect to a file, or read `${PIPESTATUS[0]}`.
 
 ## React State & Refusals
 
@@ -71,6 +72,15 @@
 
 - **`cap sync` copies the SPA bundle and `sw.js` into the native projects** – ESLint/Prettier lint the copies (2088 errors). Ignore `web/android/**` + `web/ios/**` in both configs.
 - **Capacitor 8 scaffolds iOS on Windows** – it emits a SwiftPM `Package.swift` instead of `pod install`, so `cap add ios` and asset sync need no macOS; only compiling and signing do.
+
+## Docker / Container Dev Loop
+
+- **`docker compose up -d --force-recreate` never rebuilds the image** – it recreates from the existing image, so a clean tree serves weeks-old code. Use `docker compose build` / `up --build`.
+- **Container env is fixed at creation – `compose restart` keeps stale `.env`** – only recreation re-reads it; `GOOGLE_WEB_CLIENT_ID` feeds both `api` and the `web` `config.js` the browser gets.
+
+## Environment / WSL
+
+- **WSL OOM can surface as `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`** – it looks like a broken install; freeing host memory fixed it. First sign: the distro shuts down mid-session, taking dockerd.
 
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.
