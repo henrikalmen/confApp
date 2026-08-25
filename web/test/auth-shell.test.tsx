@@ -27,10 +27,24 @@ function stubSession(overrides: Partial<AuthSession> = {}): AuthSession {
     beginSignIn: vi.fn(async () => {}),
     completeRedirect: vi.fn(async () => ({ kind: 'nothing-to-do' }) as const),
     validToken: vi.fn(async () => null),
+    // `AuthProvider` registers this as the renewal seam on every mount, so a stub without it
+    // hands the app an `undefined` to call. Tests are outside `tsconfig`'s `include`, so nothing
+    // type-checks this file – the omission was invisible until it was looked for.
+    renewSilently: vi.fn(async () => {}),
     signOut: vi.fn(),
     onSessionCleared: () => () => {},
     ...overrides,
   };
+}
+
+/** A stub that is already signed in as `user` – what a shared device looks like mid-conference. */
+function signedInStub(overrides: Partial<AuthSession> = {}): AuthSession {
+  const stored: StoredSession = {
+    idToken: 'anna-token',
+    expiresAt: 4_000_000_000,
+    user: ANNA,
+  };
+  return stubSession({ current: () => stored, ...overrides });
 }
 
 function renderApp(session: AuthSession, search = '') {
@@ -79,6 +93,7 @@ describe('the signed-out shell', () => {
         kind: 'failed' as const,
         code: 'AUTH_DOMAIN_NOT_ALLOWED',
         message: 'confApp is limited to company Google Workspace accounts.',
+        silent: false,
       })),
     });
 
@@ -164,5 +179,61 @@ describe('the signed-in shell', () => {
 
     const init = vi.mocked(fetchSpy).mock.calls[0]?.[1] as RequestInit;
     expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+  });
+});
+
+// ---------- review 2026-08-25, H-2: whose session survives a failed redirect ----------
+
+describe('a redirect that failed while somebody was already signed in', () => {
+  /**
+   * **The shared-tablet case.** Anna is signed in; Björn taps "Sign in with Google", picks the
+   * wrong account, and the API refuses the domain. The app must land on the signed-out screen.
+   *
+   * Keying the surviving-session branch on `current() !== null` alone put Björn in *Anna's*
+   * session, under her name, with her conferences – the precise failure
+   * `docs/specs/shared-device-session-lifetime/` exists to prevent.
+   */
+  it('does not hand the previous person’s session to a refused interactive sign-in', async () => {
+    const session = signedInStub({
+      completeRedirect: vi.fn(async () => ({
+        kind: 'failed' as const,
+        code: 'AUTH_DOMAIN_NOT_ALLOWED',
+        message: 'That account is not on this company’s domain.',
+        silent: false,
+      })),
+    });
+
+    renderApp(session, '?code=c&state=s');
+
+    await screen.findByTestId('sign-in');
+    // Not signed in as anybody, and above all not as Anna.
+    expect(screen.queryByTestId('signed-in-identity')).toBeNull();
+    expect(screen.queryByText(ANNA.displayName)).toBeNull();
+    expect(screen.queryByTestId('session-renewal-failed')).toBeNull();
+  });
+
+  /**
+   * The other direction, and the one this feature exists for: a *silent renewal* Google refused
+   * without ending the session leaves the app signed in, with a banner asking for a sign-in – so
+   * whatever is already on the device stays readable (Acceptance Scenario S05).
+   */
+  it('keeps the app signed in with a banner when a silent renewal was refused', async () => {
+    const session = signedInStub({
+      completeRedirect: vi.fn(async () => ({
+        kind: 'failed' as const,
+        code: 'login_required',
+        message: 'Your sign-in has expired and could not be renewed automatically.',
+        silent: true,
+      })),
+    });
+
+    renderApp(session, '?code=c&state=s');
+
+    const banner = await screen.findByTestId('session-renewal-failed');
+    expect(banner.textContent).toMatch(/could not be renewed/i);
+    // Still signed in, so the attendee panel below it still renders its cached schedule.
+    expect(screen.getByTestId('signed-in-identity').textContent).toContain(ANNA.displayName);
+    expect(screen.queryByTestId('sign-in')).toBeNull();
+    expect(screen.getByTestId('session-sign-in-again')).not.toBeNull();
   });
 });

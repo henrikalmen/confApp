@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ApiError,
-  fetchHealth,
   fetchMyConferences,
   fetchScheduleWatermark,
   type AttendeeConference,
@@ -29,7 +28,6 @@ import {
 import { cachedScheduleLabel } from '../offline/cached-age.ts';
 import { ReconnectSummary } from '../offline/ReconnectSummary.tsx';
 import { SignInRequiredNotice } from '../offline/SignInRequiredNotice.tsx';
-import { requestRenewal } from '../auth/session-actions.ts';
 
 /**
  * The Attendee's home: the conference picker, the Schedule, and every non-result state.
@@ -112,17 +110,6 @@ function unreachable(error: unknown): boolean {
  */
 function answered(error: unknown): boolean {
   return error instanceof ApiError && error.status !== 0;
-}
-
-/**
- * Whether the request was never issued because there was no credential to issue it with (TI07).
- *
- * Distinguished from an ordinary transport failure because the two need opposite things: a dead
- * network needs waiting, and a lapsed sign-in needs renewing. Both are `unreachable`, and neither
- * takes the Schedule off the screen.
- */
-function credentialMissing(error: unknown): boolean {
-  return error instanceof ApiError && error.code === 'CREDENTIAL_UNAVAILABLE';
 }
 
 type Phase =
@@ -422,16 +409,6 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
   /** At most one poll in flight; a tick arriving while one is outstanding is skipped, not queued. */
   const pollingRef = useRef(false);
 
-  /**
-   * Whether this view has already asked for a renewal.
-   *
-   * A renewal is a top-level navigation, and asking twice is asking to leave the app twice. The
-   * session refuses a second one of its own accord, but the *decision* to ask belongs here and
-   * must be made once: without this the poll would probe reachability on every five-second tick
-   * for as long as the credential stayed lapsed.
-   */
-  const renewalAskedRef = useRef(false);
-
   const syncIfChanged = useCallback(
     async (signal: AbortSignal): Promise<void> => {
       const rendered = renderedRef.current;
@@ -539,37 +516,6 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
             setPhase({ kind: 'failed', failure: failureOf(error) });
           }
           return;
-        }
-
-        /*
-         * **The reconnect that a lapsed sign-in would otherwise never see.**
-         *
-         * With no credential, `apiRequest` refuses to issue the poll at all (TI07), so the poll
-         * can no longer be what notices the connection returning – it fails identically on a dead
-         * network and on a live one. Something still has to notice, or an attendee whose token
-         * lapsed on day two reads a cached schedule for the rest of the conference and is never
-         * offered the silent renewal that would put her back online.
-         *
-         * So this asks the one route that needs no credential – `/health`, the readiness signal
-         * that already exists for exactly this "is the API there" question – and only a **reply**
-         * starts the renewal. Not `navigator.onLine`, which is `true` behind a captive portal and
-         * on dead venue wifi, and not the link event: a request that answered is the only proof
-         * that a top-level navigation to Google has anywhere to go (Acceptance Scenario S04).
-         *
-         * Nothing about the refresh itself changes. It stays the ordinary authenticated request it
-         * has always been; this adds no route by which a Schedule could be read.
-         */
-        if (rendered.cached && !renewalAskedRef.current && credentialMissing(error)) {
-          try {
-            await fetchHealth(signal);
-          } catch {
-            // Still nothing there. The cached view stands and the next tick tries again.
-            return;
-          }
-          if (signal.aborted || renderedRef.current !== rendered) return;
-
-          renewalAskedRef.current = true;
-          void requestRenewal();
         }
       } finally {
         pollingRef.current = false;

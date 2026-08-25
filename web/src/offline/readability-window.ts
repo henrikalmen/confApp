@@ -36,10 +36,21 @@ const MILLIS_PER_DAY = 86_400_000;
  * Whether this cached entry may still be rendered offline.
  *
  * **"Now" is S10's rehydrated effective clock**, built from the entry's own persisted anchor – the
- * server's reading at the last sync, advanced by elapsed real time. Never the raw device clock: a
- * phone set a year forward would otherwise expire every entry on it, and one set back would keep a
- * departed employee's schedule readable indefinitely. S10 forbids a raw device clock as "now" on
- * any offline path and this is one.
+ * server's reading at the last sync, advanced by elapsed real time. S10 forbids a raw device clock
+ * as "now" on any offline path and this is one: a phone whose clock was already wrong *at* the last
+ * sync would otherwise expire every entry on it, and the anchor cancels that error exactly.
+ *
+ * **What it does not do is make the window tamper-proof.** The elapsed term reduces to
+ * `deviceClock() - anchor.deviceClockAtReceipt`, so a clock changed *after* the sync moves the
+ * effective day one-for-one – set the device back to the sync date and a lapsed entry reads as
+ * readable again, indefinitely. `effective-clock.ts` says the same thing about the highlight it was
+ * written for ("a device clock that jumps after sync skews the elapsed term"), and the same limit
+ * applies here. OC02's bound is therefore enforced against an *honest* device and is advisory
+ * against a hostile one. Closing it needs a monotonic high-water mark persisted with the entry, and
+ * that is a product decision rather than an oversight – recorded under `## Implementation
+ * Observations` in `docs/specs/offline-session-expiry/offline-session-expiry.md`, which is where
+ * the reasoning lives. (Not the review report it came from: `.agent_temp/` is the transient agent
+ * workspace by contract, so a permanent comment must not be the only pointer into it.)
  *
  * The comparison is between two naive calendar days, as strings, in the API's own frame. No `Date`
  * is constructed and no timezone is applied – 'YYYY-MM-DD' sorts lexicographically exactly as it

@@ -535,6 +535,123 @@ describe('renewal', () => {
     expect(outcome.message).toMatch(/did not complete the sign-in/i);
     expect(h.cleared).toEqual([]);
   });
+
+  /**
+   * Review 2026-08-25, M-2. **Cancelling a dialog is not a refused grant.**
+   *
+   * `access_denied` is what Google returns when somebody closes the account chooser or declines
+   * consent – and it is reachable from the two "Sign in again" controls this feature adds. Treating
+   * it as a deprovisioning would clear the session and fire the hook `AuthProvider` purges the
+   * whole schedule cache on, destroying every offline schedule on the device because a person
+   * changed their mind. Only a *silent renewal* refused this way means access has ended.
+   */
+  it('keeps an established session when an interactive sign-in is cancelled', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    // She is signed in and presses "Sign in again", then backs out of Google's chooser.
+    await h.session.beginSignIn();
+    const second = currentAttempt();
+    const outcome = await h.session.completeRedirect(`?error=access_denied&state=${second.state}`);
+
+    expect(outcome.kind).toBe('failed');
+    // The session stands, and the cache-purging hook never fired.
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
+
+  /**
+   * Review 2026-08-25, H-2. The flag `AuthProvider` needs to tell the two events apart.
+   *
+   * Without it the shell keys "may the previous session stand?" on whether a session happens to
+   * exist – which is true for every failure, including a stranger's refused sign-in on a shared
+   * tablet.
+   */
+  it('marks a failed renewal as silent and every other failure as not', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+    const renewalRefusal = await h.session.completeRedirect(
+      `?error=login_required&state=${renewal.state}`,
+    );
+    expect(renewalRefusal).toMatchObject({ kind: 'failed', silent: true });
+
+    // An interactive attempt refused the same way is not.
+    await h.session.beginSignIn();
+    const interactive = currentAttempt();
+    const interactiveRefusal = await h.session.completeRedirect(
+      `?error=login_required&state=${interactive.state}`,
+    );
+    expect(interactiveRefusal).toMatchObject({ kind: 'failed', silent: false });
+  });
+
+  /**
+   * A crafted link arriving *while a renewal is genuinely in flight* is still not a renewal
+   * outcome — the mismatch is rejected on the `state` check before `silent` is ever consulted.
+   *
+   * Its own harness, and deliberately so: only one renewal may start per page load
+   * (`renewalStarted`), so a second `renewSilently()` in the test above is a no-op and would leave
+   * no attempt for the crafted link to miss. Starting it with `beginSignIn()` instead would leave
+   * `attempt.silent` false already, and the assertion would pass whatever the branch did.
+   */
+  it('does not let a crafted refusal pass itself off as the renewal in flight', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    // An attempt with `silent: true` is now stored, and this link does not match it.
+    expect(JSON.parse(sessionStorage.getItem('confapp.auth.attempt')!).silent).toBe(true);
+
+    const mismatched = await h.session.completeRedirect('?error=login_required&state=attacker');
+
+    expect(mismatched).toMatchObject({
+      kind: 'failed',
+      code: 'SIGN_IN_STATE_MISMATCH',
+      silent: false,
+    });
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
+
+  /**
+   * Review 2026-08-25, F-1. A renewal that reaches Google and then cannot reach **our** API.
+   *
+   * It is still a renewal, and saying otherwise sends the shell to the signed-out screen and takes
+   * the cached Schedule off a device that may have no network — on Capacitor the SPA is served from
+   * the local bundle, so the redirect can complete with no connectivity at all.
+   */
+  it('reports a renewal whose token exchange could not reach the API as silent', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+
+    // Nothing queued, so the harness's fetch rejects – the transport failing, not the API refusing.
+    const outcome = await h.session.completeRedirect(`?code=fresh&state=${renewal.state}`);
+
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'NETWORK_UNREACHABLE', silent: true });
+    // The session was never cleared, so the shell has something to keep rendering.
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
 });
 
 describe('sign-out and the user-switch hook', () => {

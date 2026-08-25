@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 import { createAuthSession, type AuthSession, type SessionUser } from './session.ts';
-import { setTokenSource } from '../api/client.ts';
+import { fetchHealth, setCredentialMissingListener, setTokenSource } from '../api/client.ts';
 import { setSessionActions } from './session-actions.ts';
 import { resolveAuthConfig } from '../config.ts';
 import {
@@ -45,6 +45,15 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+/**
+ * How long the reachability probe may take before it is treated as unanswered.
+ *
+ * Generous, because a slow answer is still an answer and a needless retry costs a request; bounded,
+ * because a connection that accepts and never replies would otherwise hold the one probe slot open
+ * for the life of the page.
+ */
+const REACHABILITY_PROBE_MS = 10_000;
 
 export interface AuthProviderProps {
   children: React.ReactNode;
@@ -84,6 +93,17 @@ export function AuthProvider({
    * "this sign-in did not start in this tab" over a sign-in that had in fact just succeeded.
    * A ref, not state: it must survive the remount that causes the problem.
    */
+  /**
+   * The renewal has been asked for on this page load, so it will not be asked for again.
+   *
+   * Set only once `renewSilently()` has resolved without throwing – a renewal that failed to
+   * start (no `crypto.subtle`, a storage refusal writing the PKCE attempt) must not burn the one
+   * attempt this page gets.
+   */
+  const renewalAsked = useRef(false);
+  /** A probe is outstanding; further refusals are the same event and do not start a second one. */
+  const probing = useRef(false);
+
   const redirectHandled = useRef(false);
   /**
    * Liveness has to be a ref rather than a per-run closure. The redirect is started by the first
@@ -121,7 +141,48 @@ export function AuthProvider({
      * page that cannot load. Only a caller that has just seen the API answer invokes it
      * (`offline-session-expiry` TI05).
      */
-    setSessionActions({ renew: () => session.renewSilently(), signIn: startSignIn });
+    setSessionActions({ signIn: startSignIn });
+
+    /*
+     * **What renews the credential, for the whole app.**
+     *
+     * `validToken()` no longer navigates (`offline-session-expiry` TI01), so something has to
+     * decide when a renewal may fire. The rule is unchanged and is the whole point of the story:
+     * **only after the API has actually answered.** A renewal is a top-level navigation, and one
+     * fired on a hunch takes an attendee reading a cached schedule with no connection out of the
+     * app entirely, to a page that cannot load.
+     *
+     * With a lapsed credential no *authenticated* request can leave the device (TI07), so their
+     * failure proves nothing about the network – it is identical on dead venue wifi and on a
+     * perfect connection. The only available proof is the one route that needs no credential:
+     * `/health`, the readiness signal that already exists for exactly this question. A reply
+     * starts the renewal; a failure means the next refused request will ask again.
+     *
+     * Registered here rather than in a view because every surface needs it. Held in the attendee
+     * panel it covered one branch of one component, and an organizer working past the token's
+     * one-hour life hit a wall no screen offered a way out of.
+     */
+    setCredentialMissingListener(() => {
+      if (renewalAsked.current || probing.current) return;
+      probing.current = true;
+
+      void (async () => {
+        // The probe cannot be allowed to hang: a black-holed connection is the ordinary venue-wifi
+        // failure, and an outstanding probe blocks every later attempt for the life of the page.
+        const controller = new AbortController();
+        const deadline = setTimeout(() => controller.abort(), REACHABILITY_PROBE_MS);
+        try {
+          await fetchHealth(controller.signal);
+          await session.renewSilently();
+          renewalAsked.current = true;
+        } catch {
+          // Nothing answered, or the renewal could not start. The next refused request tries again.
+        } finally {
+          clearTimeout(deadline);
+          probing.current = false;
+        }
+      })();
+    });
     /*
      * And the identity every cached Schedule is keyed under (S10 TI01). The `sub` claim, never the
      * email – emails change and `sub` does not (AGENTS.md). Supplied the same way as the token
@@ -179,15 +240,22 @@ export function AuthProvider({
         }
 
         /*
-         * **A refusal no longer implies a signed-out app.** The session module classifies the
-         * refusal code and clears the session only for a refused *grant*; a lapsed Google
-         * session leaves it standing (`offline-session-expiry` TI06). Where it stands, the app
-         * stays where it was – with its cached Schedule on screen – and asks for a sign-in
+         * **A refused *renewal* no longer implies a signed-out app.** The session module
+         * classifies the refusal code and clears the session only for a refused *grant*; a lapsed
+         * Google session leaves it standing (`offline-session-expiry` TI06). Where it stands, the
+         * app stays where it was – with its cached Schedule on screen – and asks for a sign-in
          * instead of replacing the screen with one. Dropping to `signed-out` here would hide the
-         * schedule the whole feature exists to keep readable, and it would do so on a device
-         * that may have no connection to sign in with.
+         * schedule the whole feature exists to keep readable, and it would do so on a device that
+         * may have no connection to sign in with.
+         *
+         * **Gated on `silent`, not merely on a session existing.** A failed *interactive* sign-in
+         * is a different event with the opposite answer: on a shared conference tablet, somebody
+         * whose sign-in was refused must reach the signed-out screen, not be handed back the
+         * previous person's session under their name. Keying this on `current() !== null` alone
+         * did exactly that for every non-renewal failure – a state mismatch, a refused domain, a
+         * network drop mid-exchange.
          */
-        const surviving = session.current();
+        const surviving = outcome.silent ? session.current() : null;
         if (surviving !== null) {
           claim(surviving.user);
           setState({

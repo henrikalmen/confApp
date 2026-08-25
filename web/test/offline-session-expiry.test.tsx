@@ -1,16 +1,23 @@
 import 'fake-indexeddb/auto';
+import { useEffect } from 'react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { IDBFactory } from 'fake-indexeddb';
 import { AttendeeSchedulePanel } from '../src/attendee/AttendeeSchedulePanel.tsx';
 import {
+  adoptCacheOwner,
   cachedKeys,
   readCachedSchedule,
   setCacheIdentity,
   writeCachedSchedule,
 } from '../src/offline/schedule-cache.ts';
 import { listCachedConferences } from '../src/offline/schedule-data.ts';
-import { setTokenSource } from '../src/api/client.ts';
+import {
+  fetchMyConferences,
+  setCredentialMissingListener,
+  setTokenSource,
+} from '../src/api/client.ts';
+import { AuthProvider } from '../src/auth/AuthProvider.tsx';
 import { createAuthSession, type AuthSession } from '../src/auth/session.ts';
 import { setSessionActions } from '../src/auth/session-actions.ts';
 import type { WebAuthConfig } from '../src/config.ts';
@@ -112,6 +119,13 @@ function envelope(options: {
  * "today"; time passes because the device clock moved.
  */
 async function cache(entry: AttendeeSchedule, receipt = RECEIPT): Promise<void> {
+  /*
+   * Claim the store first, as a real device does on every launch. `adoptCacheOwner` fails closed –
+   * a store with no owner marker is emptied – so an entry written into an unclaimed store is
+   * deleted the moment anything signs in. Under the bare panel nothing claimed and it did not
+   * matter; under `AuthProvider` it does, and the fixture has to look like the device.
+   */
+  await adoptCacheOwner(NADIA.sub);
   await writeCachedSchedule(NADIA.sub, entry.conference.id, {
     envelope: entry,
     watermark: entry.conference.lastUpdatedAt,
@@ -203,11 +217,14 @@ async function settle(): Promise<void> {
 
 interface Lapsed {
   session: AuthSession;
-  /** Where the browser was told to go. Empty is the assertion S01 turns on. */
+  /**
+   * Where the browser was told to go – the real navigation seam, and the only honest measure of
+   * "a renewal was attempted". Empty is the assertion S01 and S04's first half turn on.
+   */
   navigations: string[];
-  /** Calls to the renewal entry point, counted at the seam the panel invokes. */
-  readonly renewals: number;
   readonly signIns: number;
+  /** Authenticated requests refused for want of a credential – proof a poll tick really ran. */
+  readonly refusals: number;
 }
 
 /**
@@ -246,16 +263,13 @@ async function lapsedSignIn(): Promise<Lapsed> {
   expect(auth.current()?.user.sub).toBe(NADIA.sub);
   expect(await auth.validToken()).toBeNull();
 
-  const counters = { renewals: 0, signIns: 0 };
+  const counters = { signIns: 0, refusals: 0 };
   setTokenSource(() => auth.validToken());
   setCacheIdentity(() => NADIA.sub);
+  setCredentialMissingListener(() => {
+    counters.refusals += 1;
+  });
   setSessionActions({
-    renew: () => {
-      counters.renewals += 1;
-      // Delegated to the real entry point, so a navigation that should not have happened shows up
-      // in `navigations` rather than being swallowed by a counter.
-      return auth.renewSilently();
-    },
     signIn: () => {
       counters.signIns += 1;
       void auth.beginSignIn();
@@ -265,13 +279,42 @@ async function lapsedSignIn(): Promise<Lapsed> {
   return {
     session: auth,
     navigations,
-    get renewals() {
-      return counters.renewals;
-    },
     get signIns() {
       return counters.signIns;
     },
+    get refusals() {
+      return counters.refusals;
+    },
   };
+}
+
+/**
+ * A stand-in for any surface that is not the attendee schedule.
+ *
+ * Deliberately the smallest thing that makes one authenticated request: `ConferencesPanel` and the
+ * rest would drag their own fixtures in, and what is under test is that the *shell* renews for a
+ * consumer with no cache, no schedule and no knowledge of offline at all.
+ */
+function Organizerish(): React.JSX.Element {
+  useEffect(() => {
+    void fetchMyConferences().catch(() => {});
+  }, []);
+  return <p>organizer surface</p>;
+}
+
+/**
+ * The panel under the shell that owns renewal.
+ *
+ * `AuthProvider` is what decides a renewal may fire, off the API client's credential-missing seam,
+ * so any scenario about *renewal* has to render it. Scenarios about what the panel *shows* render
+ * the panel bare, as the rest of this file does – that separation is the point of the seam.
+ */
+function renderUnderShell(session: AuthSession) {
+  return render(
+    <AuthProvider session={session} initialSearch="">
+      <AttendeeSchedulePanel />
+    </AuthProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -284,7 +327,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   setCacheIdentity(() => null);
-  setSessionActions({ renew: () => {}, signIn: () => {} });
+  setSessionActions({ signIn: () => {} });
+  setCredentialMissingListener(() => {});
   setOnLine(true);
 });
 
@@ -315,7 +359,6 @@ describe('an attendee on day two whose sign-in lapsed overnight, with no connect
 
     // The claim this scenario exists for, asserted where it can actually be observed.
     expect(lapsed.navigations).toEqual([]);
-    expect(lapsed.renewals).toBe(0);
     // And the session was never cleared on the way, so the cache is still hers to read.
     expect(lapsed.session.current()?.user.sub).toBe(NADIA.sub);
     expect(await readCachedSchedule(NADIA.sub, KICKOFF)).not.toBeNull();
@@ -442,19 +485,28 @@ describe('a captive portal that reports a link and answers nothing', () => {
       routeFetch(() => table),
     );
 
-    render(<AttendeeSchedulePanel />);
+    renderUnderShell(lapsed.session);
     await screen.findByTestId('attendee-session-list');
 
-    // Several prompts to try, each one a request that genuinely goes out and genuinely fails.
+    /*
+     * Several prompts to try. Each one drives a poll that is refused for want of a credential, and
+     * the shell answers that refusal by probing `/health` – so a request really does go out and
+     * really does fail. Asserted on `issued` rather than on the harness's refusal counter, because
+     * `AuthProvider` installs its own credential-missing listener over the counter's: the seam is a
+     * module singleton and the shell is the legitimate owner of it.
+     */
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const before = issued.length;
       fireEvent(window, new Event('online'));
       await waitFor(() => expect(issued.length).toBeGreaterThan(before));
       await settle();
     }
-    // `navigator.onLine` decided nothing. No renewal, and above all no navigation away from a
-    // screen that is currently showing the attendee her schedule.
-    expect(lapsed.renewals).toBe(0);
+    // Everything that left the device was the anonymous probe. Nothing authenticated was sent
+    // without a credential, which is TI07's guarantee holding underneath this scenario.
+    expect(issued.every((request) => request.url.endsWith('/health'))).toBe(true);
+    expect(issued.every((request) => request.authorization === undefined)).toBe(true);
+    // `navigator.onLine` decided nothing, and the probe was refused every time. Above all: no
+    // navigation away from a screen that is currently showing the attendee her schedule.
     expect(lapsed.navigations).toEqual([]);
 
     // The venue wifi comes back for real: the API answers.
@@ -463,7 +515,6 @@ describe('a captive portal that reports a link and answers nothing', () => {
     };
     fireEvent(window, new Event('online'));
 
-    await waitFor(() => expect(lapsed.renewals).toBe(1));
     // DR04's mechanism, unchanged: one silent top-level navigation, no iframe and no refresh token.
     await waitFor(() => expect(lapsed.navigations).toHaveLength(1));
     const params = new URL(lapsed.navigations[0]!).searchParams;
@@ -472,13 +523,70 @@ describe('a captive portal that reports a link and answers nothing', () => {
     expect(params.get('code_challenge_method')).toBe('S256');
 
     // And asking again does not ask twice: a renewal is a navigation away from the app, and the
-    // decision to make one belongs to this view once.
+    // decision to make one is taken once per page load.
     fireEvent(window, new Event('online'));
     await settle();
     fireEvent(window, new Event('online'));
     await settle();
-    expect(lapsed.renewals).toBe(1);
     expect(lapsed.navigations).toHaveLength(1);
+  });
+});
+
+// ---------- C-1: the renewal reaches every surface, not just a cached schedule ----------
+
+describe('a lapsed credential on a view that is not reading from the cache', () => {
+  /**
+   * The regression this file previously could not see. Renewal used to be reachable from one
+   * branch of the attendee panel's poll, gated on that poll rendering *cached* data — so an
+   * attendee online all day, whose token lapsed after an hour, silently stopped refreshing and was
+   * never offered the renewal. S02's OC01 ("stays signed in across the multi-day conference") is
+   * about exactly this person.
+   */
+  it('renews for a live schedule that is not cached at all', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
+    const lapsed = await lapsedSignIn();
+
+    // Nothing cached, and the API is answering everything it is asked. The only thing wrong is
+    // that the stored token lapsed, so no authenticated request can be issued.
+    setOnLine(true);
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(() => ({
+        '/health': { status: 200, body: { status: 'ok', schemaVersion: '1', serverTime: 'x' } },
+      })),
+    );
+
+    renderUnderShell(lapsed.session);
+
+    await waitFor(() => expect(lapsed.navigations).toHaveLength(1));
+    expect(new URL(lapsed.navigations[0]!).searchParams.get('prompt')).toBe('none');
+  });
+
+  /**
+   * And the other half: a surface with no schedule and no cache of its own. An organizer working
+   * past the token's one-hour life hit a wall that no screen offered a way out of, because the one
+   * renewal trigger lived inside the attendee panel.
+   */
+  it('renews for a surface that has no schedule and no cache', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
+    const lapsed = await lapsedSignIn();
+
+    setOnLine(true);
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(() => ({
+        '/health': { status: 200, body: { status: 'ok', schemaVersion: '1', serverTime: 'x' } },
+      })),
+    );
+
+    // Nothing offline-aware in this tree at all – it just makes one authenticated request.
+    render(
+      <AuthProvider session={lapsed.session} initialSearch="">
+        <Organizerish />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(lapsed.navigations).toHaveLength(1));
   });
 });
 
@@ -487,7 +595,7 @@ describe('a captive portal that reports a link and answers nothing', () => {
 describe('the panel’s next scheduled refresh with no usable credential', () => {
   it('sends no request without an Authorization header, and forgets nothing', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
-    await lapsedSignIn();
+    const lapsed = await lapsedSignIn();
     await cache(KICKOFF_2026);
 
     setOnLine(true);
@@ -500,17 +608,17 @@ describe('the panel’s next scheduled refresh with no usable credential', () =>
     await screen.findByTestId('attendee-session-list');
 
     fireEvent(window, new Event('online'));
-    await waitFor(() => expect(issued.length).toBeGreaterThan(0));
+    // A refusal is the proof the scheduled refresh really ran: with no credential the request is
+    // never issued, so waiting on `issued` would be waiting for the very thing that must not happen.
+    await waitFor(() => expect(lapsed.refusals).toBeGreaterThan(0));
 
     /*
      * The defect in one line. An authenticated route reached without a credential answers 401,
      * the panel reads an answer as authoritative, and the cached entry is deleted – so the request
-     * must not be made at all. `/health` is the one anonymous route and is allowed to be issued.
+     * must not be made at all. Rendered bare, so nothing here probes `/health` either: the device
+     * sent nothing whatsoever.
      */
-    const authenticated = issued.filter((request) => !request.url.endsWith('/health'));
-    expect(authenticated).toEqual([]);
-    // Whatever was issued carried no credential, and needed none.
-    expect(issued.every((request) => request.authorization === undefined)).toBe(true);
+    expect(issued).toEqual([]);
 
     // The schedule is still on screen, from the cache, and the entry is still in storage.
     expect(screen.getByTestId('attendee-session-list').textContent).toContain('Opening Keynote');

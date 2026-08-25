@@ -157,4 +157,30 @@ describe('a device whose own clock is wrong', () => {
     expect(withinReadabilityWindow(wrongAtSync, () => RECEIPT + 367 * DAY)).toBe(true);
     expect(withinReadabilityWindow(wrongAtSync, () => RECEIPT + (365 + 8) * DAY)).toBe(false);
   });
+
+  /**
+   * Review 2026-08-25, H-4 / N-6 – **the predicate has no memory of a reading it has already seen.**
+   *
+   * This is what makes OC02's bound advisory against a hostile device, and it is a property of the
+   * *function*, not of any particular clock value: the answer depends only on the reading handed in
+   * at the moment of the call, so a later call with an earlier reading is answered as though the
+   * earlier reading were the present. Nothing in `entry` or in the module records that day 372 was
+   * ever observed.
+   *
+   * Stated this way rather than as "a rollback returns `true`", which would be indistinguishable
+   * from an ordinary read at sync time and would prove nothing. A monotonic high-water mark would
+   * be persisted in the cache entry, so it is *this* assertion – no memory across calls – that
+   * such a change would falsify.
+   */
+  it('answers from the reading handed in, carrying no memory of a later one', () => {
+    const ended = entry({ syncedOn: '2026-09-18', endDate: '2026-09-18' });
+    const clock = daysLater(372);
+
+    expect(withinReadabilityWindow(ended, clock)).toBe(false);
+    // The same entry object, after that observation, answered purely from the new reading.
+    expect(withinReadabilityWindow(ended, daysLater(0))).toBe(true);
+    // And the entry itself was not marked by having been seen past its window.
+    expect(ended.deviceClockAtReceipt).toBe(RECEIPT);
+    expect(Object.keys(ended).sort()).toEqual(['deviceClockAtReceipt', 'envelope', 'watermark']);
+  });
 });

@@ -92,6 +92,28 @@ export function setTokenSource(source: TokenSource): void {
   tokenSource = source;
 }
 
+/**
+ * Told when an authenticated request could not be issued for want of a credential.
+ *
+ * **A notification, not a decision.** This module knows the fact — something needed a token and
+ * there wasn't one — and knows nothing about what to do with it; renewing is a top-level
+ * navigation and belongs to the auth layer, which registers here. Keeping the decision out of
+ * `apiRequest` is deliberate: a request function that can navigate the page away is a surprising
+ * thing to call.
+ *
+ * It exists because the credential accessor stopped renewing (`offline-session-expiry` TI01) and
+ * for a while nothing took over: renewal was reachable from one branch of the attendee panel, so
+ * an attendee reading a live schedule, and every organizer surface, silently lost API access an
+ * hour after signing in and never got it back.
+ */
+export type CredentialMissingListener = () => void;
+
+let credentialMissing: CredentialMissingListener = () => {};
+
+export function setCredentialMissingListener(listener: CredentialMissingListener): void {
+  credentialMissing = listener;
+}
+
 export interface RequestOptions {
   signal?: AbortSignal;
   /** Anonymous routes (`/health`) skip the credential entirely rather than sending an empty one. */
@@ -125,6 +147,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
      * handles it with no new classification to keep in step.
      */
     if (token === null) {
+      // Announced before it is thrown, so a listener sees every refusal rather than only the ones
+      // whose caller happens to inspect the error.
+      credentialMissing();
       throw new ApiError(
         'CREDENTIAL_UNAVAILABLE',
         'Your sign-in has expired, so this could not be requested. Anything already saved on ' +

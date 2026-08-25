@@ -74,8 +74,15 @@ export type SessionClearedListener = (event: SessionClearedEvent) => void;
 export type SignInOutcome =
   | { kind: 'signed-in'; user: SessionUser; returnTo: string }
   | { kind: 'nothing-to-do' }
-  /** The redirect could not be trusted or Google refused it; `message` is displayable. */
-  | { kind: 'failed'; message: string; code: string };
+  /**
+   * The redirect could not be trusted or Google refused it; `message` is displayable.
+   *
+   * `silent` says whether the attempt that failed was a **background renewal** rather than a
+   * person pressing "Sign in". Only a renewal may leave the previous session standing: a failed
+   * *interactive* sign-in on a shared tablet must land on the signed-out screen, not hand the
+   * device back to whoever was signed in before.
+   */
+  | { kind: 'failed'; message: string; code: string; silent: boolean };
 
 export interface AuthSession {
   current(): StoredSession | null;
@@ -239,6 +246,7 @@ export function createAuthSession({
         if (current() !== null) return { kind: 'nothing-to-do' };
         return {
           kind: 'failed',
+          silent: false,
           code: 'SIGN_IN_ATTEMPT_MISSING',
           message:
             'This sign-in did not start in this tab, so it was not completed. Please sign in again.',
@@ -251,6 +259,9 @@ export function createAuthSession({
       if (state === null || state !== attempt.state) {
         return {
           kind: 'failed',
+          // The redirect did not belong to this browser's attempt, so nothing about it may be
+          // trusted – least of all a claim to be a renewal that keeps a session alive.
+          silent: false,
           code: 'SIGN_IN_STATE_MISMATCH',
           message:
             'This sign-in did not match the request that started it, so it was not completed. ' +
@@ -280,11 +291,19 @@ export function createAuthSession({
        */
       if (error !== null) {
         const previous = current();
-        const grantRefused = GRANT_REFUSED.has(error);
+        /*
+         * **Only a *silent renewal* can refuse a grant in a way that ends access.** An interactive
+         * sign-in returns `access_denied` when the person closes Google's account chooser or
+         * declines consent – which says nothing whatever about their entitlement, and which is
+         * reachable from the two "Sign in again" controls this feature adds. Clearing there would
+         * purge every cached schedule on the device because somebody cancelled a dialog.
+         */
+        const grantRefused = attempt.silent && GRANT_REFUSED.has(error);
         if (grantRefused && previous !== null) clearSession('sign-out', previous.user.sub);
 
         return {
           kind: 'failed',
+          silent: attempt.silent,
           code: error,
           message: !attempt.silent
             ? 'Google did not complete the sign-in. Please try again.'
@@ -311,6 +330,11 @@ export function createAuthSession({
       } catch {
         return {
           kind: 'failed',
+          // A renewal that got its code from Google and then could not reach the API is still a
+          // renewal. Reporting it as interactive sends the shell to the signed-out screen and
+          // takes the cached Schedule off a device that may have no network at all – which is
+          // precisely the failure this feature exists to remove (review 2026-08-25, F-1).
+          silent: attempt.silent,
           code: 'NETWORK_UNREACHABLE',
           message: 'The app could not reach the server to finish signing in. Please try again.',
         };
@@ -322,6 +346,9 @@ export function createAuthSession({
         const envelope = body as { error?: { code?: string; message?: string } } | null;
         return {
           kind: 'failed',
+          // The code came back and the API refused to redeem it. Whatever started this, the
+          // person is signed out – a half-completed exchange is not a session worth keeping.
+          silent: false,
           code: envelope?.error?.code ?? 'UNEXPECTED_RESPONSE',
           message:
             envelope?.error?.message ??
