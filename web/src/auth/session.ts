@@ -22,6 +22,18 @@ const LAST_SUB_KEY = 'confapp.auth.lastSub';
 /** Renew this far ahead of expiry, so a call in flight does not race the clock. */
 const RENEW_MARGIN_SECONDS = 120;
 
+/**
+ * The refusal codes that mean **the grant itself was refused**, and so that access has ended.
+ *
+ * Deliberately a closed list of two rather than "everything except the lapse codes". An
+ * unrecognised code is far more likely to be a transient or new Google condition than a
+ * deprovisioning, and the cost of the two mistakes is not symmetric: guessing "lapsed" wrongly
+ * leaves a departed employee reading a cached schedule until its readability window closes,
+ * while guessing "deprovisioned" wrongly deletes every attendee's offline schedule at once the
+ * first time Google answers `server_error` (`offline-session-expiry` → Decisions Log).
+ */
+const GRANT_REFUSED = new Set(['invalid_grant', 'access_denied']);
+
 export interface SessionUser {
   sub: string;
   email: string;
@@ -69,8 +81,24 @@ export interface AuthSession {
   current(): StoredSession | null;
   beginSignIn(options?: { returnTo?: string }): Promise<void>;
   completeRedirect(search: string): Promise<SignInOutcome>;
-  /** The credential to attach, renewing first if it is at or past its margin. */
+  /**
+   * The credential to attach, or `null` when there is none to attach.
+   *
+   * **A pure accessor: it never navigates.** A stale token yields `null` and nothing else
+   * happens. Renewal is `renewSilently()`, invoked deliberately by a caller that has just
+   * proven the API answers – because a renewal is a top-level navigation, and firing one from
+   * the credential path takes an attendee reading a cached schedule offline away from the app
+   * and onto a page that cannot load (`offline-session-expiry` OC01).
+   */
   validToken(): Promise<string | null>;
+  /**
+   * Starts DR04's silent renewal – a `prompt=none` top-level navigation, no refresh token and
+   * no iframe, exactly as S02 specified it. Only *when* it fires has moved.
+   *
+   * A no-op while the stored token is comfortably valid, when there is no session, and after a
+   * renewal has already started in this page: it is a navigation, so only one may ever begin.
+   */
+  renewSilently(): Promise<void>;
   signOut(): void;
   onSessionCleared(listener: SessionClearedListener): () => void;
 }
@@ -231,20 +259,40 @@ export function createAuthSession({
       }
 
       /**
-       * Google refused, and the refusal is provably ours. When it answers a *silent renewal*
-       * the session is over – a deprovisioned account is the case the PRD's edge-case table
-       * names – and the person is told why rather than left on a screen that quietly fails.
+       * Google refused, and the refusal is provably ours. **The code decides what that means.**
+       *
+       * This is the one place in the tree that classifies a refusal, and it has to be: the
+       * clearing hook fires `purgeScheduleCache()`, so by the time any view is involved the
+       * store is already empty and there is nothing left to preserve. A second classifier
+       * downstream could only disagree with this one.
+       *
+       * `invalid_grant` / `access_denied` are the grant itself being refused – a deprovisioned
+       * account, the case `prd.md#edge-cases` means by "access ends". The session ends and the
+       * cached schedules go with it.
+       *
+       * Everything else – `login_required` and `interaction_required` above all, but equally an
+       * unrecognised or transient `server_error` – means the *Google session* lapsed, not the
+       * employment. Clearing there would take a still-employed attendee's offline schedule away
+       * mid-conference over an expired Workspace cookie. So the stored session and the cache
+       * both stand and the person is asked to sign in again. It is the lenient default on
+       * purpose, and it is safe because the readability window still bounds how long a
+       * misclassified deprovisioning can read anything offline.
        */
       if (error !== null) {
         const previous = current();
-        if (previous !== null) clearSession('sign-out', previous.user.sub);
+        const grantRefused = GRANT_REFUSED.has(error);
+        if (grantRefused && previous !== null) clearSession('sign-out', previous.user.sub);
+
         return {
           kind: 'failed',
           code: error,
-          message: attempt.silent
-            ? 'Your session has ended because Google would not renew it. This usually means the ' +
-              'account no longer has access. Please sign in again.'
-            : 'Google did not complete the sign-in. Please try again.',
+          message: !attempt.silent
+            ? 'Google did not complete the sign-in. Please try again.'
+            : grantRefused
+              ? 'Your session has ended because Google would not renew it. This usually means ' +
+                'the account no longer has access. Please sign in again.'
+              : 'Your sign-in has expired and could not be renewed automatically. Anything ' +
+                'already saved on this device stays readable. Please sign in again.',
         };
       }
 
@@ -302,12 +350,26 @@ export function createAuthSession({
       const session = current();
       if (session === null) return null;
 
+      /*
+       * At or past the margin there is simply no credential to present. This used to start the
+       * renewal navigation from here, which made every read of a cached schedule on a device
+       * with an hour-old token navigate to Google – offline, that leaves the app entirely for a
+       * page that cannot load, and the schedule sitting in storage is never rendered. Renewal is
+       * `renewSilently()` now, and only a caller that has proven the API answers invokes it.
+       */
       if (session.expiresAt - RENEW_MARGIN_SECONDS > now()) return session.idToken;
+      return null;
+    },
 
-      // At or past the margin: renew silently rather than letting the next call be refused.
-      // This is a top-level navigation, so nothing after it in this tab will run – and only the
-      // first caller may start it (see `renewalStarted`).
-      if (renewalStarted) return null;
+    async renewSilently(): Promise<void> {
+      const session = current();
+      if (session === null) return;
+      // Nothing to renew. Asked on every reconnect, so a fresh token must not spend a navigation.
+      if (session.expiresAt - RENEW_MARGIN_SECONDS > now()) return;
+
+      // A top-level navigation, so nothing after it in this tab will run – and only the first
+      // caller may start it (see `renewalStarted`).
+      if (renewalStarted) return;
       renewalStarted = true;
 
       await authorize({
@@ -315,7 +377,6 @@ export function createAuthSession({
         silent: true,
         loginHint: session.user.email,
       });
-      return null;
     },
 
     signOut(): void {

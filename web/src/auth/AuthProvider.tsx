@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { createAuthSession, type AuthSession, type SessionUser } from './session.ts';
 import { setTokenSource } from '../api/client.ts';
+import { setSessionActions } from './session-actions.ts';
 import { resolveAuthConfig } from '../config.ts';
 import {
   adoptCacheOwner,
@@ -29,7 +30,12 @@ export type AuthState =
   | { kind: 'unconfigured'; message: string }
   | { kind: 'signed-out'; error?: { code: string; message: string } }
   | { kind: 'signing-in' }
-  | { kind: 'signed-in'; user: SessionUser };
+  /**
+   * `renewalFailed` is present when a silent renewal was refused for a reason that did **not**
+   * end the session – a lapsed Google session rather than a refused grant. The app carries on
+   * with everything already on the device readable, and says a sign-in is needed.
+   */
+  | { kind: 'signed-in'; user: SessionUser; renewalFailed?: { code: string; message: string } };
 
 interface AuthContextValue {
   state: AuthState;
@@ -88,6 +94,13 @@ export function AuthProvider({
    */
   const mounted = useRef(false);
 
+  /** One definition of "start an interactive sign-in", used by the context and by the seam below. */
+  const startSignIn = useCallback((): void => {
+    if (session === null) return;
+    setState({ kind: 'signing-in' });
+    void session.beginSignIn();
+  }, [session]);
+
   useEffect(() => {
     mounted.current = true;
 
@@ -101,6 +114,14 @@ export function AuthProvider({
 
     // The credential source for every authenticated request in the app.
     setTokenSource(() => session.validToken());
+    /*
+     * And the two session actions a view may need to invoke. Renewal is here rather than inside
+     * `validToken()` because it is a top-level navigation: fired from the credential path it
+     * takes an attendee reading a cached schedule with no connection out of the app and onto a
+     * page that cannot load. Only a caller that has just seen the API answer invokes it
+     * (`offline-session-expiry` TI05).
+     */
+    setSessionActions({ renew: () => session.renewSilently(), signIn: startSignIn });
     /*
      * And the identity every cached Schedule is keyed under (S10 TI01). The `sub` claim, never the
      * email – emails change and `sub` does not (AGENTS.md). Supplied the same way as the token
@@ -156,6 +177,27 @@ export function AuthProvider({
         if (typeof history !== 'undefined' && typeof location !== 'undefined') {
           history.replaceState(null, '', location.pathname);
         }
+
+        /*
+         * **A refusal no longer implies a signed-out app.** The session module classifies the
+         * refusal code and clears the session only for a refused *grant*; a lapsed Google
+         * session leaves it standing (`offline-session-expiry` TI06). Where it stands, the app
+         * stays where it was – with its cached Schedule on screen – and asks for a sign-in
+         * instead of replacing the screen with one. Dropping to `signed-out` here would hide the
+         * schedule the whole feature exists to keep readable, and it would do so on a device
+         * that may have no connection to sign in with.
+         */
+        const surviving = session.current();
+        if (surviving !== null) {
+          claim(surviving.user);
+          setState({
+            kind: 'signed-in',
+            user: surviving.user,
+            renewalFailed: { code: outcome.code, message: outcome.message },
+          });
+          return;
+        }
+
         setState({
           kind: 'signed-out',
           error: { code: outcome.code, message: outcome.message },
@@ -176,13 +218,7 @@ export function AuthProvider({
       mounted.current = false;
       unsubscribe();
     };
-  }, [session, initialSearch]);
-
-  const signIn = useCallback(() => {
-    if (session === null) return;
-    setState({ kind: 'signing-in' });
-    void session.beginSignIn();
-  }, [session]);
+  }, [session, initialSearch, startSignIn]);
 
   const signOut = useCallback(() => {
     if (session === null) return;
@@ -191,8 +227,8 @@ export function AuthProvider({
   }, [session]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, signIn, signOut, session }),
-    [state, signIn, signOut, session],
+    () => ({ state, signIn: startSignIn, signOut, session }),
+    [state, startSignIn, signOut, session],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

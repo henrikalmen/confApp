@@ -3,6 +3,7 @@ import {
   createAuthSession,
   type AuthSession,
   type SessionClearedEvent,
+  type SignInOutcome,
 } from '../src/auth/session.ts';
 import type { WebAuthConfig } from '../src/config.ts';
 
@@ -281,9 +282,10 @@ describe('completeRedirect', () => {
     h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
     await h.session.completeRedirect(`?code=c&state=${attempt.state}`);
 
-    // Mid-renewal, so an attempt is in flight for the crafted link to target.
+    // Mid-renewal, so an attempt is in flight for the crafted link to target. Started explicitly:
+    // reading the credential no longer begins one (`offline-session-expiry` TI01).
     h.setNow(1_800_090_000);
-    await h.session.validToken();
+    await h.session.renewSilently();
 
     const outcome = await h.session.completeRedirect('?error=access_denied&state=attacker-chose');
 
@@ -295,7 +297,16 @@ describe('completeRedirect', () => {
 });
 
 describe('renewal', () => {
-  /** Acceptance Scenario S06 – the session survives expiry without re-entering credentials. */
+  /**
+   * Acceptance Scenario S06 – the session survives expiry without re-entering credentials.
+   *
+   * **Moved, not relaxed** (`offline-session-expiry` TI01). Every assertion below is S02's: one
+   * navigation, `prompt=none`, a `login_hint`, S256. What has changed is which call makes it –
+   * reading the credential used to, and now only an explicit renewal does, because a navigation
+   * fired from the credential path takes an attendee reading a cached schedule offline out of the
+   * app entirely. DR04's request shape is asserted positively here so the move cannot quietly
+   * become a deletion.
+   */
   it('renews silently when the stored token is at its expiry margin', async () => {
     const h = harness();
     await h.session.beginSignIn();
@@ -310,7 +321,7 @@ describe('renewal', () => {
     // Day 2: the stored token has passed its expiry.
     h.setNow(1_800_090_000);
 
-    expect(await h.session.validToken()).toBeNull();
+    await h.session.renewSilently();
     expect(h.navigations).toHaveLength(1);
 
     const params = authorizationParams(h.navigations[0]!);
@@ -337,7 +348,7 @@ describe('renewal', () => {
    * overwrite the stored one, pairing the surviving attempt with a different navigation's
    * `state` – and the return leg would then fail the state check.
    */
-  it('starts only one renewal when several callers hit a stale token at once', async () => {
+  it('starts only one renewal when several callers ask for one at once', async () => {
     const h = harness();
     await h.session.beginSignIn();
     const attempt = currentAttempt();
@@ -347,10 +358,10 @@ describe('renewal', () => {
 
     h.setNow(1_800_090_000);
     await Promise.all([
-      h.session.validToken(),
-      h.session.validToken(),
-      h.session.validToken(),
-      h.session.validToken(),
+      h.session.renewSilently(),
+      h.session.renewSilently(),
+      h.session.renewSilently(),
+      h.session.renewSilently(),
     ]);
 
     expect(h.navigations).toHaveLength(1);
@@ -369,13 +380,48 @@ describe('renewal', () => {
 
     expect(await h.session.validToken()).toBe('fresh');
     expect(h.navigations).toHaveLength(0);
+    // Nor does asking for one: a fresh token must not spend a navigation on every reconnect.
+    await h.session.renewSilently();
+    expect(h.navigations).toHaveLength(0);
   });
 
   /**
-   * Acceptance Scenario S06, second half – Google refuses the renewal because the account was
-   * deprovisioned. She is signed out with the reason, not left on a silently failing screen.
+   * `offline-session-expiry` Acceptance Scenario S01, browser half – **the negative that makes the
+   * whole feature true**. An expired token yields no credential and nothing else happens.
+   *
+   * Asserted on the navigation seam rather than on anything rendered. A test that checked "the
+   * schedule still appeared" would pass just as well against a `location.assign` that jsdom
+   * silently ignored, which is precisely how this defect survived S10.
    */
-  it('ends the session with a displayable reason when Google refuses the renewal', async () => {
+  it('never navigates from the credential accessor, however stale the stored token is', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const attempt = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${attempt.state}`);
+    h.navigations.length = 0;
+
+    // A day later: long past expiry, and past the renewal margin.
+    h.setNow(1_800_090_000);
+
+    expect(await h.session.validToken()).toBeNull();
+    expect(await h.session.validToken()).toBeNull();
+    expect(h.navigations).toEqual([]);
+    // And no PKCE attempt was minted either – a navigation that had been prepared and not taken.
+    expect(sessionStorage.getItem('confapp.auth.attempt')).toBeNull();
+    // The session itself is untouched: expiry is not a lifetime bound (Structural Criteria).
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
+
+  /**
+   * A refused renewal, played back for a given error code.
+   *
+   * Google returns `state` with its errors too, and a refusal only counts when it provably belongs
+   * to the attempt this browser started – so the renewal is driven through the real entry point
+   * and its own `state` is echoed back.
+   */
+  async function refusedRenewal(code: string): Promise<{ h: Harness; outcome: SignInOutcome }> {
     const h = harness();
     await h.session.beginSignIn();
     const first = currentAttempt();
@@ -383,24 +429,111 @@ describe('renewal', () => {
     await h.session.completeRedirect(`?code=c&state=${first.state}`);
 
     h.setNow(1_800_090_000);
-    await h.session.validToken();
+    await h.session.renewSilently();
     const renewal = currentAttempt();
 
-    // Google returns `state` with its errors too, and the session only ends for a refusal that
-    // provably belongs to this attempt.
-    const outcome = await h.session.completeRedirect(
-      `?error=login_required&state=${renewal.state}`,
-    );
+    return {
+      h,
+      outcome: await h.session.completeRedirect(`?error=${code}&state=${renewal.state}`),
+    };
+  }
+
+  /**
+   * Acceptance Scenario S06, second half – Google refuses the **grant**, because the account was
+   * deprovisioned. She is signed out with the reason, not left on a silently failing screen, and
+   * the clearing hook fires so the cached schedules go with the access.
+   *
+   * This is `prd.md#edge-cases`' "access ends" row, and `offline-session-expiry` S08. It is the
+   * direction the refusal split most easily loses: a change that simply stopped clearing would
+   * leave every other test in this file green while deleting the deprovisioning behaviour
+   * entirely, so it is asserted in both directions rather than one.
+   */
+  it('ends the session with a displayable reason when Google refuses the grant', async () => {
+    const { h, outcome } = await refusedRenewal('invalid_grant');
 
     expect(outcome.kind).toBe('failed');
     if (outcome.kind !== 'failed') return;
-    expect(outcome.code).toBe('login_required');
+    expect(outcome.code).toBe('invalid_grant');
     expect(outcome.message).toMatch(/no longer has access/i);
     expect(outcome.message).toMatch(/\.$/);
 
     expect(h.session.current()).toBeNull();
     // Signed out, and the clearing hook fired for the account that is going away.
     expect(h.cleared).toEqual([{ sub: ANNA.sub, reason: 'sign-out' }]);
+  });
+
+  it('ends the session when the grant is refused outright', async () => {
+    const { h, outcome } = await refusedRenewal('access_denied');
+
+    expect(outcome.kind).toBe('failed');
+    expect(h.session.current()).toBeNull();
+    expect(h.cleared).toEqual([{ sub: ANNA.sub, reason: 'sign-out' }]);
+  });
+
+  /**
+   * `offline-session-expiry` Acceptance Scenario S05 – the *Google session* lapsed, not the
+   * employment. Nadia is still an employee and her Workspace cookie has simply expired.
+   *
+   * Clearing here would purge her cached schedules through the hook `AuthProvider` registers,
+   * mid-conference, over something that says nothing about her access. So the stored session and
+   * everything keyed to it stand, and she is asked to sign in again.
+   */
+  it('keeps the session and the cache when the Google session merely lapsed', async () => {
+    const { h, outcome } = await refusedRenewal('login_required');
+
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind !== 'failed') return;
+    expect(outcome.code).toBe('login_required');
+    // Says what to do, and does not claim access has ended.
+    expect(outcome.message).toMatch(/sign in again/i);
+    expect(outcome.message).not.toMatch(/no longer has access/i);
+
+    expect(h.session.current()?.user).toEqual(ANNA);
+    // The one thing that would have purged the schedule cache never fired.
+    expect(h.cleared).toEqual([]);
+  });
+
+  it('keeps the session when Google needs an interaction it could not show', async () => {
+    const { h, outcome } = await refusedRenewal('interaction_required');
+
+    expect(outcome.kind).toBe('failed');
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
+
+  /**
+   * `offline-session-expiry` Acceptance Scenario S09 – the lenient default, and the reason the
+   * classification is a closed list of two rather than a list of exceptions.
+   *
+   * `server_error` is transient far more often than it is a deprovisioning, and the two mistakes
+   * do not cost the same: guessing "lapsed" wrongly leaves one departed employee reading a cached
+   * schedule until its readability window closes, while guessing "deprovisioned" wrongly deletes
+   * every attendee's offline schedule at once, in the middle of a conference.
+   */
+  it('keeps the session and the cache on an unrecognised refusal code', async () => {
+    const { h, outcome } = await refusedRenewal('server_error');
+
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind !== 'failed') return;
+    expect(outcome.code).toBe('server_error');
+    expect(outcome.message).toMatch(/sign in again/i);
+
+    expect(h.session.current()?.user).toEqual(ANNA);
+    expect(h.cleared).toEqual([]);
+  });
+
+  /** An interactive sign-in Google refused is still just a failed sign-in – there is no session. */
+  it('reports a refused interactive sign-in without inventing a renewal message', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const attempt = currentAttempt();
+
+    const outcome = await h.session.completeRedirect(`?error=access_denied&state=${attempt.state}`);
+
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind !== 'failed') return;
+    expect(outcome.message).toMatch(/did not complete the sign-in/i);
+    expect(h.cleared).toEqual([]);
   });
 });
 

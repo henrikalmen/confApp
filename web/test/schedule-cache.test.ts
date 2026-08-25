@@ -337,6 +337,72 @@ describe('adopting the store for a signed-in subject', () => {
     expect(await cachedKeys()).toHaveLength(1);
     expect(await readCachedSchedule(NADIA, KICKOFF)).not.toBeNull();
   });
+
+  it('empties it when it holds entries but records no owner', async () => {
+    // Deliberately no `adoptCacheOwner(NADIA)`: this is the shape a *failed* owner write leaves
+    // behind, and `transact` reports that failure as a plain `null` with no retry and no signal.
+    // An absent marker is therefore not evidence the store is empty – it is evidence that nobody
+    // who can be named owns these rows, which is exactly when they must not survive a sign-in.
+    await writeCachedSchedule(NADIA, KICKOFF, entry());
+    expect(await cacheOwner()).toBeNull();
+
+    await adoptCacheOwner(BJORN);
+
+    expect(await cachedKeys()).toEqual([]);
+    expect(await readCachedSchedule(NADIA, KICKOFF)).toBeNull();
+    expect(await cacheOwner()).toBe(BJORN);
+  });
+});
+
+// ---------- a database that cannot serve the store a call needs ----------
+
+/**
+ * Opens `confapp-offline` at the version the module expects, creating **only** `schedules`.
+ *
+ * This is not a hypothetical: a database left at version 1 by an earlier build never re-runs
+ * `onupgradeneeded`, so a missing store is permanent for that device. Every call that touches
+ * `meta` then throws from `transaction()` itself – before any request exists to attach a handler
+ * to – which is the one failure mode the module's own error handling can miss.
+ */
+async function openWithOnly(store: 'schedules' | 'meta'): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = globalThis.indexedDB.open('confapp-offline', 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(store);
+    };
+    request.onsuccess = () => {
+      request.result.close();
+      resolve();
+    };
+    request.onerror = () => reject(request.error ?? new Error('open failed'));
+  });
+}
+
+describe('a store the database does not have', () => {
+  it('is reported as a miss rather than rejecting, so the purge still runs to completion', async () => {
+    // `meta` absent: this is what `cacheOwner`, `adoptCacheOwner` and the purge all reach for.
+    await openWithOnly('schedules');
+
+    // Each of these resolves rather than rejects. The distinction is the whole point: every caller
+    // invokes these as `void purgeScheduleCache()` / `void adoptCacheOwner(...)`, so a rejection is
+    // unhandled and the sign-out purge is skipped silently instead of reported as a failure.
+    await expect(cacheOwner()).resolves.toBeNull();
+    await expect(adoptCacheOwner(BJORN)).resolves.toBeUndefined();
+    await expect(purgeScheduleCache()).resolves.toBeUndefined();
+  });
+
+  it('leaves the read path with a terminating outcome instead of an unhandled rejection', async () => {
+    // `schedules` absent, not `meta`: the read path never touches `meta`, so a fixture missing only
+    // that store leaves these two calls on their ordinary success path and proves nothing about
+    // them. The store a call actually opens is the one the fixture has to withhold.
+    await openWithOnly('meta');
+
+    // S10 Acceptance Scenario S03 forbids a spinner with no terminating outcome. The panel reaches
+    // its offline state by way of `readCachedSchedule` resolving `null`; a rejection escapes the
+    // effect instead, `setPhase` is never called, and the view stays on `attendee-loading`.
+    await expect(readCachedSchedule(NADIA, KICKOFF)).resolves.toBeNull();
+    await expect(readCachedSchedulesFor(NADIA)).resolves.toEqual([]);
+  });
 });
 
 // ---------- what the module is not ----------

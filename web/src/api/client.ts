@@ -111,7 +111,28 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   if (authenticated) {
     const token = await tokenSource();
-    if (token !== null) headers.authorization = `Bearer ${token}`;
+    /*
+     * **Not sent at all**, rather than sent anonymously.
+     *
+     * An authenticated route with no `Authorization` header is answered with a 401 – an *answer*,
+     * and callers that fall back to a cache are built to treat an answer as authoritative. So a
+     * lapsed ID token used to read as "the server says you may not have this", and the attendee's
+     * cached Schedule was forgotten on the strength of a request that was never entitled to be
+     * made (`offline-session-expiry` TI07).
+     *
+     * Status 0 is the shape of a request that never reached the network – the same case as a
+     * transport failure, which is what this is – so the caller's existing "unreachable" branch
+     * handles it with no new classification to keep in step.
+     */
+    if (token === null) {
+      throw new ApiError(
+        'CREDENTIAL_UNAVAILABLE',
+        'Your sign-in has expired, so this could not be requested. Anything already saved on ' +
+          'this device stays readable.',
+        0,
+      );
+    }
+    headers.authorization = `Bearer ${token}`;
   }
   if (body !== undefined) headers['content-type'] = 'application/json';
 

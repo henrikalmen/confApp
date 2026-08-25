@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ApiError,
+  fetchHealth,
   fetchMyConferences,
   fetchScheduleWatermark,
   type AttendeeConference,
@@ -27,6 +28,8 @@ import {
 } from '../offline/schedule-data.ts';
 import { cachedScheduleLabel } from '../offline/cached-age.ts';
 import { ReconnectSummary } from '../offline/ReconnectSummary.tsx';
+import { SignInRequiredNotice } from '../offline/SignInRequiredNotice.tsx';
+import { requestRenewal } from '../auth/session-actions.ts';
 
 /**
  * The Attendee's home: the conference picker, the Schedule, and every non-result state.
@@ -92,6 +95,36 @@ function unreachable(error: unknown): boolean {
   return error.status === 0 || error.status >= 500;
 }
 
+/**
+ * Whether **anything answered at all** – the panel's second classifier, and not the same question
+ * as `unreachable`.
+ *
+ * `unreachable` decides whether the cache may answer. This one decides what to say when the cache
+ * has nothing: a server that answered, even with a 5xx, has a sentence of its own and a retry worth
+ * offering, while a request that never got through leaves "not available offline" as the only
+ * useful thing on screen.
+ *
+ * It cannot simply be `error instanceof ApiError` any more. A request refused for want of a
+ * credential never leaves the device, and is reported as an `ApiError` with **status 0** precisely
+ * so `unreachable` keeps working (TI07) – but that same wrapper would flip this test and send an
+ * attendee with no cached copy to a failure alert instead of the offline notice. Status 0 is the
+ * client's own wrapper around a request that did not happen; nothing answered it.
+ */
+function answered(error: unknown): boolean {
+  return error instanceof ApiError && error.status !== 0;
+}
+
+/**
+ * Whether the request was never issued because there was no credential to issue it with (TI07).
+ *
+ * Distinguished from an ordinary transport failure because the two need opposite things: a dead
+ * network needs waiting, and a lapsed sign-in needs renewing. Both are `unreachable`, and neither
+ * takes the Schedule off the screen.
+ */
+function credentialMissing(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'CREDENTIAL_UNAVAILABLE';
+}
+
 type Phase =
   | { kind: 'loading' }
   | { kind: 'failed'; failure: Failure }
@@ -109,7 +142,14 @@ type Phase =
       deviceClockAtReceipt: number;
     }
   /** Offline with nothing stored for this Conference – a terminal state, never a spinner (TI05). */
-  | { kind: 'unavailable-offline' };
+  | { kind: 'unavailable-offline' }
+  /**
+   * Offline with a copy on the device that may no longer be rendered: its Conference's span plus
+   * the shared margin has passed. Distinct from `unavailable-offline` on purpose – the schedule is
+   * *here*, and what unblocks it is signing in again, not finding a connection once
+   * (`offline-session-expiry` OC04).
+   */
+  | { kind: 'sign-in-required' };
 
 export function AttendeeSchedulePanel(): React.JSX.Element {
   const [conferences, setConferences] = useState<AttendeeConference[] | null>(null);
@@ -178,7 +218,7 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
        * never reach the offline schedule at all.
        */
       if (unreachable(error)) {
-        const cached = await listCachedConferences();
+        const { conferences: cached, withheld } = await listCachedConferences();
         if (signal?.aborted) return;
         if (cached.length > 0) {
           setConferences(cached);
@@ -193,12 +233,24 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           return;
         }
         /*
+         * Nothing to offer, but not because nothing was ever stored: every cached Conference on
+         * this device is past its window. Saying "not available offline" here would be the one
+         * sentence that is untrue – the schedules are on the device – so the state that names the
+         * actual remedy is rendered instead (OC04). The schedule effect below never runs, because
+         * there is no Conference selected for it to ask about, so this branch has to say it.
+         */
+        if (withheld) {
+          setConferences([]);
+          setPhase({ kind: 'sign-in-required' });
+          return;
+        }
+        /*
          * Nothing was ever stored on this device. With no server answer either there is nothing to
          * quote, so the offline state is the most useful thing on screen (OC03) – but a server that
          * did answer, even with a 5xx, has a sentence and a retry of its own, and that is better
          * than a generic one.
          */
-        if (!(error instanceof ApiError)) {
+        if (!answered(error)) {
           setConferences([]);
           setPhase({ kind: 'unavailable-offline' });
           return;
@@ -295,10 +347,20 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           return;
         }
 
-        const cached = await readOfflineSchedule(conferenceId);
+        const offline = await readOfflineSchedule(conferenceId);
         if (controller.signal.aborted) return;
 
-        if (cached === null) {
+        /*
+         * On the device, but past its Conference's span plus the shared margin. Withheld and said
+         * so: the remedy is a sign-in, not a connection, and S10's offline notice would claim the
+         * schedule is absent when it is sitting in storage (OC04).
+         */
+        if (offline.kind === 'lapsed') {
+          setPhase({ kind: 'sign-in-required' });
+          return;
+        }
+
+        if (offline.kind === 'absent') {
           /*
            * Nothing stored. An evicted entry and one that never existed are the same outcome, and
            * both are ordinary: iOS WebKit clears IndexedDB for unused origins and quota pressure
@@ -306,16 +368,18 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
            *
            * What to say depends on whether anything answered. A 5xx came from a server that has a
            * sentence of its own and a retry worth offering; only a request that never got through
-           * leaves "this conference is not available offline" as the most useful thing on screen.
+           * leaves "this conference is not available offline" as the most useful thing on screen –
+           * and a request refused for want of a credential never got through either (TI07).
            */
           setPhase(
-            error instanceof ApiError
+            answered(error)
               ? { kind: 'failed', failure: failureOf(error) }
               : { kind: 'unavailable-offline' },
           );
           return;
         }
 
+        const cached = offline.entry;
         setPhase({
           kind: 'cached',
           schedule: cached.envelope,
@@ -357,6 +421,16 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
 
   /** At most one poll in flight; a tick arriving while one is outstanding is skipped, not queued. */
   const pollingRef = useRef(false);
+
+  /**
+   * Whether this view has already asked for a renewal.
+   *
+   * A renewal is a top-level navigation, and asking twice is asking to leave the app twice. The
+   * session refuses a second one of its own accord, but the *decision* to ask belongs here and
+   * must be made once: without this the poll would probe reachability on every five-second tick
+   * for as long as the credential stayed lapsed.
+   */
+  const renewalAskedRef = useRef(false);
 
   const syncIfChanged = useCallback(
     async (signal: AbortSignal): Promise<void> => {
@@ -464,6 +538,38 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           if (!signal.aborted && renderedRef.current === rendered) {
             setPhase({ kind: 'failed', failure: failureOf(error) });
           }
+          return;
+        }
+
+        /*
+         * **The reconnect that a lapsed sign-in would otherwise never see.**
+         *
+         * With no credential, `apiRequest` refuses to issue the poll at all (TI07), so the poll
+         * can no longer be what notices the connection returning – it fails identically on a dead
+         * network and on a live one. Something still has to notice, or an attendee whose token
+         * lapsed on day two reads a cached schedule for the rest of the conference and is never
+         * offered the silent renewal that would put her back online.
+         *
+         * So this asks the one route that needs no credential – `/health`, the readiness signal
+         * that already exists for exactly this "is the API there" question – and only a **reply**
+         * starts the renewal. Not `navigator.onLine`, which is `true` behind a captive portal and
+         * on dead venue wifi, and not the link event: a request that answered is the only proof
+         * that a top-level navigation to Google has anywhere to go (Acceptance Scenario S04).
+         *
+         * Nothing about the refresh itself changes. It stays the ordinary authenticated request it
+         * has always been; this adds no route by which a Schedule could be read.
+         */
+        if (rendered.cached && !renewalAskedRef.current && credentialMissing(error)) {
+          try {
+            await fetchHealth(signal);
+          } catch {
+            // Still nothing there. The cached view stands and the next tick tries again.
+            return;
+          }
+          if (signal.aborted || renderedRef.current !== rendered) return;
+
+          renewalAskedRef.current = true;
+          void requestRenewal();
         }
       } finally {
         pollingRef.current = false;
@@ -623,7 +729,8 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
       {conferences !== null &&
       conferences.length === 0 &&
       conferencesFailure === null &&
-      phase.kind !== 'unavailable-offline' ? (
+      phase.kind !== 'unavailable-offline' &&
+      phase.kind !== 'sign-in-required' ? (
         <p className="panel__hint" data-testid="attendee-no-conferences">
           You have not joined a conference yet. Enter the code the organizer is showing to join one.
         </p>
@@ -711,6 +818,13 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           </p>
         </div>
       ) : null}
+
+      {/*
+       * On the device, and past the window its Conference bounds it by – a different situation from
+       * the notice above and a different sentence, in its own component so that its connectivity
+       * subscription does not re-render this one mid-poll.
+       */}
+      {phase.kind === 'sign-in-required' ? <SignInRequiredNotice /> : null}
 
       {/*
        * A Schedule with no day to open. `usable` refuses such an entry on the way out of the cache,

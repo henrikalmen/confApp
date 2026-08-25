@@ -11,6 +11,7 @@ import {
   writeCachedSchedule,
   type CachedSchedule,
 } from './schedule-cache.ts';
+import { withinReadabilityWindow } from './readability-window.ts';
 
 /**
  * Reading the Schedule, with caching as a property of the read rather than an opt-in.
@@ -97,11 +98,37 @@ async function cacheSchedule(
   });
 }
 
-/** The cached Schedule for the signed-in employee, or `null` – a miss is an ordinary outcome. */
-export async function readOfflineSchedule(conferenceId: string): Promise<CachedSchedule | null> {
+/**
+ * What the cache can offer for one Conference – and **why**, when the answer is nothing.
+ *
+ * Three outcomes, not two, because the two ways of having nothing to show call for opposite
+ * remedies. `absent` means this Conference was never read on this device, and opening it once with
+ * a connection fixes that for good. `lapsed` means it *is* on the device and may no longer be
+ * rendered, and the only thing that helps is signing in again. Telling somebody a schedule is "not
+ * available offline" while it sits in storage a few hundred bytes away is the wrong sentence
+ * (`offline-session-expiry` OC04).
+ */
+export type OfflineSchedule =
+  | { kind: 'readable'; entry: CachedSchedule }
+  /** Stored, but its Conference's span plus the shared margin has passed. */
+  | { kind: 'lapsed' }
+  | { kind: 'absent' };
+
+/**
+ * The cached Schedule for the signed-in employee, classified against its readability window.
+ *
+ * The window is applied **here and not in the view**, so the panel and the offline picker below
+ * cannot come to different conclusions about the same entry – which would let an attendee select a
+ * Conference that then refuses to render.
+ */
+export async function readOfflineSchedule(conferenceId: string): Promise<OfflineSchedule> {
   const sub = cacheIdentity();
-  if (sub === null) return null;
-  return readCachedSchedule(sub, conferenceId);
+  if (sub === null) return { kind: 'absent' };
+
+  const entry = await readCachedSchedule(sub, conferenceId);
+  if (entry === null) return { kind: 'absent' };
+  if (!withinReadabilityWindow(entry)) return { kind: 'lapsed' };
+  return { kind: 'readable', entry };
 }
 
 /**
@@ -129,12 +156,38 @@ export async function forgetSchedule(conferenceId: string): Promise<void> {
  * with no connection would otherwise have nothing selected, and would never reach the cached
  * Schedule that is sitting there ready to read.
  */
-export async function listCachedConferences(): Promise<AttendeeConference[]> {
+export interface OfflineConferences {
+  /** What may be opened offline right now. */
+  conferences: AttendeeConference[];
+  /**
+   * Whether anything was **removed by the window** rather than never having been there.
+   *
+   * The difference is the whole of OC04 at the list level. A device with one cached Conference that
+   * has lapsed produces an empty candidate set, and without this the panel could only say "not
+   * available offline" – which is the one thing that is not true: it is available, it is on the
+   * device, and what has run out is the sign-in it was read under.
+   */
+  withheld: boolean;
+}
+
+export async function listCachedConferences(): Promise<OfflineConferences> {
   const sub = cacheIdentity();
-  if (sub === null) return [];
+  if (sub === null) return { conferences: [], withheld: false };
 
   const entries = await readCachedSchedulesFor(sub);
-  return entries
+  /*
+   * Composed with the `sub` filter `readCachedSchedulesFor` already applies, never replacing it:
+   * the per-employee boundary and the per-Conference window are two different guarantees, and
+   * dropping either one loses something the other never covered.
+   *
+   * A lapsed Conference is removed from the candidate set rather than offered and then refused.
+   * The picker is what *selects* what gets rendered, so leaving a lapsed entry in it would let an
+   * attendee land on a Conference the panel will not show – and on a device holding exactly one
+   * lapsed entry, land there by default with nothing else to choose.
+   */
+  const readable = entries.filter((entry) => withinReadabilityWindow(entry));
+
+  const conferences = readable
     .map(({ envelope }) => ({
       id: envelope.conference.id,
       name: envelope.conference.name,
@@ -144,6 +197,8 @@ export async function listCachedConferences(): Promise<AttendeeConference[]> {
       state: envelope.conference.state,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { conferences, withheld: readable.length < entries.length };
 }
 
 /**

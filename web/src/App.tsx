@@ -5,6 +5,7 @@ import { JoinConferencePanel } from './components/JoinConferencePanel.tsx';
 import { SignInScreen } from './components/SignInScreen.tsx';
 import { AttendeeSchedulePanel } from './attendee/AttendeeSchedulePanel.tsx';
 import { useAuth } from './auth/AuthProvider.tsx';
+import { SessionRenewalNotice } from './auth/SessionRenewalNotice.tsx';
 
 /**
  * The app shell.
@@ -15,9 +16,11 @@ import { useAuth } from './auth/AuthProvider.tsx';
  */
 export function App(): React.JSX.Element {
   const [navOpen, setNavOpen] = useState(false);
-  const { state, signOut } = useAuth();
+  const { state, signIn, signOut } = useAuth();
 
   const signedIn = state.kind === 'signed-in';
+  /** A silent renewal Google refused without ending the session – see `SessionRenewalNotice`. */
+  const renewalFailed = state.kind === 'signed-in' ? (state.renewalFailed ?? null) : null;
 
   return (
     <div className="app">
@@ -82,6 +85,13 @@ export function App(): React.JSX.Element {
           </div>
         ) : signedIn ? (
           <>
+            {renewalFailed !== null ? (
+              <SessionRenewalNotice
+                code={renewalFailed.code}
+                message={renewalFailed.message}
+                onSignIn={signIn}
+              />
+            ) : null}
             {/*
              * The attendee's home comes first. Nearly everyone signing in is here to read the
              * schedule of the conference they are standing in, and the organizer surfaces below are

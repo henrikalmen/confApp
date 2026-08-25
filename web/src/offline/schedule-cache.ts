@@ -160,20 +160,23 @@ async function transact<T>(
 
   try {
     return await new Promise<T | null>((resolve) => {
-      const transaction = database.transaction(stores, mode);
-      let request: IDBRequest<T> | null;
       try {
-        request = work(transaction);
+        // `transaction()` itself throws when a named store is absent – a database left at this
+        // version by an earlier build never re-runs `onupgradeneeded`, so the miss is permanent.
+        // It has to be inside the guard: outside it, the throw rejects this promise instead of
+        // resolving `null`, and every caller `void`s the result, so the sign-out purge would be
+        // skipped by an unhandled rejection rather than reported as a failure.
+        const transaction = database.transaction(stores, mode);
+        const request = work(transaction);
+
+        // The *transaction* is what settles the promise, not the request: a write is only true once
+        // it has committed, and quota pressure fails at commit rather than at `put`.
+        transaction.oncomplete = () => resolve(request === null ? null : request.result);
+        transaction.onerror = () => resolve(null);
+        transaction.onabort = () => resolve(null);
       } catch {
         resolve(null);
-        return;
       }
-
-      // The *transaction* is what settles the promise, not the request: a write is only true once
-      // it has committed, and quota pressure fails at commit rather than at `put`.
-      transaction.oncomplete = () => resolve(request === null ? null : request.result);
-      transaction.onerror = () => resolve(null);
-      transaction.onabort = () => resolve(null);
     });
   } finally {
     database.close();
@@ -314,7 +317,11 @@ export async function adoptCacheOwner(sub: string): Promise<void> {
       transaction.objectStore(META).get(OWNER_KEY),
     );
 
-    if (owner !== undefined && owner !== sub) await purgeNow();
+    // Fails closed. An absent owner marker is not evidence the store is empty – a failed owner
+    // write leaves rows with no recorded owner, and `transact` reports that failure as a plain
+    // `null`. Purging a store that nobody can be shown to own costs one no-op clear on a fresh
+    // device and removes the only path by which one employee's rows outlive a different sign-in.
+    if (owner !== sub) await purgeNow();
 
     await transact([META], 'readwrite', (transaction) =>
       transaction.objectStore(META).put(sub, OWNER_KEY),
