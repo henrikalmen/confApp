@@ -190,9 +190,51 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   return payload as T;
 }
 
+/**
+ * Whether a body is recognisably **our** `/health`, rather than merely a 200.
+ *
+ * Shape, not value: `status` is checked for being a string and not for being `'ok'`. The question
+ * this route answers for the renewal path is "did the API reply", and an API replying that it is
+ * degraded has replied. Gating on the value would refuse a reachable-but-unhealthy server.
+ */
+function isHealth(body: unknown): body is Health {
+  if (typeof body !== 'object' || body === null) return false;
+  const candidate = body as { status?: unknown; serverTime?: unknown };
+  return typeof candidate.status === 'string' && typeof candidate.serverTime === 'string';
+}
+
+/**
+ * The one anonymous route: a readiness signal that must answer before anyone is signed in.
+ *
+ * **It validates its own answer, and it is the only endpoint helper that does.** That is not
+ * fussiness – it is the app's reachability oracle, and `AuthProvider` fires a *top-level
+ * navigation* to Google on the strength of it. A captive portal is the exact adversary the offline
+ * work is built around, and a portal answers: it returns `200 text/html` for whatever is asked.
+ * `apiRequest` casts response bodies without validating them and turns an unparseable body into
+ * `null`, so without this the portal's login page reads as proof the API is up, and confApp leaves
+ * a perfectly good cached schedule for a page that cannot load (review 2026-08-25, H-3).
+ *
+ * Every other endpoint can survive a portal's answer because its failure is recoverable – a bad
+ * shape lands in a cache guard or a render fallback and the person can retry. Leaving the app is
+ * not recoverable, which is why the check is here and not spread across the client.
+ */
 export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
-  // The one anonymous route: it is a readiness signal and must answer before anyone is signed in.
-  return apiRequest<Health>('/health', { authenticated: false, ...(signal ? { signal } : {}) });
+  const body = await apiRequest<unknown>('/health', {
+    authenticated: false,
+    ...(signal ? { signal } : {}),
+  });
+
+  if (!isHealth(body)) {
+    // Status 0, like every other "this never reached our API" case, so the existing `unreachable`
+    // classification keeps working and no caller needs a new branch.
+    throw new ApiError(
+      'UNRECOGNISED_RESPONSE',
+      'Something answered on the network, but it was not the confApp API.',
+      0,
+    );
+  }
+
+  return body;
 }
 
 export async function fetchMe(signal?: AbortSignal): Promise<Me> {

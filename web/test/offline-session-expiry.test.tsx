@@ -13,6 +13,7 @@ import {
 } from '../src/offline/schedule-cache.ts';
 import { listCachedConferences } from '../src/offline/schedule-data.ts';
 import {
+  fetchHealth,
   fetchMyConferences,
   setCredentialMissingListener,
   setTokenSource,
@@ -160,7 +161,12 @@ const AUTUMN_RECEIPT = RECEIPT - 348 * DAY;
 
 // ---------- the transport ----------
 
-type Answer = { status: number; body: unknown } | 'offline';
+/**
+ * `'offline'` throws as `fetch` does with no route to a host. `'portal'` is the other shape, and
+ * the one that matters: a captive portal **answers** – 200, with its own login page – so the body
+ * is not JSON and `response.json()` rejects.
+ */
+type Answer = { status: number; body: unknown } | 'offline' | 'portal';
 
 /** Requests actually issued, so "no request was sent" is a fact rather than an inference. */
 interface Issued {
@@ -187,6 +193,16 @@ function routeFetch(routes: () => Record<string, Answer>): typeof fetch {
     // What the browser throws with no route to the host. Never an API refusal – an API refusal is
     // an answer, and a cache must not overrule one.
     if (answer === 'offline') throw new TypeError('Failed to fetch');
+
+    if (answer === 'portal') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON');
+        },
+      } as unknown as Response;
+    }
 
     return {
       ok: answer.status < 400,
@@ -471,7 +487,7 @@ describe('two cached conferences with different spans', () => {
 
 // ---------- Acceptance Scenario S04: renewal only once the API has answered ----------
 
-describe('a captive portal that reports a link and answers nothing', () => {
+describe('dead venue wifi that reports a link and answers nothing', () => {
   it('starts no renewal until a request actually succeeds, and then exactly one', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
     const lapsed = await lapsedSignIn();
@@ -529,6 +545,101 @@ describe('a captive portal that reports a link and answers nothing', () => {
     fireEvent(window, new Event('online'));
     await settle();
     expect(lapsed.navigations).toHaveLength(1);
+  });
+});
+
+// ---------- H-3: a portal answers, and answering is not the same as being the API ----------
+
+describe('a captive portal that answers every request with its own login page', () => {
+  /**
+   * The adversary the whole offline design is built around, and the one the reachability probe was
+   * most exposed to. A portal is not a dead network: it completes the TCP connection and returns
+   * `200 text/html` for whatever is asked. `apiRequest` turns an unparseable body into `null` and
+   * casts it, so a portal's login page used to read as proof the API was up — and the renewal then
+   * fired a top-level navigation to Google from behind a portal that cannot reach Google, leaving
+   * the attendee's cached schedule for a page that will not load.
+   *
+   * Asserted on the navigation seam, because that is the harm. Rendering proves nothing here: jsdom
+   * ignores `location.assign`, so the schedule stays on screen either way.
+   */
+  it('does not accept the portal’s reply as proof the API is reachable', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
+    const lapsed = await lapsedSignIn();
+    await cache(KICKOFF_2026);
+
+    setOnLine(true);
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(() => ({ '/health': 'portal' }) as Record<string, Answer>),
+    );
+
+    renderUnderShell(lapsed.session);
+    await screen.findByTestId('attendee-session-list');
+
+    // Drive several prompts. Each one really does reach the portal and really does get a 200.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = issued.length;
+      fireEvent(window, new Event('online'));
+      await waitFor(() => expect(issued.length).toBeGreaterThan(before));
+      await settle();
+    }
+
+    // The portal answered every time, and confApp stayed where it was.
+    expect(issued.every((request) => request.url.endsWith('/health'))).toBe(true);
+    expect(lapsed.navigations).toEqual([]);
+    // And the schedule she is reading is still on screen, from the cache.
+    expect(screen.getByTestId('schedule-cached-label')).not.toBeNull();
+  });
+
+  /**
+   * The probe's own contract, at the seam rather than through the shell: `/health` answers with
+   * something, and `fetchHealth` refuses to call it an answer.
+   */
+  it('is reported as unreachable rather than as a successful health read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(() => ({ '/health': 'portal' }) as Record<string, Answer>),
+    );
+
+    await expect(fetchHealth()).rejects.toMatchObject({
+      code: 'UNRECOGNISED_RESPONSE',
+      // Status 0 – the same shape as every other "this never reached our API" case, so the
+      // existing `unreachable()` classification keeps working with no new branch.
+      status: 0,
+    });
+  });
+
+  /** A 200 that parses but is not our shape is refused for the same reason. */
+  it('refuses a 200 whose body is not recognisably the confApp health payload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(
+        () =>
+          ({
+            '/health': { status: 200, body: { loggedIn: false, redirect: '/portal' } },
+          }) as Record<string, Answer>,
+      ),
+    );
+
+    await expect(fetchHealth()).rejects.toMatchObject({ code: 'UNRECOGNISED_RESPONSE' });
+  });
+
+  /** And a real answer still passes, degraded or not – reachability is the question, not health. */
+  it('accepts a real health payload even when the API reports itself degraded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(
+        () =>
+          ({
+            '/health': {
+              status: 200,
+              body: { status: 'degraded', schemaVersion: null, serverTime: '2026-09-16T07:00:00Z' },
+            },
+          }) as Record<string, Answer>,
+      ),
+    );
+
+    await expect(fetchHealth()).resolves.toMatchObject({ status: 'degraded' });
   });
 });
 
