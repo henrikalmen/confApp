@@ -31,6 +31,7 @@ function stubSession(overrides: Partial<AuthSession> = {}): AuthSession {
     // hands the app an `undefined` to call. Tests are outside `tsconfig`'s `include`, so nothing
     // type-checks this file – the omission was invisible until it was looked for.
     renewSilently: vi.fn(async () => {}),
+    renewalRefusal: () => null,
     signOut: vi.fn(),
     onSessionCleared: () => () => {},
     ...overrides,
@@ -235,5 +236,40 @@ describe('a redirect that failed while somebody was already signed in', () => {
     expect(screen.getByTestId('signed-in-identity').textContent).toContain(ANNA.displayName);
     expect(screen.queryByTestId('sign-in')).toBeNull();
     expect(screen.getByTestId('session-sign-in-again')).not.toBeNull();
+  });
+});
+
+// ---------- review 2026-08-25, H-1: the refusal outlives the render that reported it ----------
+
+describe('a page load that finds a silent renewal already refused', () => {
+  /**
+   * Blocking further renewals is only half a fix. The block is stored, but `renewalFailed` is
+   * React state and dies with the page — so on the next load the app would come up looking
+   * ordinary while every request failed for want of a credential, with nothing explaining why and
+   * nothing offering the interactive sign-in that is the only way out.
+   */
+  it('restores the banner rather than coming up looking ordinary', async () => {
+    const session = signedInStub({
+      renewalRefusal: () => ({
+        code: 'login_required',
+        message: 'Your sign-in has expired and could not be renewed automatically.',
+      }),
+    });
+
+    // A cold load: no redirect in the URL, nothing to complete.
+    renderApp(session, '');
+
+    const banner = await screen.findByTestId('session-renewal-failed');
+    expect(banner.textContent).toMatch(/could not be renewed/i);
+    // Still signed in, so whatever is cached stays readable underneath it.
+    expect(screen.getByTestId('signed-in-identity').textContent).toContain(ANNA.displayName);
+    expect(screen.getByTestId('session-sign-in-again')).not.toBeNull();
+  });
+
+  it('says nothing when no refusal is standing', async () => {
+    renderApp(signedInStub(), '');
+
+    await screen.findByTestId('signed-in-identity');
+    expect(screen.queryByTestId('session-renewal-failed')).toBeNull();
   });
 });

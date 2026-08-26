@@ -18,6 +18,26 @@ const ATTEMPT_KEY = 'confapp.auth.attempt';
  * tablet" is detectable at all – if sign-out erased it, the user-switch hook could never fire.
  */
 const LAST_SUB_KEY = 'confapp.auth.lastSub';
+/**
+ * A silent renewal Google refused **without** the session being ended – set aside so the next page
+ * load does not immediately try the same thing again.
+ *
+ * Persistent rather than per-tab: a lapsed Workspace cookie is a fact about the browser, not about
+ * one tab, and the refusal arrives *as* a page load, so anything tab-scoped is reborn empty exactly
+ * when it is needed.
+ */
+const RENEWAL_REFUSED_KEY = 'confapp.auth.renewalRefused';
+
+/**
+ * What a lapsed Google session is called on screen, in one place.
+ *
+ * It is produced twice from different directions – once as the outcome of the redirect that
+ * carried the refusal, and again on any later page load that finds the refusal still standing –
+ * and the person must not be told two different stories about one situation.
+ */
+const RENEWAL_LAPSED_MESSAGE =
+  'Your sign-in has expired and could not be renewed automatically. Anything already saved on ' +
+  'this device stays readable. Please sign in again.';
 
 /** Renew this far ahead of expiry, so a call in flight does not race the clock. */
 const RENEW_MARGIN_SECONDS = 120;
@@ -106,6 +126,14 @@ export interface AuthSession {
    * renewal has already started in this page: it is a navigation, so only one may ever begin.
    */
   renewSilently(): Promise<void>;
+  /**
+   * A silent renewal Google refused that did **not** end the session, still standing.
+   *
+   * Durable, so the shell can say so on a cold load. Without it a reload clears the banner from
+   * React state while the refusal itself survives in storage, and the person is left on an app
+   * whose every request fails with nothing on screen explaining why or offering a way out.
+   */
+  renewalRefusal(): { code: string; message: string } | null;
   signOut(): void;
   onSessionCleared(listener: SessionClearedListener): () => void;
 }
@@ -168,6 +196,20 @@ export function createAuthSession({
   }
 
   /**
+   * The standing refusal, or `null` – and `null` for a refusal recorded against somebody else.
+   *
+   * Keyed by subject on purpose: on a shared device the previous person's lapsed Workspace session
+   * says nothing about the one signing in now, and a marker left behind would block their renewals
+   * for as long as it sat there.
+   */
+  function renewalRefusal(): { code: string; message: string } | null {
+    const stored = readJson<{ sub: string; code: string }>(store, RENEWAL_REFUSED_KEY);
+    if (stored === null) return null;
+    if (stored.sub !== current()?.user.sub) return null;
+    return { code: stored.code, message: RENEWAL_LAPSED_MESSAGE };
+  }
+
+  /**
    * Builds the authorization request and leaves. `prompt=none` turns the same request into a
    * silent renewal: Google answers immediately with a code while the Workspace session is
    * alive, and refuses with `login_required` once it is not.
@@ -212,11 +254,15 @@ export function createAuthSession({
   function clearSession(reason: SessionClearedEvent['reason'], sub: string | null): void {
     store.removeItem(SESSION_KEY);
     attemptStore.removeItem(ATTEMPT_KEY);
+    // The refusal was about a session that no longer exists. Leaving it would block the next
+    // person's renewals on this device for a lapse that was never theirs.
+    store.removeItem(RENEWAL_REFUSED_KEY);
     if (sub !== null) fire({ sub, reason });
   }
 
   return {
     current,
+    renewalRefusal,
 
     async beginSignIn(options = {}): Promise<void> {
       await authorize({
@@ -301,6 +347,25 @@ export function createAuthSession({
         const grantRefused = attempt.silent && GRANT_REFUSED.has(error);
         if (grantRefused && previous !== null) clearSession('sign-out', previous.user.sub);
 
+        /*
+         * **The loop-breaker.** A refusal that leaves the session standing arrives *as* a page
+         * load, so both of the "only once" guards – `renewalStarted` here and the shell's own
+         * per-page ref – are reborn `false` by the very navigation that carried it. Without a
+         * durable record the app comes straight back up, finds the same expired token, probes,
+         * renews, and is refused again: a top-level trip to Google every few seconds, for exactly
+         * the still-employed attendee the lenient default was written to protect.
+         *
+         * Recorded rather than retried on a timer. A delay would slow the loop rather than end it,
+         * because nothing about waiting makes a lapsed Workspace cookie come back. What ends it is
+         * the person signing in, and the banner this refusal raises is where they do that.
+         */
+        if (attempt.silent && !grantRefused && previous !== null) {
+          store.setItem(
+            RENEWAL_REFUSED_KEY,
+            JSON.stringify({ sub: previous.user.sub, code: error }),
+          );
+        }
+
         return {
           kind: 'failed',
           silent: attempt.silent,
@@ -310,8 +375,7 @@ export function createAuthSession({
             : grantRefused
               ? 'Your session has ended because Google would not renew it. This usually means ' +
                 'the account no longer has access. Please sign in again.'
-              : 'Your sign-in has expired and could not be renewed automatically. Anything ' +
-                'already saved on this device stays readable. Please sign in again.',
+              : RENEWAL_LAPSED_MESSAGE,
         };
       }
 
@@ -367,6 +431,9 @@ export function createAuthSession({
 
       store.setItem(SESSION_KEY, JSON.stringify(payload));
       store.setItem(LAST_SUB_KEY, payload.user.sub);
+      // Google answered with a code, so whatever it refused before is over. This is the only thing
+      // that lifts the block – which is why the banner's control starts an *interactive* sign-in.
+      store.removeItem(RENEWAL_REFUSED_KEY);
       // A completed redirect is a fresh page: the next expiry may start its own renewal.
       renewalStarted = false;
 
@@ -393,6 +460,10 @@ export function createAuthSession({
       if (session === null) return;
       // Nothing to renew. Asked on every reconnect, so a fresh token must not spend a navigation.
       if (session.expiresAt - RENEW_MARGIN_SECONDS > now()) return;
+
+      // Google has already refused this session once and nothing has changed since. Asking again
+      // is the redirect loop; the way out is the interactive sign-in the banner offers.
+      if (renewalRefusal() !== null) return;
 
       // A top-level navigation, so nothing after it in this tab will run – and only the first
       // caller may start it (see `renewalStarted`).

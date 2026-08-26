@@ -277,9 +277,28 @@ export function AuthProvider({
       // A session restored from storage on a cold launch claims the store too – that launch is
       // exactly the case where the previous session ended without a sign-out.
       if (existing !== null) claim(existing.user);
-      setState(
-        existing === null ? { kind: 'signed-out' } : { kind: 'signed-in', user: existing.user },
-      );
+
+      if (existing === null) {
+        setState({ kind: 'signed-out' });
+        return;
+      }
+
+      /*
+       * **A refusal outlives the render that reported it.** A silent renewal Google refused
+       * without ending the session blocks further silent renewals until an interactive sign-in
+       * clears it, and that block is stored – so on this load the app would otherwise come up
+       * looking ordinary while every request failed for want of a credential, with nothing on
+       * screen saying why and nothing offering the sign-in that fixes it.
+       *
+       * Restoring the banner from the stored refusal is what keeps the block and its remedy
+       * together: the same durable fact that stops the loop is the thing that explains it.
+       */
+      const standing = session.renewalRefusal();
+      setState({
+        kind: 'signed-in',
+        user: existing.user,
+        ...(standing !== null ? { renewalFailed: standing } : {}),
+      });
     });
 
     return () => {

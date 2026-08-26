@@ -33,6 +33,8 @@ interface Harness {
   queue(response: { status: number; body: unknown }): void;
   requests: { url: string; body: unknown }[];
   setNow(seconds: number): void;
+  /** So a rebuilt session can be placed at the same moment – see `reopened`. */
+  nowSeconds(): number;
 }
 
 function harness(): Harness {
@@ -71,7 +73,20 @@ function harness(): Harness {
     setNow: (seconds) => {
       nowSeconds = seconds;
     },
+    nowSeconds: () => nowSeconds,
   };
+}
+
+/**
+ * The next page load: a fresh session object over the **same** storage.
+ *
+ * A renewal refusal comes back as a top-level navigation, so nothing held in the module's closure
+ * survives it. Building a second session is the only faithful way to test what happens next.
+ */
+function reopened(previous: Harness): Harness {
+  const rebuilt = harness();
+  rebuilt.setNow(previous.nowSeconds());
+  return rebuilt;
 }
 
 /** Reads the attempt the SPA stored, so a test can play Google's redirect back correctly. */
@@ -520,6 +535,92 @@ describe('renewal', () => {
 
     expect(h.session.current()?.user).toEqual(ANNA);
     expect(h.cleared).toEqual([]);
+  });
+
+  /**
+   * Review 2026-08-25, H-1 – **the redirect loop, closed.**
+   *
+   * A refused renewal arrives *as* a page load, so `renewalStarted` and the shell's per-page ref
+   * are both reborn `false` by the navigation that carried it. Reproduced the way production does
+   * it: a second `createAuthSession` over the same storage, which is what the next page load
+   * builds. Before the marker, that second session renews again immediately and Google refuses
+   * again — to Google and back every few seconds.
+   */
+  it('does not start another silent renewal on the page load that follows a refusal', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+    await h.session.completeRedirect(`?error=login_required&state=${renewal.state}`);
+    expect(h.session.current()?.user).toEqual(ANNA);
+
+    // The next page load: a brand-new session object over the same storage, exactly as the
+    // browser produces after the refusal redirect lands.
+    const next = reopened(h);
+    next.navigations.length = 0;
+    await next.session.renewSilently();
+
+    expect(next.navigations).toEqual([]);
+    // And it is still reported, so the shell can keep saying so rather than failing silently.
+    expect(next.session.renewalRefusal()).toMatchObject({ code: 'login_required' });
+  });
+
+  /** The way out: an interactive sign-in that Google completes lifts the block. */
+  it('renews again once an interactive sign-in has succeeded', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+    await h.session.completeRedirect(`?error=login_required&state=${renewal.state}`);
+
+    // She presses "Sign in again" and Google completes it.
+    const next = reopened(h);
+    await next.session.beginSignIn();
+    const interactive = currentAttempt();
+    next.queue({
+      status: 200,
+      body: { idToken: 'fresh', expiresAt: 1_800_180_000, user: ANNA },
+    });
+    await next.session.completeRedirect(`?code=c&state=${interactive.state}`);
+
+    expect(next.session.renewalRefusal()).toBeNull();
+
+    // And a later expiry renews silently once more, as it always did.
+    next.setNow(1_800_300_000);
+    next.navigations.length = 0;
+    await next.session.renewSilently();
+    expect(next.navigations).toHaveLength(1);
+  });
+
+  /**
+   * A refusal recorded against one person must not block the next one on a shared device – and
+   * signing out drops it outright, because it described a session that no longer exists.
+   */
+  it('does not carry one person’s refusal into the next person’s session', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+    await h.session.completeRedirect(`?error=login_required&state=${renewal.state}`);
+    expect(h.session.renewalRefusal()).not.toBeNull();
+
+    h.session.signOut();
+    expect(localStorage.getItem('confapp.auth.renewalRefused')).toBeNull();
   });
 
   /** An interactive sign-in Google refused is still just a failed sign-in – there is no session. */
