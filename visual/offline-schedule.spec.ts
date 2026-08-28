@@ -153,6 +153,44 @@ const PIN_DEVICE_CLOCK = `
 `;
 
 /**
+ * Waits until the app has finished claiming the store for the signed-in subject.
+ *
+ * A cold launch adopts the store and empties it when it cannot show that subject already owns it –
+ * which on a first visit it cannot. That claim is fired and not awaited by the app, so `page.goto`
+ * resolving, and even the panel rendering, does not mean it has finished; seeding into the gap
+ * leaves the entry deleted by a purge that lands *after* the write. The owner marker is written
+ * last, so its presence is the signal that the claim is done and the store is safe to write into.
+ *
+ * Ported from `offline-session-expiry.spec.ts`, which hit this first and fixed it locally. Called
+ * from inside `seedCache` rather than at each call site so a later seeding test cannot be written
+ * without it – forgetting it here is exactly how these captures started failing.
+ */
+async function waitForCacheClaimed(page: Page): Promise<void> {
+  await page.waitForFunction(async () => {
+    const db = await new Promise<IDBDatabase | null>((resolve) => {
+      const open = indexedDB.open('confapp-offline', 1);
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => resolve(null);
+      open.onblocked = () => resolve(null);
+    });
+    if (db === null) return false;
+    if (!db.objectStoreNames.contains('meta')) {
+      db.close();
+      return false;
+    }
+
+    const owner = await new Promise<unknown>((resolve) => {
+      const tx = db.transaction(['meta'], 'readonly');
+      const request = tx.objectStore('meta').get('owner-sub');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(undefined);
+    });
+    db.close();
+    return owner === 'google-sub-nadia';
+  });
+}
+
+/**
  * Writes the cache entry the offline states render from, straight into IndexedDB, and **waits for
  * the transaction to commit** before returning.
  *
@@ -170,6 +208,7 @@ async function seedCache(
   watermark: string,
   ageMillis: number,
 ): Promise<void> {
+  await waitForCacheClaimed(page);
   await page.evaluate(
     async ({ envelopeValue, watermark, ageMillis, conferenceId }) => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {

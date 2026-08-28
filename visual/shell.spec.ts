@@ -43,7 +43,11 @@ const SEED_SESSION = `
       sub: 'google-sub-anna',
       email: 'anna.andersson@ourcompany.example',
       displayName: 'Anna Andersson'
-    }
+    },
+    // Signed in just now, so the launch bound leaves this fixture standing
+    // (\`shared-device-session-lifetime\`). Without it the session reads as expired, the app
+    // lands on the sign-in screen, and every assertion below fails on a layout that is fine.
+    signedInAt: Date.now()
   }));
 `;
 
@@ -89,6 +93,13 @@ for (const viewport of VIEWPORTS) {
     // Reachable one-handed: a real target, not a compressed sliver.
     expect(signOutBox!.height).toBeGreaterThanOrEqual(40);
 
+    // The switch control sits beside the identity, under the same one-handed constraint – it is
+    // what somebody holding a colleague's phone reaches for.
+    const switchAccount = page.getByTestId('switch-account');
+    await expect(switchAccount).toBeVisible();
+    const switchBox = await switchAccount.boundingBox();
+    expect(switchBox!.height).toBeGreaterThanOrEqual(40);
+
     // The panel shows the live database value, so this is the full path, not a static render.
     const schemaVersion = page.getByTestId('schema-version');
     await expect(schemaVersion).toBeVisible();
@@ -96,7 +107,13 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByTestId('server-time')).toBeVisible();
 
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
-    for (const testId of ['signed-in-identity', 'sign-out', 'schema-version', 'server-time']) {
+    for (const testId of [
+      'signed-in-identity',
+      'switch-account',
+      'sign-out',
+      'schema-version',
+      'server-time',
+    ]) {
       await assertWithinViewport(page, testId, viewport.width);
     }
 

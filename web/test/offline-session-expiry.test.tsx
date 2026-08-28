@@ -405,8 +405,73 @@ describe('a cached conference whose span plus the margin has passed', () => {
     // And the schedule itself is not displayed.
     expect(screen.queryByTestId('attendee-session-list')).toBeNull();
 
-    // The entry is still on the device – withheld is not deleted. Nothing here purges.
-    expect(await readCachedSchedule(NADIA.sub, AUTUMN_OFFSITE)).not.toBeNull();
+    /*
+     * **And the entry is gone** (ADR-005). The window used to be a render gate only: the envelope,
+     * every session title and room, and the fact of this employee's membership stayed in IndexedDB
+     * indefinitely behind a screen that declined to draw them. "Access ends" has to mean the data
+     * goes. The sign-in-required state above still renders on this launch — the one the attendee is
+     * actually looking at — and from the next launch this conference reads as absent, which is the
+     * OC04 cost accepted with the decision.
+     */
+    await waitFor(async () => {
+      expect(await readCachedSchedule(NADIA.sub, AUTUMN_OFFSITE)).toBeNull();
+    });
+  });
+});
+
+describe('a lapsed conference the attendee actually opens', () => {
+  /**
+   * S02's own Given/When — "Nadia **opens** Autumn Offsite" — reaches the *per-conference* branch,
+   * which the scenario above does not: there the list read fails and the conference never gets
+   * selected, so the withheld-list branch answers instead. Here the server list succeeds, the
+   * conference is selected, and only the schedule read fails.
+   *
+   * It is also the only witness for eviction at `readOfflineSchedule`. The picker evicts on the
+   * same terms, so removing this site alone left the suite green (review 2026-08-26).
+   */
+  it('renders sign-in-required and evicts the entry it just refused', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(RECEIPT + DAY);
+    setCacheIdentity(() => NADIA.sub);
+    // A working credential: the list is fetched from the server, so Autumn is selected.
+    setTokenSource(async () => 'valid-credential');
+    await cache(AUTUMN, AUTUMN_RECEIPT);
+
+    setOnLine(true);
+    vi.stubGlobal(
+      'fetch',
+      routeFetch(
+        () =>
+          ({
+            '/me/conferences': {
+              status: 200,
+              body: {
+                conferences: [
+                  {
+                    id: AUTUMN_OFFSITE,
+                    name: 'Autumn Offsite',
+                    startDate: '2025-10-02',
+                    endDate: '2025-10-03',
+                    state: 'published',
+                  },
+                ],
+                defaultConferenceId: AUTUMN_OFFSITE,
+              },
+            },
+            // Only the schedule is unreachable, so the cached path answers for a selected conference.
+          }) as Record<string, Answer>,
+      ),
+    );
+
+    render(<AttendeeSchedulePanel />);
+
+    await screen.findByTestId('schedule-sign-in-required');
+    expect(screen.queryByTestId('schedule-unavailable-offline')).toBeNull();
+    expect(screen.queryByTestId('attendee-session-list')).toBeNull();
+
+    // And the entry it refused is gone, not merely withheld.
+    await waitFor(async () => {
+      expect(await readCachedSchedule(NADIA.sub, AUTUMN_OFFSITE)).toBeNull();
+    });
   });
 });
 

@@ -127,7 +127,26 @@ export async function readOfflineSchedule(conferenceId: string): Promise<Offline
 
   const entry = await readCachedSchedule(sub, conferenceId);
   if (entry === null) return { kind: 'absent' };
-  if (!withinReadabilityWindow(entry)) return { kind: 'lapsed' };
+
+  if (!withinReadabilityWindow(entry)) {
+    /*
+     * **Evicted, not merely withheld** (ADR-005). The window used to be a render gate only: the
+     * envelope, every session title and room, and the fact of this employee's membership stayed in
+     * IndexedDB indefinitely behind a screen that declined to draw them. "Access ends" has to mean
+     * the data goes, not that one code path stops looking at it.
+     *
+     * Not awaited, for the same reason the other cache writes are not: the caller's answer does not
+     * depend on the delete landing, and a storage failure must not turn "this lapsed" into a thrown
+     * read. It is retried on the next launch, which reaches this branch again.
+     *
+     * Costs OC04 something, accepted deliberately: from the *next* launch this conference reads as
+     * absent rather than lapsed, so the sign-in-required wording appears on the launch where the
+     * lapse is first observed and not after. That is the launch the attendee is looking at.
+     */
+    void forgetCachedSchedule(sub, conferenceId);
+    return { kind: 'lapsed' };
+  }
+
   return { kind: 'readable', entry };
 }
 
@@ -185,7 +204,14 @@ export async function listCachedConferences(): Promise<OfflineConferences> {
    * attendee land on a Conference the panel will not show – and on a device holding exactly one
    * lapsed entry, land there by default with nothing else to choose.
    */
-  const readable = entries.filter((entry) => withinReadabilityWindow(entry));
+  const readable = entries.filter((entry) => {
+    if (withinReadabilityWindow(entry)) return true;
+    // The picker observes the window too, so it evicts on the same terms – otherwise a lapsed
+    // conference the attendee never opens is never observed by `readOfflineSchedule` and survives
+    // forever in the store (ADR-005).
+    void forgetCachedSchedule(sub, entry.envelope.conference.id);
+    return false;
+  });
 
   const conferences = readable
     .map(({ envelope }) => ({

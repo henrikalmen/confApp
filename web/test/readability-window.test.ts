@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   READABILITY_MARGIN_DAYS,
+  SYNC_MARGIN_DAYS,
   withinReadabilityWindow,
 } from '../src/offline/readability-window.ts';
 import type { CachedSchedule } from '../src/offline/schedule-cache.ts';
@@ -182,5 +183,95 @@ describe('a device whose own clock is wrong', () => {
     // And the entry itself was not marked by having been seen past its window.
     expect(ended.deviceClockAtReceipt).toBe(RECEIPT);
     expect(Object.keys(ended).sort()).toEqual(['deviceClockAtReceipt', 'envelope', 'watermark']);
+  });
+});
+
+// ---------- ADR-005: the second horizon, measured from the last sync ----------
+
+describe('the horizon measured from the last successful sync', () => {
+  it('is thirty days, and is deliberately not the conference margin', () => {
+    // Two different questions – "how long since the event ended" and "how long since this device
+    // was last shown to be entitled to it". Collapsing them breaks S10 OC01; see below.
+    expect(SYNC_MARGIN_DAYS).toBe(30);
+    expect(SYNC_MARGIN_DAYS).not.toBe(READABILITY_MARGIN_DAYS);
+  });
+
+  /**
+   * The case the horizon exists for. A conference published eleven months out, cached the day it
+   * was published, on a device that never speaks to the API again.
+   */
+  it('withholds a conference far in the future once the sync is stale', () => {
+    const distant = entry({
+      syncedOn: '2026-09-15',
+      startDate: '2027-08-18',
+      endDate: '2027-08-20',
+    });
+
+    // Inside the sync horizon, the conference is readable even though it has not started.
+    expect(withinReadabilityWindow(distant, daysLater(25))).toBe(true);
+    // Past it, withheld – even though `endDate + 7` is still eleven months away.
+    expect(withinReadabilityWindow(distant, daysLater(40))).toBe(false);
+  });
+
+  /**
+   * **S10 OC01, "joining online is enough", is why this margin is thirty and not seven.**
+   *
+   * Joining primes the cache; the attendee may never open the app online again before travelling.
+   * A seven-day sync horizon would expire that primed entry before the conference it was primed
+   * for even began, which is the guarantee the offline feature exists to provide.
+   */
+  it('leaves an ordinary early joiner alone', () => {
+    const joinedEarly = entry({
+      syncedOn: '2026-09-15',
+      startDate: '2026-10-10',
+      endDate: '2026-10-12',
+    });
+
+    // Joined 25 days before the conference, still offline: readable.
+    expect(withinReadabilityWindow(joinedEarly, daysLater(25))).toBe(true);
+    // The accepted cost: joined more than the sync margin ahead and never back online.
+    expect(withinReadabilityWindow(joinedEarly, daysLater(35))).toBe(false);
+  });
+
+  it('still lets the conference horizon close first when it is the earlier one', () => {
+    // Synced on the last day; the conference margin (7d) expires long before the sync margin (30d).
+    const ended = entry({ syncedOn: '2026-09-18', endDate: '2026-09-18' });
+    expect(withinReadabilityWindow(ended, daysLater(READABILITY_MARGIN_DAYS))).toBe(true);
+    expect(withinReadabilityWindow(ended, daysLater(READABILITY_MARGIN_DAYS + 1))).toBe(false);
+  });
+});
+
+// ---------- SEC-14: the documented fail-closed is now total ----------
+
+describe('an entry whose day values are not comparable', () => {
+  /**
+   * Review 2026-08-26, SEC-14. `today <= horizon` is a lexicographic compare, which orders
+   * chronologically only for four-digit zero-padded years. `civilFromDays` has no domain guard, so
+   * a corrupt receipt reading yields '0NaN-NaN-NaN', '10000-01-01' or a negative year — and every
+   * one of those sorts *before* a real date, i.e. answered **readable** for an entry whose window
+   * could not be established.
+   *
+   * The `catch` only ever covered inputs that throw. These do not throw; they failed open. That was
+   * a disclosure bug while the window merely gated rendering, and would be a data-destruction bug
+   * now that a closed window evicts the entry — which is why this is fixed before eviction is
+   * wired, not after.
+   */
+  it('is withheld rather than silently readable for a NaN receipt reading', () => {
+    const lapsed = entry({ syncedOn: '2025-10-03', endDate: '2025-10-03' });
+    const corrupt = { ...lapsed, deviceClockAtReceipt: Number.NaN };
+
+    expect(withinReadabilityWindow(corrupt, daysLater(0))).toBe(false);
+  });
+
+  it('is withheld for effective days outside the four-digit-year range', () => {
+    const lapsed = entry({ syncedOn: '2025-10-03', endDate: '2025-10-03' });
+
+    // A receipt reading far in the future drives the effective day negative.
+    const farFuture = { ...lapsed, deviceClockAtReceipt: RECEIPT + 1e15 };
+    expect(withinReadabilityWindow(farFuture, () => RECEIPT)).toBe(false);
+
+    // And one far in the past drives it past year 9999.
+    const farPast = { ...lapsed, deviceClockAtReceipt: RECEIPT - 1e15 };
+    expect(withinReadabilityWindow(farPast, () => RECEIPT)).toBe(false);
   });
 });

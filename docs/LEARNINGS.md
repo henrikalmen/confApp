@@ -49,6 +49,11 @@
 - **Assert cache contents, not the requests issued** – S10's guard dispatched exactly the right navigation and then asserted only that a fetch happened; it was green while the cache key was wrong.
 - **A structure test that skips when its marker is missing tests nothing** – S09's read-order guard silently no-opped on one of the two routes it named for a whole pass, because the second read lived in a different function than the slice it searched. Assert the marker is found; never `if (found > -1)`.
 - **Piping Playwright through `tail` masks the exit code and eats the `N failed` line** – a failing run reads as exit 0 and looks interrupted. Redirect to a file, or read `${PIPESTATUS[0]}`.
+- **Moving a test beside the code it covers can silently delete integration coverage** – S02's renewal tests kept their assertions at the new seam; nothing asserted it was still called.
+- **Seeding the offline cache without claiming ownership purges it** – `adoptCacheOwner` fails closed, so an entry written before launch is deleted and every later "cache is empty" assertion passes vacuously. Adopt, write, then assert it is present.
+- **`page.goto` resolves long before the app's IndexedDB claim lands** – `adoptCacheOwner` is fired and not awaited, so seeding storage right after a navigation loses the entry to the purge that precedes the owner write. Wait for the owner marker; see `waitForCacheClaimed`.
+- **A harness fix made in one spec is not a fix** – `offline-session-expiry.spec.ts` diagnosed the claim race and fixed it locally on 2026-08-25; the same pattern in `offline-schedule.spec.ts` went unfixed and started failing when launch timing shifted. Grep for the pattern, not just the failing file.
+- **A new required field on a persisted type breaks fixtures with no compile error** – `web/test/` is outside `tsconfig`'s `include`, so a stale `StoredSession` literal fails as a 15s timeout instead. Grep every fixture when adding one.
 
 ## React State & Refusals
 
@@ -81,6 +86,10 @@
 ## Environment / WSL
 
 - **WSL OOM can surface as `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`** – it looks like a broken install; freeing host memory fixed it. First sign: the distro shuts down mid-session, taking dockerd.
+
+## Remediation Sequences
+
+- **Two individually-correct remediations can compose into a regression neither review can see** – each falsified alone; together nothing ends a session. Re-run pass 1's proof on the end state.
 
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.

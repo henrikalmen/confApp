@@ -7,15 +7,28 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createAuthSession, type AuthSession, type SessionUser } from './session.ts';
+import {
+  createAuthSession,
+  type AuthSession,
+  type SessionUser,
+  type StoredSession,
+} from './session.ts';
+import { withinSessionBound } from './session-bound.ts';
 import { fetchHealth, setCredentialMissingListener, setTokenSource } from '../api/client.ts';
 import { setSessionActions } from './session-actions.ts';
 import { resolveAuthConfig } from '../config.ts';
 import {
   adoptCacheOwner,
   purgeScheduleCache,
+  readCachedSchedulesFor,
   setCacheIdentity,
 } from '../offline/schedule-cache.ts';
+
+/** What the sign-in screen says when a session was cleared for passing its lifetime. */
+const SESSION_EXPIRED = {
+  code: 'SESSION_EXPIRED',
+  message: 'Your sign-in has expired. Sign in again to continue.',
+} as const;
 
 /**
  * Binds the session to React.
@@ -220,7 +233,34 @@ export function AuthProvider({
 
     const search = initialSearch ?? (typeof location === 'undefined' ? '' : location.search);
 
-    void session.completeRedirect(search).then((outcome) => {
+    /**
+     * **The session lifetime bound, evaluated once per launch** (`shared-device-session-lifetime`).
+     *
+     * Here rather than inside `session.current()` because the conference term's inputs live in
+     * IndexedDB, which is async, while `current()` is synchronous and read on every credential
+     * path – and here rather than anywhere later because a session past its bound must not render
+     * one frame of the previous person's data before it goes.
+     *
+     * Reads the **raw** rows for the subject. `listCachedConferences` would apply the readability
+     * window and evict what it filters, and an entry withheld by the 30-day sync horizon can carry
+     * the largest `endDate` on the device – dropping it here would sign an attendee out because a
+     * conference they joined early had not been synced recently, before it had even started.
+     * Nothing on this path evicts, and it runs before the panels that do are mounted.
+     *
+     * A cache that cannot be read at all yields no conference term, leaving the sign-in term to
+     * bound the session – never "unbounded because the data was missing".
+     */
+    const stillWithinBound = async (candidate: StoredSession): Promise<boolean> => {
+      let entries: Awaited<ReturnType<typeof readCachedSchedulesFor>> = [];
+      try {
+        entries = await readCachedSchedulesFor(candidate.user.sub);
+      } catch {
+        // Left empty on purpose – see above.
+      }
+      return withinSessionBound(candidate, entries);
+    };
+
+    void session.completeRedirect(search).then(async (outcome) => {
       if (!mounted.current) return;
 
       if (outcome.kind === 'signed-in') {
@@ -257,7 +297,17 @@ export function AuthProvider({
          */
         const surviving = outcome.silent ? session.current() : null;
         if (surviving !== null) {
+          // Claimed first, for the ordering reason spelled out on the cold-launch branch below.
           claim(surviving.user);
+          // A session that survives a refused renewal is still a session restored on this launch,
+          // so it faces the same bound as one restored without a redirect.
+          if (!(await stillWithinBound(surviving))) {
+            session.signOut();
+            if (!mounted.current) return;
+            setState({ kind: 'signed-out', error: SESSION_EXPIRED });
+            return;
+          }
+          if (!mounted.current) return;
           setState({
             kind: 'signed-in',
             user: surviving.user,
@@ -274,14 +324,37 @@ export function AuthProvider({
       }
 
       const existing = session.current();
-      // A session restored from storage on a cold launch claims the store too – that launch is
-      // exactly the case where the previous session ended without a sign-out.
-      if (existing !== null) claim(existing.user);
 
       if (existing === null) {
         setState({ kind: 'signed-out' });
         return;
       }
+
+      /*
+       * A session restored from storage on a cold launch claims the store too – that launch is
+       * exactly the case where the previous session ended without a sign-out.
+       *
+       * **Kept ahead of the bound, where it already was.** The claim is what purges a store found
+       * to belong to somebody else, and that is a privacy guarantee (S10 TI08); putting the bound's
+       * IndexedDB read in front of it would delay the purge behind an extra async hop for no gain.
+       * Claiming a store for a session about to be signed out costs nothing – both paths end in a
+       * purge and the owner marker is rewritten at the next sign-in – so the ordering that changes
+       * least is the one to keep.
+       */
+      claim(existing.user);
+
+      /*
+       * The bound is evaluated before the app settles signed-in: past it, the sign-out path clears
+       * the session and fires the hook S10's purge is registered on, so the expiry is a real data
+       * boundary rather than a screen that declines to draw.
+       */
+      if (!(await stillWithinBound(existing))) {
+        session.signOut();
+        if (!mounted.current) return;
+        setState({ kind: 'signed-out', error: SESSION_EXPIRED });
+        return;
+      }
+      if (!mounted.current) return;
 
       /*
        * **A refusal outlives the render that reported it.** A silent renewal Google refused

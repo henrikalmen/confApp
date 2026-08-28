@@ -405,6 +405,26 @@ describe('a store the database does not have', () => {
   });
 });
 
+// ---------- an entry whose receipt reading is not a real number ----------
+
+describe('an entry written with a non-finite receipt reading', () => {
+  /**
+   * Review 2026-08-26, SEC-14. `typeof NaN === 'number'`, so `usable()` used to accept such an
+   * entry, and a `NaN` receipt propagates through the clock into a day string like '0NaN-NaN-NaN'
+   * that the readability window compared lexicographically and answered **readable** for.
+   *
+   * The window guards itself now; this is the other half — an entry that cannot produce a real
+   * day is not served at all, and is dropped on the way past like any other unrenderable row.
+   */
+  it('is refused on write and treated as a miss on read', async () => {
+    await writeCachedSchedule(NADIA, KICKOFF, entry({ deviceClockAtReceipt: Number.NaN }));
+
+    // Refused on the way in – a value that cannot render offline is not stored.
+    expect(await cachedKeys()).toEqual([]);
+    expect(await readCachedSchedule(NADIA, KICKOFF)).toBeNull();
+  });
+});
+
 // ---------- what the module is not ----------
 
 describe('the offline layer', () => {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useOnline } from './offline/use-online.ts';
 import { HealthPanel } from './components/HealthPanel.tsx';
 import { ConferencesPanel } from './components/ConferencesPanel.tsx';
 import { JoinConferencePanel } from './components/JoinConferencePanel.tsx';
@@ -14,11 +15,39 @@ import { SessionRenewalNotice } from './auth/SessionRenewalNotice.tsx';
  * both in the header, reachable one-handed at 375px – a shared tablet at a conference makes
  * "how do I sign out" a real question, not a settings-screen afterthought.
  */
+/** Shown when the switch control is used with no connection – see `switchAccount`. */
+const SWITCH_NEEDS_CONNECTION = 'You need a connection to sign in as someone else.';
+
 export function App(): React.JSX.Element {
   const [navOpen, setNavOpen] = useState(false);
   const { state, signIn, signOut } = useAuth();
+  const online = useOnline();
+  const [switchRefused, setSwitchRefused] = useState<string | null>(null);
 
   const signedIn = state.kind === 'signed-in';
+
+  /**
+   * Hand the device to somebody else: an ordinary sign-out followed by an ordinary sign-in.
+   *
+   * Deliberately not a new teardown path – it goes through the same `signOut` the control beside it
+   * uses, so the same S10 purge fires and the next identity starts on a clean device.
+   *
+   * **Offline it refuses instead, and the existing session is left alone.** Signing out with no
+   * connection would clear the session and then fail to reach Google for the replacement, leaving
+   * the device with neither a session nor a way to get one – and taking the cached schedule the
+   * previous person was reading with it. `useOnline` is a link hint rather than proof of
+   * reachability, which is exactly the right strength here: this is a mutating affordance that is
+   * *certain* to fail without a link, which is one of the two things that hint is for.
+   */
+  const switchAccount = (): void => {
+    if (!online) {
+      setSwitchRefused(SWITCH_NEEDS_CONNECTION);
+      return;
+    }
+    setSwitchRefused(null);
+    signOut();
+    signIn();
+  };
   /** A silent renewal Google refused without ending the session – see `SessionRenewalNotice`. */
   const renewalFailed = state.kind === 'signed-in' ? (state.renewalFailed ?? null) : null;
 
@@ -39,6 +68,17 @@ export function App(): React.JSX.Element {
           ) : null}
 
           {signedIn ? (
+            <button
+              className="button"
+              type="button"
+              onClick={switchAccount}
+              data-testid="switch-account"
+            >
+              Not you?
+            </button>
+          ) : null}
+
+          {signedIn ? (
             <button className="button" type="button" onClick={signOut} data-testid="sign-out">
               Sign out
             </button>
@@ -55,6 +95,18 @@ export function App(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      {/*
+       * Outside the header's action row rather than inside it: the row is a wrapping flex line at
+       * 375px, and a sentence dropped into it competes with the controls for the same track.
+       * Still outside anything `switchAccount` unmounts, which is the property that matters – the
+       * refusal is only ever raised on the path that leaves the session, and the app, in place.
+       */}
+      {signedIn && switchRefused !== null ? (
+        <div className="panel alert" role="alert" data-testid="switch-account-refused">
+          {switchRefused}
+        </div>
+      ) : null}
 
       {navOpen ? (
         <nav className="app__nav" id="app-nav" aria-label="Main">

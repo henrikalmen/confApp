@@ -13,9 +13,9 @@ bounds them by the conference they belong to.
   conference inside its date span – and confApp never navigates away from the app trying to renew.
 - [OC02] A cached schedule stops rendering once its conference's date span plus the shared margin
   has passed, so a departed employee's offline access ends without depending on a reconnect.
-- [OC03] When the API is genuinely reachable again, renewal is attempted, and the outcome depends on
-  what Google refused with: a lapsed Google session leaves the cached schedule on screen and prompts
-  a sign-in, while a genuinely refused grant ends the session and purges, as it does today.
+- [OC03] When the API is genuinely reachable again, renewal is attempted, and a refusal never ends
+  the session: the cached schedule stays on screen and a sign-in is prompted, whatever Google
+  refused with. No refusal code distinguishes a deprovisioned account from a lapsed sign-in.
 - [OC04] An attendee can tell why a schedule is not shown: a lapsed sign-in and an absent cache
   produce distinguishable states.
 
@@ -101,12 +101,15 @@ bounds them by the conference they belong to.
   - **Then** S10's existing "not available offline" state renders – unchanged, and distinct from the
     sign-in-required state
 
-- [x] **S08 [OC03] [TI06] A renewal refused because the grant was refused ends the session and purges**
+- [x] **S08 [OC03] [TI06] No refusal code ends the session, including the ones that used to**
   - **Given** the cached schedule is on screen, the network is reachable, and Nadia's account has
     been deprovisioned
-  - **When** the silent renewal is refused with `invalid_grant`
-  - **Then** the session ends with S02's existing reason shown, and the cache is purged – this is
-    the case `prd.md#edge-cases` means by "access ends", and the only one that means it
+  - **When** the silent renewal is refused with `invalid_grant`, `access_denied`, `server_error` or
+    `login_required` – the four codes that between them covered both former branches
+  - **Then** the stored session survives and the cache is not purged in every case, because none of
+    those codes distinguishes a deprovisioned account from a lapsed Workspace cookie. What ends a
+    departed employee's access is the ID token expiring within the hour, which no client behaviour
+    affects; `prd.md#edge-cases` is met by that bound, not by this branch
 
 - [x] **S09 [OC03] [TI06] An unrecognised refusal code keeps the cache rather than purging**
   - **Given** the cached schedule is on screen and the network is reachable
@@ -376,3 +379,132 @@ OC02 states that a cached schedule stops rendering once its conference span plus
 **Threat model context:** internal app, fewer than 100 employees, and the asset is a conference schedule already shown to every attendee. The exposure is a departed employee retaining a read-only copy of an event that has ended. That may well be acceptable — the point is that OC02 currently overstates the guarantee, and the overstatement is now recorded rather than implied.
 
 Surfaced by the code+gap review of 2026-08-25 (H-4, converged across three independent reviewers) and confirmed analytically. `web/test/readability-window.test.ts` pins the underlying property — the predicate answers from the reading handed in and carries no memory of a later one — so a high-water mark would falsify that assertion visibly.
+
+### Run: 2026-08-26 06:30 UTC – observations
+
+#### POSTMORTEM: how four correct fixes produced an incorrect system
+
+Recorded here because `docs/LEARNINGS.md` carries traps as one-line bullets and this needs the narrative, and because `.agent_temp/` is the transient agent workspace by contract — a review report cannot be the only record of it.
+
+**What happened.** Between 2026-08-25 and 2026-08-26 this feature went through four passes: the original implementation, then remediation of C-1 (renewal unreachable from every surface but a cached attendee panel), H-3 (a captive portal satisfying the reachability probe), and H-1 (a refused renewal driving an unbounded redirect loop), plus H-2/M-2/H-4 alongside. Every pass was reviewed in fresh context by an agent that had not written the code. Every fix was falsified by reverting it and confirming a test went red. The suite went from 592 to 860 green. A security review then found the feature has no working revocation path at all.
+
+**The mechanism.** M-2 narrowed session clearing to silent renewals only, so that cancelling Google account chooser could not purge every cached schedule on the device. H-1 made a refused silent renewal write a durable marker that stops further silent renewals, so that a lapsed Workspace cookie could not bounce the app to Google every five seconds. Both are correct. Composed: `grantRefused` requires `attempt.silent`, and once the marker stands no attempt with `silent === true` is ever created again — so no Google refusal can ever clear a session on that device again. The marker lifts only on a successful redemption, which a deprovisioned account cannot produce. `prd.md#edge-cases` says access ends at the next token refresh; OC03 and Acceptance Scenario S08 say the same and are ticked. None of it is implemented.
+
+**A second instance in the same sequence.** Pass one established, as the C-1 fix, that renewal is reachable from every surface once the API answers — proven by three tests. Pass three made that reachability conditional on a durable `localStorage` flag whose set condition includes codes the same file argues elsewhere are transient (`server_error`). Nobody re-ran C-1 three tests against a standing marker. The C-1 defect was "renewal is reachable from one branch of one component"; the residual is "renewal is reachable from everywhere, until one transient Google error, then from nowhere, permanently".
+
+**Why the reviews could not see it.** Each pass was reviewed against the state before it. No pass changed an invariant the previous pass had established in a way that any single-pass diff makes visible — the interaction lives between two files and two commits. A per-pass review cannot catch this class by construction, however good the reviewer.
+
+**Preventive measure.** When a remediation sequence touches the same invariant more than once, re-run the earliest pass proof against the latest state before closing the sequence, and review the cumulative diff rather than only each pass. Concretely here: C-1 three tests should have been re-run with `confapp.auth.renewalRefused` present.
+
+**Second-order lesson, also paid for.** The 2026-08-25 review recorded a reason for leaving the shared-device handback open — that clearing the session would collide with M-2 purging the cache. That reason was false: `clearSession` fires the purge hook only when passed a non-null `sub`, and `signOut()` already relies on exactly that. A gap stayed open on a premise nobody checked, and this feature then made it user-reachable by adding two sign-in controls that render over a standing session. Reasons recorded for *not* fixing something deserve the same falsification as the fixes.
+
+Full detail: `.agent_temp/reviews/offline-session-expiry-security-review-claude-2026-08-26.md` (SEC-1, SEC-2, SEC-3) and the 2026-08-25 mixed review it follows.
+
+### Run: 2026-08-26 08:29 UTC – observations
+
+#### SETTLED FACT: no client-observable signal distinguishes deprovisioning from a lapsed Google session
+
+Documentation lookup, 2026-08-26, resolving open review findings H-5 and SEC-1. This invalidates the premise under TI06, Acceptance Scenario S08, part of OC03, Structural Criterion 4, and the Decisions Log line "A refused renewal is split by code: session-lapse keeps the cache, grant-refusal purges". Recorded here because the ratified decision needs amending and the reasoning must outlive the review report.
+
+**What was asked.** Which `error` value Google returns on a `prompt=none` authorization redirect when the Workspace account named in `login_hint` has been suspended or deleted.
+
+**What the documentation says.**
+
+1. **Google does not document this case at all.** Not in the OAuth 2.0 web-server guide, the OAuth overview, the Google Identity Services "Handle Errors" guide, or the RISC page. The refresh-token-invalidation list enumerates seven causes and account suspension is not among them.
+
+2. **The near-certain outcome is `login_required`, indistinguishable from an ordinary lapsed cookie.** OIDC Core 3.1.2.1 requires an error when the end-user is not already authenticated under `prompt=none`; 3.1.2.6 defines `login_required` as "The Authorization Server requires End-User authentication"; disabling a Google account terminates its sessions. That chain is *implied by documented rules*, not explicitly documented — which is itself the finding.
+
+3. **`invalid_grant` can never arrive on an authorization redirect.** RFC 6749 4.1.2.1 defines seven authorization-endpoint values and does not include it; 5.2 defines it as a *token-endpoint* error; OIDC Core 3.1.2.6 adds nine more and does not include it; Google own documentation places it under the token endpoint. **`GRANT_REFUSED` therefore contains one value that is dead code.**
+
+4. **`access_denied` is not a deprovisioning signal**, and Google Handle Errors guide widens it to cover a user who "is not already authenticated and has not pre-configured consent for the requested scopes" — a `prompt=none` case OIDC would answer with `login_required`. Read as a conjunction it should not fire for confApp users, who consent at interactive sign-in and request only `openid email profile`; but consent can be revoked by the user or reset by an admin. So the *other* value in `GRANT_REFUSED` is both not-the-signal-we-want and a possible false positive that would purge a still-employed attendee cache.
+
+5. **The token endpoint is not an oracle either.** It answers `invalid_grant` for many unrelated causes and the `error_description` ("Token has been expired or revoked") is community-observed, not documented, and does not distinguish admin suspension from user revocation from six-month disuse. An auth-code + PKCE SPA doing `prompt=none` never runs a refresh grant, so this path does not exist in confApp at all.
+
+6. **The mechanism Google recommends for exactly this problem excludes our entire user population.** Cross-Account Protection (RISC) is the documented answer, and its page states: "Cross-Account Protection does not currently send security events for Google Workspace (formerly G Suite) users." confApp is Workspace-only by design (ADR-002). Explicitly documented.
+
+**Consequence.** TI06 classifies a refusal code to decide whether access has ended. That distinction does not exist in any signal the client can see. The feature is not mis-implemented against its spec — the spec asks for something the protocol cannot supply.
+
+**What still bounds a departed employee, and is unaffected.** A suspended account cannot be issued a new ID token, the stored one expires in about an hour, and `apiRequest` refuses to send an expired one — so *server-side access ends within the hour regardless*, with or without any client-side classification. What the missing signal costs is only the promptness of local cleanup: clearing the stored session and purging the cached schedule.
+
+**Bearing on review finding SEC-1.** The reported latch — after one lenient refusal no further silent attempt is created, so `grantRefused` can never be true again — is real, but it disables a mechanism that could not have done the job in the first place. SEC-1 should be re-scored down on this evidence: it is not "revocation was working and two fixes broke it" but "revocation was never observable here". The remaining real bounds are the token lifetime (server side), the readability window (cached data), and `docs/specs/shared-device-session-lifetime/` (the session itself) — which is now load-bearing rather than a nice-to-have.
+
+**Decision required, not taken here.** Options are (a) delete the classification and always take the lenient path, relying on the three bounds above and amending TI06/S08/OC03/Criterion 4 and the Decisions Log to say so; (b) always purge on any failed silent renewal, which contradicts the ratified decision and costs every attendee their offline schedule whenever a Workspace cookie lapses mid-conference — the exact scenario this feature exists for; or (c) introduce a server-side authority (Admin SDK Directory API polling, admin-credentialed), which is new scope and a new dependency. Recommendation is (a). This belongs in an ADR via the architecture skill in trade-off mode, not a code patch.
+
+Sources: OIDC Core 1.0 3.1.2.1/3.1.2.6; RFC 6749 4.1.2.1/5.2; Google "Using OAuth 2.0 for Web Server Applications"; Google GIS "Handle Errors"; Google "Protect user accounts with Cross-Account Protection". Retrieved 2026-08-26.
+
+### Run: 2026-08-26 14:17 UTC – design-change
+
+#### DESIGN CHANGE
+TI06 classified the `error` code on a refused silent renewal to decide whether an employee's access had ended. No such classification is possible. A suspended Workspace account and an expired Workspace cookie both return `login_required`; `invalid_grant` cannot arrive on an authorization redirect at all (RFC 6749 defines it as a token-endpoint error); `access_denied` is a person declining, not an account ending; and Cross-Account Protection, which Google recommends for exactly this, sends no events for Workspace users. The spec asked for something the protocol cannot supply.
+
+Access is bounded by time instead: the ID token expires within about an hour and cannot be reissued to a suspended account, the cached schedule is bounded by its readability window, and the stored session is bounded by `docs/specs/shared-device-session-lifetime/`. Evidence and sources are recorded under `## Implementation Observations` as `#### SETTLED FACT`.
+
+#### ADR
+docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md (Accepted, 2026-08-26)
+
+#### AMENDMENT: OC03
+Old:
+```
+- [OC03] When the API is genuinely reachable again, renewal is attempted, and the outcome depends on
+  what Google refused with: a lapsed Google session leaves the cached schedule on screen and prompts
+  a sign-in, while a genuinely refused grant ends the session and purges, as it does today.
+```
+New:
+```
+- [OC03] When the API is genuinely reachable again, renewal is attempted, and a refusal never ends
+  the session: the cached schedule stays on screen and a sign-in is prompted, whatever Google
+  refused with. No refusal code distinguishes a deprovisioned account from a lapsed sign-in.
+```
+
+#### AMENDMENT: S08
+Old:
+```
+- [x] **S08 [OC03] [TI06] A renewal refused because the grant was refused ends the session and purges**
+  - **Given** the cached schedule is on screen, the network is reachable, and Nadia's account has
+    been deprovisioned
+  - **When** the silent renewal is refused with `invalid_grant`
+  - **Then** the session ends with S02's existing reason shown, and the cache is purged – this is
+    the case `prd.md#edge-cases` means by "access ends", and the only one that means it
+```
+New:
+```
+- [x] **S08 [OC03] [TI06] No refusal code ends the session, including the ones that used to**
+  - **Given** the cached schedule is on screen, the network is reachable, and Nadia's account has
+    been deprovisioned
+  - **When** the silent renewal is refused with `invalid_grant`, `access_denied`, `server_error` or
+    `login_required` – the four codes that between them covered both former branches
+  - **Then** the stored session survives and the cache is not purged in every case, because none of
+    those codes distinguishes a deprovisioned account from a lapsed Workspace cookie. What ends a
+    departed employee's access is the ID token expiring within the hour, which no client behaviour
+    affects; `prd.md#edge-cases` is met by that bound, not by this branch
+```
+
+### Run: 2026-08-26 14:18 UTC – observations
+
+#### SUPERSEDED SPEC TEXT: TI06 and Structural Criteria 4, 5, 6 (ADR-005)
+
+Append-only audit, because these regions are not mutable through `update-fis design-change` once implementation is complete — that form edits Intent and Acceptance Scenario text only, and this FIS is fully checked. OC03 and S08 *were* amended in place; the text below is the remainder, recorded rather than rewritten. **Where this block and the task or criterion text above disagree, this block is current.**
+
+Authority: `docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md` (Proposed, 2026-08-26). Implemented and verified in the same pass: 871 tests green, typecheck and lint clean, visual 3/3.
+
+**TI06** — reads "A refused renewal is classified by code, and only a refused grant clears the session", and describes `invalid_grant` and `access_denied` keeping the clearing behaviour.
+
+**Superseded.** No refusal clears the session or purges the cache. `GRANT_REFUSED` is deleted from `web/src/auth/session.ts`. The premise is false: a suspended Workspace account and an expired Workspace cookie both return `login_required`; `invalid_grant` cannot arrive on an authorization redirect at all; `access_denied` is a person declining. The only classification retained is whether *retrying* could succeed — the new `SESSION_LAPSED` set (`login_required`, `interaction_required`, `consent_required`, `account_selection_required`) records the durable renewal-refusal marker; every other code, transient or unrecognised, is left to retry on the next launch. Proven by a parameterised test across all four former codes asserting the session and cache both stand, and by a test asserting a `server_error` does not latch renewal off.
+
+**Structural Criterion 4** — reads "Exactly one place classifies a refusal … `invalid_grant` and `access_denied` clear the session and purge as today".
+
+**Superseded.** No code path clears the session or purges the cache in response to a refusal. Explicit sign-out and the user-switch hook remain the only clearing triggers and are untouched, so the criterion narrow intent — that clearing has exactly one owner and no downstream second-guessing — holds more strongly than before: there is now no refusal-driven clearing to disagree about.
+
+**Structural Criterion 5** — reads "no new persisted field is added to `CachedSchedule` and no new store is created".
+
+**Still satisfied, and extended.** The second horizon is computed from `envelope.serverNow.day`, already present in the entry; no field and no store were added. The criterion is amended only to permit a second named margin constant, `SYNC_MARGIN_DAYS = 30`, beside `READABILITY_MARGIN_DAYS = 7`. The two are deliberately different numbers answering different questions — "how long since the event ended" and "how long since this device was last shown to be entitled to it". Collapsing them expires a cache primed at join time before its conference begins, which breaks S10 OC01; a test pins that.
+
+**Structural Criterion 6** — reads "the window predicate has exactly one definition in the codebase" and is evaluated on S10 rehydrated effective clock.
+
+**Still satisfied, and extended.** One definition, one clock, unchanged. It now compares against the earlier of two horizons rather than one, and its documented fail-closed was made total: it claimed to fail closed for malformed entries but covered only inputs that *throw*. A `NaN` receipt reading yields the day string `0NaN-NaN-NaN`, and out-of-range values yield five-digit or negative years — all sort before every real date and answered *readable*. Every operand is now shape-checked before any comparison. Fixed **before** eviction was wired, because a predicate that wrongly answers readable is a disclosure bug while it gates rendering and a data-destruction bug once it gates deletion.
+
+**Behaviour added, not previously specified anywhere.** A lapsed entry is now evicted at both observation sites rather than merely refused rendering — the window was a render gate only, and the envelope, every session title and room, and the fact of membership stayed in IndexedDB indefinitely behind a screen that declined to draw them.
+
+**Accepted costs.** Joining more than 30 days ahead and never coming online again loses offline access (verified: 25 days works, 35 does not), narrowing S10 OC01 to a 30-day horizon. From the launch after an eviction a lapsed conference reads as absent rather than lapsed, weakening OC04 on second and later launches. Local cleanup is never prompt. The window remains advisory against a tampered device clock, as recorded under `#### ACCEPTED LIMITATION`.
+
+**Not covered by this decision.** The reconciliation-ledger entry for TI05 — the renewal trigger moved from the attendee panel to the shell — remains OPEN. ADR-005 does not touch TI05, the Work Areas, or the Testing Strategy note that still name `AttendeeSchedulePanel.tsx` as its home.

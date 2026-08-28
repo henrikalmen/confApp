@@ -11,6 +11,16 @@ opens the app on a device that is not theirs and never signs in. Devices are per
 practice, so this bounds every session by the event it belongs to and makes the signed-in identity
 visible on launch with a one-tap switch – a cheap safeguard rather than a reshaped session model.
 
+> **Promoted to load-bearing, 2026-08-26, by [ADR-005](../../adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md).**
+> That decision established that no client-observable signal distinguishes a deprovisioned Google
+> Workspace account from a merely lapsed Google session, and removed the refusal-code classification
+> that `offline-session-expiry` used to end a session on deprovisioning. **The bound specified here
+> is now the only mechanism that will ever end a stored session other than an explicit sign-out.**
+> It is no longer a defence-in-depth nicety alongside a Google-driven path — there is no Google-driven
+> path. Two consequences for whoever specs this: the bound must hold on a session *restored on cold
+> launch*, not only on a running one; and the 7-day margin it shares with the offline readability
+> window is recorded there as "recommended", which should be ratified rather than left implied.
+
 ## Scope
 
 ### In Scope

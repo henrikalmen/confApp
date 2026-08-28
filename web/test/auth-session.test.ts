@@ -454,36 +454,29 @@ describe('renewal', () => {
   }
 
   /**
-   * Acceptance Scenario S06, second half – Google refuses the **grant**, because the account was
-   * deprovisioned. She is signed out with the reason, not left on a silently failing screen, and
-   * the clearing hook fires so the cached schedules go with the access.
+   * **ADR-005: no refusal ends a session.** This replaces the two tests that asserted
+   * `invalid_grant` and `access_denied` cleared the session and purged the cache.
    *
-   * This is `prd.md#edge-cases`' "access ends" row, and `offline-session-expiry` S08. It is the
-   * direction the refusal split most easily loses: a change that simply stopped clearing would
-   * leave every other test in this file green while deleting the deprovisioning behaviour
-   * entirely, so it is asserted in both directions rather than one.
+   * That behaviour was removed deliberately, not lost. It rested on the premise that the refusal
+   * code says whether access has ended, and it does not: a suspended Workspace account and an
+   * expired Workspace cookie both return `login_required`, `invalid_grant` cannot arrive on an
+   * authorization redirect at all, and `access_denied` is a person declining. What bounds a
+   * departed employee is the token expiring within the hour, the cached schedule's readability
+   * window, and `shared-device-session-lifetime` — none of which run through this branch.
+   *
+   * Asserted across every code that used to clear, so a future reintroduction is visible.
    */
-  it('ends the session with a displayable reason when Google refuses the grant', async () => {
-    const { h, outcome } = await refusedRenewal('invalid_grant');
+  it.each(['invalid_grant', 'access_denied', 'server_error', 'login_required'])(
+    'keeps the session and the cache when a silent renewal is refused with %s',
+    async (code) => {
+      const { h, outcome } = await refusedRenewal(code);
 
-    expect(outcome.kind).toBe('failed');
-    if (outcome.kind !== 'failed') return;
-    expect(outcome.code).toBe('invalid_grant');
-    expect(outcome.message).toMatch(/no longer has access/i);
-    expect(outcome.message).toMatch(/\.$/);
-
-    expect(h.session.current()).toBeNull();
-    // Signed out, and the clearing hook fired for the account that is going away.
-    expect(h.cleared).toEqual([{ sub: ANNA.sub, reason: 'sign-out' }]);
-  });
-
-  it('ends the session when the grant is refused outright', async () => {
-    const { h, outcome } = await refusedRenewal('access_denied');
-
-    expect(outcome.kind).toBe('failed');
-    expect(h.session.current()).toBeNull();
-    expect(h.cleared).toEqual([{ sub: ANNA.sub, reason: 'sign-out' }]);
-  });
+      expect(outcome.kind).toBe('failed');
+      expect(h.session.current()?.user).toEqual(ANNA);
+      // The clearing hook is what `AuthProvider` purges the schedule cache on. It must not fire.
+      expect(h.cleared).toEqual([]);
+    },
+  );
 
   /**
    * `offline-session-expiry` Acceptance Scenario S05 – the *Google session* lapsed, not the
@@ -568,6 +561,35 @@ describe('renewal', () => {
     expect(next.navigations).toEqual([]);
     // And it is still reported, so the shell can keep saying so rather than failing silently.
     expect(next.session.renewalRefusal()).toMatchObject({ code: 'login_required' });
+  });
+
+  /**
+   * ADR-005 §3. **A transient refusal must not latch renewal off.**
+   *
+   * The marker exists to stop a redirect loop, and a loop needs a *deterministic* refusal. Writing
+   * it for `server_error` too meant one Google blip disabled silent renewal for that user on that
+   * device permanently, while the shell showed "your sign-in has expired and could not be renewed"
+   * on every load — which was not true.
+   */
+  it('does not latch renewal off after a transient refusal', async () => {
+    const h = harness();
+    await h.session.beginSignIn();
+    const first = currentAttempt();
+    h.queue({ status: 200, body: { idToken: 't', expiresAt: 1_800_003_600, user: ANNA } });
+    await h.session.completeRedirect(`?code=c&state=${first.state}`);
+
+    h.setNow(1_800_090_000);
+    await h.session.renewSilently();
+    const renewal = currentAttempt();
+    await h.session.completeRedirect(`?error=server_error&state=${renewal.state}`);
+
+    // Nothing recorded, so the next page load is free to try again.
+    expect(h.session.renewalRefusal()).toBeNull();
+
+    const next = reopened(h);
+    next.navigations.length = 0;
+    await next.session.renewSilently();
+    expect(next.navigations).toHaveLength(1);
   });
 
   /** The way out: an interactive sign-in that Google completes lifts the block. */

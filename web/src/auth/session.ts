@@ -43,16 +43,23 @@ const RENEWAL_LAPSED_MESSAGE =
 const RENEW_MARGIN_SECONDS = 120;
 
 /**
- * The refusal codes that mean **the grant itself was refused**, and so that access has ended.
+ * The refusal codes that will **not** resolve on their own, and so must stop the app retrying.
  *
- * Deliberately a closed list of two rather than "everything except the lapse codes". An
- * unrecognised code is far more likely to be a transient or new Google condition than a
- * deprovisioning, and the cost of the two mistakes is not symmetric: guessing "lapsed" wrongly
- * leaves a departed employee reading a cached schedule until its readability window closes,
- * while guessing "deprovisioned" wrongly deletes every attendee's offline schedule at once the
- * first time Google answers `server_error` (`offline-session-expiry` → Decisions Log).
+ * Not a judgement about entitlement — see the `error !== null` branch for why no such judgement is
+ * possible. These are the codes that mean the Google session itself needs a person: retrying
+ * silently cannot succeed until one signs in, and retrying anyway is the redirect loop.
+ *
+ * Everything else — `server_error`, `temporarily_unavailable`, anything unrecognised — is treated
+ * as transient and left to retry on the next launch. Latching those off permanently meant one
+ * Google blip disabled silent renewal for that user on that device forever, while showing a banner
+ * saying their sign-in had expired when it had not (ADR-005 §3).
  */
-const GRANT_REFUSED = new Set(['invalid_grant', 'access_denied']);
+const SESSION_LAPSED = new Set([
+  'login_required',
+  'interaction_required',
+  'consent_required',
+  'account_selection_required',
+]);
 
 export interface SessionUser {
   sub: string;
@@ -65,6 +72,21 @@ export interface StoredSession {
   /** Seconds since the epoch, as Google minted it and the API reported it back. */
   expiresAt: number;
   user: SessionUser;
+  /**
+   * Device-clock **milliseconds** at the sign-in that established this session.
+   *
+   * The second term of the session bound, and the only one available to somebody who has joined no
+   * conference (`shared-device-session-lifetime`). Deliberately *not* `expiresAt`: that is the ID
+   * token's roughly one-hour expiry, and bounding the session by it would sign attendees out hourly
+   * and break S02 OC01. Milliseconds rather than seconds to match `ClockAnchor.deviceClockAtReceipt`
+   * and `DeviceClock`, which the other term is evaluated against.
+   *
+   * **A silent renewal carries the existing value over rather than restamping it.** Restamping
+   * would push the horizon out on every renewal, which for anyone opening the app inside the margin
+   * is every hour – an unbounded session dressed as a bounded one, and the exact hole this feature
+   * exists to close. An *interactive* sign-in does stamp fresh: somebody proved who they were.
+   */
+  signedInAt: number;
 }
 
 interface StoredAttempt {
@@ -192,7 +214,25 @@ export function createAuthSession({
   }
 
   function current(): StoredSession | null {
-    return readJson<StoredSession>(store, SESSION_KEY);
+    const session = readJson<StoredSession>(store, SESSION_KEY);
+    if (session === null) return null;
+    if (Number.isFinite(session.signedInAt)) return session;
+
+    /*
+     * **A session written before this field existed, backfilled exactly once.**
+     *
+     * Storage outlives code: every device already signed in carries a session with no sign-in
+     * reading, and failing those closed would sign out every current user the moment this shipped.
+     * Failing them *open* is not available either – the clarification's Error Handling table is
+     * explicit that the bound never silently becomes unbounded when data is missing.
+     *
+     * So the value is stamped and **written back**. The write is what makes this a one-time
+     * backfill rather than a rolling reset: a value recomputed on each read would move the horizon
+     * forward every launch and the session would never expire. The next read takes the branch above.
+     */
+    const backfilled: StoredSession = { ...session, signedInAt: now() * 1000 };
+    store.setItem(SESSION_KEY, JSON.stringify(backfilled));
+    return backfilled;
   }
 
   /**
@@ -316,36 +356,28 @@ export function createAuthSession({
       }
 
       /**
-       * Google refused, and the refusal is provably ours. **The code decides what that means.**
+       * Google refused, and the refusal is provably ours. **The code does not tell us why, and
+       * this is where confApp stopped pretending it does** (ADR-005).
        *
-       * This is the one place in the tree that classifies a refusal, and it has to be: the
-       * clearing hook fires `purgeScheduleCache()`, so by the time any view is involved the
-       * store is already empty and there is nothing left to preserve. A second classifier
-       * downstream could only disagree with this one.
+       * A suspended or deleted Workspace account and an ordinary expired Workspace cookie both
+       * come back `login_required`: OIDC Core requires an error under `prompt=none` when the
+       * end-user is not authenticated, and disabling an account terminates its sessions, so the
+       * two are the same event on the wire. Google documents no code for the deprovisioned case
+       * at all. `invalid_grant` cannot arrive here — it is a token-endpoint error (RFC 6749 §5.2)
+       * and appears in neither the authorization-endpoint list nor OIDC's additions.
+       * `access_denied` is a person declining, not an account ending. And Cross-Account
+       * Protection, which Google recommends for exactly this, states it sends no events for
+       * Workspace users.
        *
-       * `invalid_grant` / `access_denied` are the grant itself being refused – a deprovisioned
-       * account, the case `prd.md#edge-cases` means by "access ends". The session ends and the
-       * cached schedules go with it.
+       * So no refusal ends a session here. What bounds a departed employee is time, not a code:
+       * their token expires within the hour and cannot be reissued, so the API is closed to them
+       * regardless of anything this branch does; the cached schedule is bounded by its readability
+       * window; and the stored session is bounded by `shared-device-session-lifetime`.
        *
-       * Everything else – `login_required` and `interaction_required` above all, but equally an
-       * unrecognised or transient `server_error` – means the *Google session* lapsed, not the
-       * employment. Clearing there would take a still-employed attendee's offline schedule away
-       * mid-conference over an expired Workspace cookie. So the stored session and the cache
-       * both stand and the person is asked to sign in again. It is the lenient default on
-       * purpose, and it is safe because the readability window still bounds how long a
-       * misclassified deprovisioning can read anything offline.
+       * The one thing still classified is whether retrying could ever work — see `SESSION_LAPSED`.
        */
       if (error !== null) {
         const previous = current();
-        /*
-         * **Only a *silent renewal* can refuse a grant in a way that ends access.** An interactive
-         * sign-in returns `access_denied` when the person closes Google's account chooser or
-         * declines consent – which says nothing whatever about their entitlement, and which is
-         * reachable from the two "Sign in again" controls this feature adds. Clearing there would
-         * purge every cached schedule on the device because somebody cancelled a dialog.
-         */
-        const grantRefused = attempt.silent && GRANT_REFUSED.has(error);
-        if (grantRefused && previous !== null) clearSession('sign-out', previous.user.sub);
 
         /*
          * **The loop-breaker.** A refusal that leaves the session standing arrives *as* a page
@@ -355,11 +387,14 @@ export function createAuthSession({
          * renews, and is refused again: a top-level trip to Google every few seconds, for exactly
          * the still-employed attendee the lenient default was written to protect.
          *
-         * Recorded rather than retried on a timer. A delay would slow the loop rather than end it,
-         * because nothing about waiting makes a lapsed Workspace cookie come back. What ends it is
-         * the person signing in, and the banner this refusal raises is where they do that.
+         * Recorded rather than retried on a timer, and **only for the codes that cannot resolve on
+         * their own**. A delay would slow the loop rather than end it, because nothing about
+         * waiting makes a lapsed Workspace cookie come back; what ends it is the person signing
+         * in, and the banner this refusal raises is where they do that. That reasoning is true of
+         * `login_required` and false of `server_error`, which is why `SESSION_LAPSED` gates this
+         * and an unrecognised or transient code is left to retry on the next launch (ADR-005 §3).
          */
-        if (attempt.silent && !grantRefused && previous !== null) {
+        if (attempt.silent && SESSION_LAPSED.has(error) && previous !== null) {
           store.setItem(
             RENEWAL_REFUSED_KEY,
             JSON.stringify({ sub: previous.user.sub, code: error }),
@@ -370,12 +405,9 @@ export function createAuthSession({
           kind: 'failed',
           silent: attempt.silent,
           code: error,
-          message: !attempt.silent
-            ? 'Google did not complete the sign-in. Please try again.'
-            : grantRefused
-              ? 'Your session has ended because Google would not renew it. This usually means ' +
-                'the account no longer has access. Please sign in again.'
-              : RENEWAL_LAPSED_MESSAGE,
+          message: attempt.silent
+            ? RENEWAL_LAPSED_MESSAGE
+            : 'Google did not complete the sign-in. Please try again.',
         };
       }
 
@@ -420,7 +452,8 @@ export function createAuthSession({
         };
       }
 
-      const payload = body as StoredSession;
+      const payload = body as Omit<StoredSession, 'signedInAt'>;
+      const previous = current();
 
       // A different person on this device: whatever the previous user left behind goes now,
       // before the new session exists. S10's cache clears through this.
@@ -429,7 +462,20 @@ export function createAuthSession({
         fire({ sub: lastSub, reason: 'user-switch' });
       }
 
-      store.setItem(SESSION_KEY, JSON.stringify(payload));
+      /*
+       * A silent renewal is not a new sign-in, so it inherits the original reading; anything else –
+       * an interactive sign-in, or the same person returning after a sign-out – starts the clock.
+       * See `StoredSession.signedInAt` for why restamping on renewal would make the bound vacuous.
+       */
+      const session: StoredSession = {
+        ...payload,
+        signedInAt:
+          attempt.silent && previous !== null && previous.user.sub === payload.user.sub
+            ? previous.signedInAt
+            : now() * 1000,
+      };
+
+      store.setItem(SESSION_KEY, JSON.stringify(session));
       store.setItem(LAST_SUB_KEY, payload.user.sub);
       // Google answered with a code, so whatever it refused before is over. This is the only thing
       // that lifts the block – which is why the banner's control starts an *interactive* sign-in.

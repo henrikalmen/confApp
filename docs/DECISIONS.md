@@ -18,6 +18,7 @@
 | [ADR-002](adrs/ADR-002-authenticate-with-google-workspace-oidc.md) | Authenticate with Google Workspace via OIDC | Accepted | Identity and access |
 | [ADR-003](adrs/ADR-003-postgresql-containerized-development.md) | PostgreSQL as the database, containerized for development | Accepted | Data persistence |
 | [ADR-004](adrs/ADR-004-containerized-api-and-spa.md) | Package the API and SPA as containers, superseding serverless on Azure | Accepted | Backend runtime and hosting |
+| [ADR-005](adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md) | Bound ended access by time, not by a refusal code | Accepted | Identity and access – how an employee's access ends |
 
 ## Superseded
 

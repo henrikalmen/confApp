@@ -199,7 +199,11 @@ async function transact<T>(
  */
 function usable(entry: CachedSchedule | null | undefined): entry is CachedSchedule {
   if (entry === null || entry === undefined) return false;
-  if (typeof entry.deviceClockAtReceipt !== 'number') return false;
+  // `Number.isFinite`, not `typeof === 'number'`: `NaN` passes the latter, and a `NaN` receipt
+  // reading propagates through the clock into a malformed day string that the readability window
+  // used to answer "readable" for (review 2026-08-26, SEC-14). The window guards itself now; this
+  // stops such an entry being served at all.
+  if (!Number.isFinite(entry.deviceClockAtReceipt)) return false;
   // Empty counts as unusable, not merely absent. `defaultDay` returns `undefined` for an empty
   // `days`, and the panel then renders no session list, no cached label and no hint – a blank
   // screen with no terminating outcome, which is exactly what OC03 forbids and what this guard

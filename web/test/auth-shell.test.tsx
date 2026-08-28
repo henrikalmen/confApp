@@ -44,6 +44,10 @@ function signedInStub(overrides: Partial<AuthSession> = {}): AuthSession {
     idToken: 'anna-token',
     expiresAt: 4_000_000_000,
     user: ANNA,
+    // Signed in just now, so the launch bound leaves this session standing and these tests stay
+    // about what the shell renders. A session with no reading at all is treated as expired
+    // (`session-bound.ts` fails closed), which is its own scenario in session-bound.test.ts.
+    signedInAt: Date.now(),
   };
   return stubSession({ current: () => stored, ...overrides });
 }

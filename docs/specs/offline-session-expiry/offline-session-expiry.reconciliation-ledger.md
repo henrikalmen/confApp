@@ -5,7 +5,8 @@
 ## Entries
 
 ### web/src/auth/session.ts:design-changed:refusal-clearing-narrowed-to-silent-renewals-only-structural-criterion-4-still-states-the-broader-rule
-- Status: OPEN
+- Status: RECONCILED
+- Reconciled: 2026-08-26 by ADR-005 (`docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md`); the FIS was amended via the `design-change` form in the same pass, which supersedes the drift rather than merely acknowledging it.
 - Class: design-changed
 - Stale targets: docs/specs/offline-session-expiry/offline-session-expiry.md#structural-criteria (item 4), docs/specs/offline-session-expiry/offline-session-expiry.md#acceptance-scenarios (S08), docs/specs/offline-session-expiry/offline-session-expiry.md#implementation-plan (TI06 Verify line, which restates the unqualified rule)
 - Source run: remediate-2026-08-25
@@ -18,6 +19,7 @@
 
 ### web/src/auth/AuthProvider.tsx:design-changed:renewal-trigger-moved-out-of-the-attendee-panel-to-the-shell-ti05-still-names-the-panel-as-its-location
 - Status: OPEN
+- Note 2026-08-26: **not** closed by ADR-005. That decision amends TI06, S08, OC03 and Structural Criteria 4/5/6; it does not touch TI05, the Work Areas, or the Testing Strategy note that still name `AttendeeSchedulePanel.tsx` as the renewal trigger's home. This drift stands until TI05 is amended in its own right.
 - Class: design-changed
 - Stale targets: docs/specs/offline-session-expiry/offline-session-expiry.md#implementation-plan (TI05, and its Verify line naming AttendeeSchedulePanel.tsx), docs/specs/offline-session-expiry/offline-session-expiry.md#scope--boundaries (Work Areas: the credential-path and attendee-panel entries), docs/specs/offline-session-expiry/offline-session-expiry.md#testing-strategy (TI01 and TI05 assert on the renewal entry point, not on rendered output)
 - Source run: remediate-c1-2026-08-25
