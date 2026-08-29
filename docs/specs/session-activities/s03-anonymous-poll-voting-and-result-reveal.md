@@ -5,6 +5,8 @@
 
 ## Feature Overview and Goal
 
+> **Superseded terminology, 2026-08-29 (ADR-007).** Every `round.activity_watermark_at` below refers to what is now **`round.activity_watermark`** - a `bigint` defaulted from one global sequence, not a timestamp. More importantly for this story: **TI02's ballot trigger no longer exists.** A cast Vote advances no cursor at all, and a Session Assignment holder's tally reaches them by refetching on the existing tick instead. The amendments are recorded in full under `## Implementation Observations`, whose `Old:` fences quote the superseded wording verbatim and are the audit trail - **those quotations are deliberately not updated**, and neither is the body above them, which stays the record of what this story specified and built.
+
 **Intent**: Leadership only gets an honest read on employee sentiment if a person can answer a question in a room full of colleagues knowing the answer cannot reach a colleague, a facilitator, the report or leadership – so this story makes that unlinkability a property of what is stored and of every path the application can take, not a promise the interface makes.
 
 **Expected Outcomes**:

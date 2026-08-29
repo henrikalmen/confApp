@@ -5,6 +5,8 @@
 
 ## Feature Overview and Goal
 
+> **Superseded terminology, 2026-08-29 (ADR-007).** Every `round.activity_watermark_at` and `activityWatermarkAt` below refers to what is now **`round.activity_watermark`** - a `bigint` defaulted from one global sequence, not a timestamp. It was retyped by `db/migrations/20260829120000000_activity-watermark-counter.sql`, because the microsecond instant let any Conference Member read when each Vote was cast while an Attendee is deliberately refused the tally; and then narrowed by `db/migrations/20260831090000000_vote-advances-no-cursor.sql`, because a Session-scoped cursor that moves on every ballot is a vote-arrival oracle whatever the value says. **The wording below is left as the record of what this story specified and built.** Where it disagrees with the schema, the schema and ADR-007 are current.
+
 **Intent**: A Session is currently only a slot on a schedule; until it can hold an Activity that a Presenter/Facilitator prepares in advance and starts in front of the room, confApp collects nothing from the people sitting in it.
 
 **Expected Outcomes** (scenarios anchor to these via `[OC<NN>]`):

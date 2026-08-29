@@ -5,6 +5,8 @@
 
 ## Feature Overview and Goal
 
+> **Superseded terminology, 2026-08-29 (ADR-007).** Every `round.activity_watermark_at` and `activityWatermarkAt` below refers to what is now **`round.activity_watermark`** - a `bigint` defaulted from one global sequence, not a timestamp (`db/migrations/20260829120000000_activity-watermark-counter.sql`). Two further facts this story's text predates: the cursor's writers are now the `post_it` trigger, the `round` trigger and S03's `round_option` trigger - **the ballot table is deliberately not one**, per ADR-007 - and the `round` trigger's `WHEN` clause is no longer a column allow-list but its inversion, `WHEN (OLD.activity_watermark IS NOT DISTINCT FROM NEW.activity_watermark)`, so a column added later is inside the rule by construction (`db/migrations/20260901120000000_round-watermark-when-inversion.sql`). **The wording below is left as the record of what this story specified and built.**
+
 **Intent**: A Post-it Round is only worth running if the ideas land on a shared board while the room is still talking – so a Conference Member must be able to put a named idea up from their phone and watch everyone else's arrive, and correct their own typo without asking anyone.
 
 **Expected Outcomes** (scenarios anchor to these via `[OC<NN>]`):
