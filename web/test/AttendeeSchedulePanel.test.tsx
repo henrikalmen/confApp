@@ -325,6 +325,11 @@ describe('concurrent Sessions', () => {
    * The product rule, asserted as an absence: Sessions are open, attendance is neither chosen nor
    * recorded, and there is no Personal Agenda (FR4, FR6). A control here would look helpful and be
    * a defect, so the test names every word one would plausibly carry.
+   *
+   * **Activities is the one permitted control** (S01), and it is not an exception to the rule: it
+   * opens what the Session is *running*, selects nothing about the Session and records no
+   * attendance. Named explicitly rather than loosening the assertion to "some buttons are fine",
+   * so the next control added to a Session card still has to argue for itself here.
    */
   it('offers no control to pick, attend, star or add a Session, and writes nothing', async () => {
     const fetchMock = routeFetch({
@@ -335,7 +340,13 @@ describe('concurrent Sessions', () => {
     render(<AttendeeSchedulePanel />);
 
     const list = await screen.findByTestId('attendee-session-list');
-    expect(within(list).queryAllByRole('button')).toEqual([]);
+    expect(
+      within(list)
+        .queryAllByRole('button')
+        .map((button) => button.getAttribute('data-testid')),
+    ).toEqual(
+      ['keynote', 'architecture', 'design', 'retro'].map((id) => `attendee-activities-${id}`),
+    );
     expect(within(list).queryAllByRole('checkbox')).toEqual([]);
     expect(list.textContent).not.toMatch(/attend|going|star|add to|my agenda|select/i);
 

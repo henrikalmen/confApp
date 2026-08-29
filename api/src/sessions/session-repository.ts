@@ -1,6 +1,10 @@
 import type { Database, Queryable } from '../db.ts';
 import type { CalendarDate } from '../conferences/calendar-date.ts';
 import { AppError, ERROR_CODES } from '../errors.ts';
+import { countPostItsForSession } from '../rounds/post-it-repository.ts';
+import { lockRoundsOfSession } from '../rounds/round-repository.ts';
+import { countVotesForSession } from '../votes/vote-repository.ts';
+import { assertSessionDeletable } from './session-deletion.ts';
 import type { SessionDetails, SessionKind } from './session-validation.ts';
 import { instantExpression, wallClockExpression, type WallClockTime } from './wall-clock-time.ts';
 
@@ -118,7 +122,16 @@ export type GuardedWrite =
    * no longer exists in this conference" to an Admin whose whole Conference was removed under them
    * sends them looking for a Session, and hides the fact that there is nothing left to look in.
    */
-  | { outcome: 'conference-missing' };
+  | { outcome: 'conference-missing' }
+  /**
+   * The write waited on a row somebody else was holding for longer than its `lock_timeout` allows,
+   * and gave up rather than keep waiting.
+   *
+   * Nothing is wrong and nothing was written - the Conference was simply busy. Kept apart from every
+   * other outcome because it is the only one where **trying again is the right advice**: a conflict
+   * needs the newer version, a missing row needs a different request, and this needs a moment.
+   */
+  | { outcome: 'busy' };
 
 export interface SessionRepository {
   listForConference(conferenceId: string): Promise<Session[]>;
@@ -157,12 +170,15 @@ export interface SessionRepository {
     expectedVersion: string,
   ): Promise<GuardedWrite>;
   /**
-   * Removes a Session, refusing to remove the last one from a published Conference.
+   * Removes a Session, refusing to remove one that has collected anything, and refusing to remove
+   * the last one from a published Conference.
    *
-   * The invariant and the delete are one operation on purpose: TI11 binds the publish gate to the
+   * The invariants and the delete are one operation on purpose: TI11 binds the publish gate to the
    * real Session count, so "published implies at least one Session" has to survive a delete as
    * well as a publish, and checking then deleting in two round trips would let two concurrent
-   * requests each see two Sessions and each remove one.
+   * requests each see two Sessions and each remove one. The contribution guard (S05 FR7) needs the
+   * same indivisibility for a sharper reason – a count taken outside the lock is a number about a
+   * past that a later insert can invalidate, and the thing lost is a Board of named ideas.
    */
   remove(conferenceId: string, sessionId: string, expectedVersion: string): Promise<GuardedWrite>;
 }
@@ -279,13 +295,78 @@ export function createSessionRepository(db: Database): SessionRepository {
       sessionId: string,
       expectedVersion: string,
     ): Promise<GuardedWrite> {
+      /*
+       * `55P03` is `lock_not_available` - the `lock_timeout` set inside the transaction expiring.
+       * Caught out here because it aborts the transaction, so it cannot be handled within it, and
+       * mapped to an outcome rather than allowed to reach the error handler: unmapped it is an
+       * `INTERNAL_ERROR`, which tells an Organizer the API broke when the truth is that somebody
+       * else is mid-write and the answer is to try again in a moment.
+       */
+      try {
+        return await removeWithin(db, conferenceId, sessionId, expectedVersion);
+      } catch (error) {
+        if ((error as { code?: unknown }).code === '55P03') return { outcome: 'busy' };
+        throw error;
+      }
+    },
+  };
+
+  function removeWithin(
+    db: Database,
+    conferenceId: string,
+    sessionId: string,
+    expectedVersion: string,
+  ): Promise<GuardedWrite> {
+    {
       return db.transaction<GuardedWrite>(async (tx) => {
         /*
+         * ==========================================================================================
+         * THE LOCK SEQUENCE IS THE GUARD, AND IT RUNS TOP TO BOTTOM FROM HERE:
+         *
+         *   Conference row `for update`
+         *     → the Session row `for update`
+         *       → that Session's Round rows `for update`
+         *         → the contribution count
+         *           → the sole-Session count
+         *             → the delete
+         *
+         * Every lock is taken *before* the count it protects. A count taken first would be a
+         * number about a past that a later insert can invalidate, which is exactly the window a
+         * Post-it arriving mid-delete would slip through – and it would leave "the delete
+         * succeeded and a committed Post-it disappeared with it" reachable (S05 FR7).
+         *
+         * The order only ever descends: Conference, then Session, then Round. `docs/LEARNINGS.md`
+         * records this delete's order as "conference then session row", and the delete/edit
+         * deadlock pair it names is unchanged by pulling the Session lock forward from the closing
+         * DELETE to the existence read - the SQLSTATE 40P01 retry in `api/src/db.ts` still covers
+         * it.
+         * ==========================================================================================
+         *
          * The Conference row is locked first, and every delete against this Conference queues
          * behind that lock. Without it two Admins each deleting one of the last two Sessions
          * would both count two, both proceed, and leave a published Conference with an empty
          * schedule – exactly the state the publish gate exists to prevent.
          */
+        /*
+         * A ceiling on every lock this transaction waits for, set before the first one is taken.
+         *
+         * The sequence below deliberately holds the Conference row while it waits on Session and
+         * Round rows, and without a bound that wait is unbounded: one Round row held open by
+         * anything - a long-running edit, a stalled client, a session left mid-transaction in a
+         * psql window - parks the Conference row for every other writer in that Conference, not
+         * just for other deletes. It is not a deadlock, so the SQLSTATE `40P01` retry in
+         * `api/src/db.ts` never sees it and nothing resolves it.
+         *
+         * Five seconds is far longer than a healthy delete needs and far shorter than a person will
+         * wait. Exceeding it raises SQLSTATE `55P03`, which the route turns into a refusal the
+         * Organizer can act on and retry, rather than a request that never returns.
+         *
+         * Transaction-local by construction: `SET LOCAL` reverts on commit or rollback, so the
+         * pooled connection is handed back with the server default and no other statement in this
+         * API acquires a timeout it did not ask for.
+         */
+        await tx.query("set local lock_timeout = '5s'", []);
+
         const conferences = await tx.query<{ lifecycle_state: string }>(
           'select lifecycle_state from conference where id = $1 for update',
           [conferenceId],
@@ -299,9 +380,17 @@ export function createSessionRepository(db: Database): SessionRepository {
          * order would answer a published conference's sole-session refusal to somebody who named
          * a session id that never existed — a refusal about a session other than the one they
          * asked about, and advice ("add another session first") that would not help them.
+         *
+         * It is also where the Session row is **locked**, `for update` and not `for no key
+         * update`. S01's Round authoring takes `FOR KEY SHARE` on this row to satisfy
+         * `round_session_in_conference`, the composite foreign key from `round` to `sessions`;
+         * `FOR UPDATE` conflicts with that mode and makes the insert wait, while
+         * `FOR NO KEY UPDATE` does not and would leave the window open while looking like a lock.
+         * Round authoring takes no Conference lock, so without this a Round created mid-delete
+         * would sit outside the counted set and could carry a committed Post-it into the cascade.
          */
         const existing = await tx.query<SessionRow>(
-          `select ${COLUMNS} from sessions where id = $2 and conference_id = $1`,
+          `select ${COLUMNS} from sessions where id = $2 and conference_id = $1 for update`,
           [conferenceId, sessionId],
         );
         const found = existing[0];
@@ -318,6 +407,33 @@ export function createSessionRepository(db: Database): SessionRepository {
         if (found.last_updated_at !== expectedVersion) {
           return { outcome: 'conflict', current: toSession(found) };
         }
+
+        /*
+         * The Round rows, locked, **before** anything is counted. A contribution insert needs
+         * `FOR KEY SHARE` on the Round row it names, so from here no Post-it and no Vote can enter
+         * a Round of this Session until this transaction ends.
+         */
+        await lockRoundsOfSession(tx, conferenceId, sessionId);
+
+        /*
+         * The contribution guard, answered **before** the sole-Session rule, and deliberately so.
+         *
+         * "Add another session first" is advice that cannot help somebody whose Session can never
+         * be deleted at all: adding a second Session would not make this delete possible, while
+         * the sole-Session refusal would send the Organizer to do exactly that. This extends the
+         * ordering rationale already written above, where existence is answered before the
+         * sole-Session rule for the same reason – the more permanent answer is the true one.
+         *
+         * Each count is issued by the module that owns its table, against this transaction's own
+         * client, so the ballot and Post-it tables stay behind their one seam apiece. The Vote
+         * count reaches ballots through the Round alone: no `sub` reaches this path and no
+         * has-voted row is read, so the guard knows *that* ballots exist and nothing about *whose*
+         * they are (Binding Constraint FR4, ADR-006).
+         */
+        assertSessionDeletable({
+          postIts: await countPostItsForSession(tx, conferenceId, sessionId),
+          votes: await countVotesForSession(tx, conferenceId, sessionId),
+        });
 
         const counts = await tx.query<{ count: number }>(
           'select count(*)::int as count from sessions where conference_id = $1',
@@ -342,6 +458,6 @@ export function createSessionRepository(db: Database): SessionRepository {
         if (deleted[0] === undefined) return { outcome: 'missing' };
         return { outcome: 'saved', session: toSession(found) };
       });
-    },
-  };
+    }
+  }
 }

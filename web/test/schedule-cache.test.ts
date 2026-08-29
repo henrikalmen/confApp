@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { IDBFactory } from 'fake-indexeddb';
 import {
+  DATABASE_VERSION,
   adoptCacheOwner,
   anchorOf,
   cacheOwner,
@@ -182,7 +183,9 @@ describe('a cached session', () => {
 describe('a cached entry this build cannot turn into a clock', () => {
   /** Writes past the module's own guard, the way an older build would have. */
   async function writeRaw(value: unknown): Promise<void> {
-    const request = indexedDB.open('confapp-offline', 1);
+    // No version: this fixture stands the database up as an older build left it, and pinning a
+    // literal would make it force a downgrade the moment the module's own version rises.
+    const request = indexedDB.open('confapp-offline');
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onupgradeneeded = () => {
         const database = request.result;
@@ -359,14 +362,18 @@ describe('adopting the store for a signed-in subject', () => {
 /**
  * Opens `confapp-offline` at the version the module expects, creating **only** `schedules`.
  *
- * This is not a hypothetical: a database left at version 1 by an earlier build never re-runs
- * `onupgradeneeded`, so a missing store is permanent for that device. Every call that touches
- * `meta` then throws from `transaction()` itself – before any request exists to attach a handler
- * to – which is the one failure mode the module's own error handling can miss.
+ * This is not a hypothetical: a database left at the module's current version by an earlier build
+ * never re-runs `onupgradeneeded`, so a missing store is permanent for that device. Every call that
+ * touches `meta` then throws from `transaction()` itself – before any request exists to attach a
+ * handler to – which is the one failure mode the module's own error handling can miss.
+ *
+ * `DATABASE_VERSION` rather than a literal: opened at anything lower, the module's own upgrade would
+ * run on the next call and *create* the store this fixture exists to withhold, and both assertions
+ * below would then hold for a reason that has nothing to do with what they claim.
  */
 async function openWithOnly(store: 'schedules' | 'meta'): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const request = globalThis.indexedDB.open('confapp-offline', 1);
+    const request = globalThis.indexedDB.open('confapp-offline', DATABASE_VERSION);
     request.onupgradeneeded = () => {
       request.result.createObjectStore(store);
     };
@@ -389,6 +396,26 @@ describe('a store the database does not have', () => {
     await expect(cacheOwner()).resolves.toBeNull();
     await expect(adoptCacheOwner(BJORN)).resolves.toBeUndefined();
     await expect(purgeScheduleCache()).resolves.toBeUndefined();
+  });
+
+  /**
+   * The purge is a privacy guarantee on a shared tablet, and it must not become conditional on a
+   * later story's store existing.
+   *
+   * `transaction()` throws when **any** named store is absent and `transact` reports that as a plain
+   * `null` which every caller `void`s - so a purge naming all three stores unconditionally would be
+   * a silent no-op, schedules and owner marker included, on any device whose version upgrade did not
+   * complete. It clears what the database actually has instead.
+   */
+  it('still empties the stores it has when a later story’s store never got created', async () => {
+    await openWithOnly('schedules');
+    await writeCachedSchedule(NADIA, KICKOFF, entry());
+    expect(await cachedKeys()).toHaveLength(1);
+
+    await purgeScheduleCache();
+
+    expect(await cachedKeys()).toEqual([]);
+    expect(await readCachedSchedule(NADIA, KICKOFF)).toBeNull();
   });
 
   it('leaves the read path with a terminating outcome instead of an unhandled rejection', async () => {

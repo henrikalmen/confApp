@@ -19,6 +19,8 @@
 | [ADR-003](adrs/ADR-003-postgresql-containerized-development.md) | PostgreSQL as the database, containerized for development | Accepted | Data persistence |
 | [ADR-004](adrs/ADR-004-containerized-api-and-spa.md) | Package the API and SPA as containers, superseding serverless on Azure | Accepted | Backend runtime and hosting |
 | [ADR-005](adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md) | Bound ended access by time, not by a refusal code | Accepted | Identity and access – how an employee's access ends |
+| [ADR-006](adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md) | Vote anonymity holds against application paths, not against database credentials | Accepted | Vote storage – the reach of the anonymity guarantee. **Amended 2026-08-29**: Decision 1 now covers correlation *across successive responses* and against out-of-band observation, not just what one response says |
+| [ADR-007](adrs/ADR-007-vote-arrivals-do-not-advance-the-member-visible-cursor.md) | Vote arrivals do not advance the Member-visible activity cursor | Accepted | Near-live propagation – what the Session activity watermark may carry, and how a Facilitator's live tally reaches them instead |
 
 ## Superseded
 

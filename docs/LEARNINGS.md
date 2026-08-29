@@ -39,6 +39,9 @@
 
 - **`auto-fit` is wrong for "sidebar + main that stacks"** – it keeps filling the row with tracks, crushing content at wide widths. Use `flex-wrap` with a flex-basis on the main pane instead.
 - **`flex-shrink: 0` + a rem `min-width` overflows under OS font scaling** – fine at 16px root, off-screen at 24px on a 375px phone; Capacitor inherits the OS scale. Use `min-width: min(Xrem, 100%)`.
+- **A hyphenated token is not an unbroken token** – hyphens break even at `overflow-wrap: normal`, so a `long-fixture-like-this` proves nothing. Use a camelCase or digit run.
+- **Page-level `scrollWidth - clientWidth` misses text overflowing its own box** – an ancestor absorbs the scroll. Compare the element's own `scrollWidth` with its `clientWidth`.
+- **`body` declares `overflow-wrap: break-word` and it inherits** – restating it on a new text block changes nothing while reading as load-bearing. Prove a wrap rule is needed before adding one.
 
 ## Testing
 
@@ -54,6 +57,11 @@
 - **`page.goto` resolves long before the app's IndexedDB claim lands** – `adoptCacheOwner` is fired and not awaited, so seeding storage right after a navigation loses the entry to the purge that precedes the owner write. Wait for the owner marker; see `waitForCacheClaimed`.
 - **A harness fix made in one spec is not a fix** – `offline-session-expiry.spec.ts` diagnosed the claim race and fixed it locally on 2026-08-25; the same pattern in `offline-schedule.spec.ts` went unfixed and started failing when launch timing shifted. Grep for the pattern, not just the failing file.
 - **A new required field on a persisted type breaks fixtures with no compile error** – `web/test/` is outside `tsconfig`'s `include`, so a stale `StoredSession` literal fails as a 15s timeout instead. Grep every fixture when adding one.
+- **Counting requests, not responses, makes a keep-on-failure guard vacuous** – a fetch mock recording on entry lets `waitFor(reads === 2)` resolve before the response is handled. Record on build.
+- **A file-wide grep for an argument matches any function that has one** – S01's `{ sessionId }` guard survived the write path losing it; another function had one. Inspect the call, not the file.
+- **A structure guard sees only what its parser matches** – S03's column regex assumed two-space indent, so a four-space `ballot_no` cleared all 21 vote-anonymity assertions. Anchor on `^\s*`.
+- **A SQL-scanning guard must read all three quote styles** – Prettier's `singleQuote` leaves strings containing `'open'` in double quotes, so a per-author count hid there and passed S05's guard.
+- **An unfiltered `pg_locks` wait proves nothing** – and a `relation` filter hangs forever: a blocked `FOR UPDATE` waits on a `transactionid` lock whose relation is null. Wait on its `tuple` lock.
 
 ## React State & Refusals
 
@@ -91,6 +99,15 @@
 
 - **Two individually-correct remediations can compose into a regression neither review can see** – each falsified alone; together nothing ends a session. Re-run pass 1's proof on the end state.
 
+## Offline
+
+- **`navigator.onLine` reports the link, not reachability** – on captive-portal or dead wifi it never drops, so S04's `online`-triggered queue drain never retried. Drive it off an existing tick.
+
+## Architecture
+
+- **A guard can block an unrelated fix by filename alone** – a shared-tick seam under `web/src/poll/` trips the `\bpoll\b` anonymity sweep of `web/src/offline`. Relocate the code, don't exempt it.
+- **Making a leaked value opaque hides its magnitude, not its change event** – the Session-scoped watermark no longer reads as a clock, but every move still means "a Vote arrived".
+
 ## Error Patterns
 <!-- Log recurring errors. Deterministic errors (bad schema, wrong type) → conclude immediately.
      Infrastructure errors (timeout, rate limit) → log, no conclusion until pattern emerges.
@@ -107,3 +124,4 @@
 - **Git Bash mangles `/api` env values into Windows paths** – `API_BASE_URL=/api` becomes `C:/Program Files/Git/api`, so fetches fail as `file:///…`. Set `MSYS_NO_PATHCONV=1` or drop the override.
 - **A test helper named `join` shadows `node:path`'s `join`** – surfaces as `app.inject is not a function` far from the cause. Name domain helpers `submit`/`post` in modules importing node:path.
 - **A deferred FIS ends with `## Deferred Decisions`, below `## Implementation Observations`** – append later observations inside Observations, not at EOF. S13 is in this state.
+- **Disjoint files is not disjoint resources** – two agents with no common file shared one test PostgreSQL; migrations failed the advisory lock and reddened 80+ tests. Check DBs and ports too.

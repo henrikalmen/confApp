@@ -10,6 +10,7 @@ import { registerAuthRoutes } from './routes/auth.ts';
 import { registerMeRoute } from './routes/me.ts';
 import { registerConferenceRoutes } from './routes/conferences.ts';
 import { registerSessionRoutes } from './routes/sessions.ts';
+import { registerRoundRoutes } from './routes/rounds.ts';
 import { registerJoinCodeRoutes } from './routes/join-code.ts';
 import { registerAttendeeRoutes } from './routes/attendee.ts';
 import { registerMemberRoutes } from './routes/members.ts';
@@ -21,6 +22,10 @@ import { createRoleRepository } from './conferences/role-repository.ts';
 import { createMembershipRepository } from './conferences/membership-repository.ts';
 import { createScheduleGate, type ScheduleGate } from './conferences/schedule-gate.ts';
 import { createSessionRepository } from './sessions/session-repository.ts';
+import { createRoundRepository } from './rounds/round-repository.ts';
+import { createPostItRepository } from './rounds/post-it-repository.ts';
+import { createVoteRepository } from './votes/vote-repository.ts';
+import { createBallotGate, type BallotGate } from './rounds/ballot-gate.ts';
 import { systemClock, type Clock } from './conferences/calendar-date.ts';
 import { generateJoinCode, type JoinCodeMinter } from './conferences/join-code.ts';
 import type { Verifier } from './auth/verify-id-token.ts';
@@ -80,6 +85,14 @@ export interface BuildAppOptions {
    * rather than the count itself.
    */
   scheduleGate?: ScheduleGate;
+  /**
+   * Whether a Round has a Vote yet – the Poll-freeze rule's only question (S01 TI04).
+   *
+   * Production binds the real `exists` check over the ballot table (S03 TI08). Injectable still, so
+   * a test whose subject is the freeze *rule* rather than the ballot storage can bind a port that
+   * answers `true` without casting a Vote first.
+   */
+  ballotGate?: BallotGate;
   /** The server's calendar date. Pinned by tests so the archive boundary can be stated. */
   clock?: Clock;
   /**
@@ -94,6 +107,7 @@ export function buildApp({
   db,
   auth,
   scheduleGate,
+  ballotGate,
   clock = systemClock,
   mintJoinCode = generateJoinCode,
   loggerOptions = false,
@@ -137,6 +151,19 @@ export function buildApp({
     conferences,
     sessions,
     authorization,
+  });
+  // The Session Activities surface (S01): Rounds authored on a Session, run live, and read by every
+  // Conference Member in one request. Registered beside the schedule routes because it is the same
+  // resource seen from the room rather than from the composition view.
+  registerRoundRoutes(app, {
+    withAuth,
+    conferences,
+    sessions,
+    rounds: createRoundRepository(db),
+    postIts: createPostItRepository(db),
+    votes: createVoteRepository(db),
+    authorization,
+    ballotGate: ballotGate ?? createBallotGate(),
   });
   // The Attendee's read surface (S06) – a different result set from the Organizer's on both of its
   // routes, which is why it is registered separately rather than folded into the two above.

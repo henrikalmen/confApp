@@ -6,6 +6,7 @@ import { JoinConferencePanel } from './components/JoinConferencePanel.tsx';
 import { SignInScreen } from './components/SignInScreen.tsx';
 import { AttendeeSchedulePanel } from './attendee/AttendeeSchedulePanel.tsx';
 import { useAuth } from './auth/AuthProvider.tsx';
+import { PostItQueueDrain } from './offline/use-post-it-queue.ts';
 import { SessionRenewalNotice } from './auth/SessionRenewalNotice.tsx';
 
 /**
@@ -137,6 +138,18 @@ export function App(): React.JSX.Element {
           </div>
         ) : signedIn ? (
           <>
+            {/*
+             * The Post-it queue's drain, device-wide and mounted here rather than on the Session
+             * panel (S04, product decision of 2026-08-29).
+             *
+             * Somebody types an idea in a dead spot, walks out of the room and reconnects at the
+             * coffee table: it has to go up *there*, not when they next happen to reopen that one
+             * Session. Renders nothing, so it sits above the surfaces rather than among them.
+             *
+             * Inside the signed-in branch on purpose – there is nothing to send for a device with
+             * nobody on it, and no queue keyed to read.
+             */}
+            <PostItQueueDrain />
             {renewalFailed !== null ? (
               <SessionRenewalNotice
                 code={renewalFailed.code}

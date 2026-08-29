@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SchedulePanel } from '../src/schedule/SchedulePanel.tsx';
@@ -487,6 +489,62 @@ describe('SchedulePanel', () => {
     expect((await screen.findByTestId('schedule-refusal')).textContent).toBe(message);
     // The session is still on screen, because the server said it still exists.
     expect(screen.getByTestId(`session-${KEYNOTE.id}`)).toBeTruthy();
+  });
+
+  // ---------- S05 Acceptance Scenario S01 (browser half): the contribution refusal (TI07) --------
+
+  /**
+   * The server's sentence, verbatim, with **no code-specific branch added to `remove()`**.
+   *
+   * S05 adds a refusal the client has never seen before, and this is what proves it needs no client
+   * work: the panel renders `refused.message` whatever the code is. The alert also lives outside
+   * the subtree a failed re-read would replace (`docs/LEARNINGS.md` – "a refusal rendered only
+   * inside a component its own handler unmounts is lost"), so the sentence survives the reload the
+   * handler does not do here.
+   */
+  it("renders the server's contribution refusal verbatim and keeps the session listed", async () => {
+    const message =
+      'This session has collected 12 post-its and cannot be deleted. ' +
+      'Edit the session, or move it to another day or time, instead.';
+    await renderPanel({
+      ...serving(schedule()),
+      [`DELETE /conferences/${CONFERENCE_ID}/sessions/${KEYNOTE.id}`]: {
+        status: 409,
+        body: { error: { code: 'SESSION_HOLDS_CONTRIBUTIONS', message } },
+      },
+    });
+
+    await userEvent.click(screen.getByTestId(`delete-${KEYNOTE.id}`));
+
+    expect((await screen.findByTestId('schedule-refusal')).textContent).toBe(message);
+    expect(screen.getByTestId(`session-${KEYNOTE.id}`)).toBeTruthy();
+  });
+
+  /** …and the panel branches on no delete refusal code except the lifecycle race it already did. */
+  it('adds no code-specific branch to the delete handler', async () => {
+    /*
+     * Read from the repository root: under jsdom the panel's own module URL is an http one, so
+     * `import.meta.url` cannot be resolved to a file, and `process.cwd()` is the root the whole
+     * workspace run starts from rather than the `web` package.
+     */
+    const relative = join('src', 'schedule', 'SchedulePanel.tsx');
+    const candidates = [join(process.cwd(), 'web', relative), join(process.cwd(), relative)];
+    const path = candidates.find((candidate) => existsSync(candidate));
+    expect(
+      path,
+      `SchedulePanel.tsx should be found under one of ${candidates.join(' or ')}`,
+    ).toBeDefined();
+    const source = readFileSync(path!, 'utf8');
+    const at = source.indexOf('const remove = useCallback(');
+    expect(at, 'the remove handler should be found').toBeGreaterThan(-1);
+    const remove = source.slice(at, source.indexOf('return (', at));
+
+    expect(remove).toContain('setRefusal(refused.message)');
+    expect(remove).not.toMatch(/SESSION_HOLDS_CONTRIBUTIONS|post-it|contribution/i);
+    // The one code it does branch on is the lifecycle race S09 gave it, and there is only one.
+    expect([...remove.matchAll(/refused\.code === '(\w+)'/g)].map((match) => match[1])).toEqual([
+      'CONFERENCE_STATE_CHANGED',
+    ]);
   });
 
   // ---------- read-only and failure states ----------

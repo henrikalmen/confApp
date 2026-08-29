@@ -143,7 +143,7 @@ async function seedLapsedCache(page: Page): Promise<void> {
   await page.evaluate(
     async ({ envelopeValue, conferenceId, ageMillis }) => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const open = indexedDB.open('confapp-offline', 1);
+        const open = indexedDB.open('confapp-offline');
         open.onupgradeneeded = () => {
           const database = open.result;
           if (!database.objectStoreNames.contains('schedules')) {
@@ -191,7 +191,7 @@ async function seedLapsedCache(page: Page): Promise<void> {
 async function waitForCacheClaimed(page: Page): Promise<void> {
   await page.waitForFunction(async () => {
     const db = await new Promise<IDBDatabase | null>((resolve) => {
-      const open = indexedDB.open('confapp-offline', 1);
+      const open = indexedDB.open('confapp-offline');
       open.onsuccess = () => resolve(open.result);
       open.onerror = () => resolve(null);
       open.onblocked = () => resolve(null);

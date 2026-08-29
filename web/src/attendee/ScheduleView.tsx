@@ -19,6 +19,10 @@ import { concurrentTitles, dayLabel, runningSessionIds, timeRange } from './sche
  * neither chosen nor recorded, and there is no Personal Agenda – so a picker between two concurrent
  * Sessions would contradict the product even though it would look helpful (FR4, FR6,
  * `docs/UBIQUITOUS_LANGUAGE.md`).
+ *
+ * The one control that does exist – **Activities** (S01) – is not an exception to that. It selects
+ * nothing about the Session and records no attendance: it asks the view boundary above to open what
+ * the Session is *running*, and the boundary is where the request is made.
  */
 
 export interface ScheduleViewProps {
@@ -27,6 +31,17 @@ export interface ScheduleViewProps {
   now: WallClockReading;
   selectedDay: string;
   onSelectDay: (day: string) => void;
+  /**
+   * The Session whose Activities are open, and the way to open one (S01 TI10).
+   *
+   * Both optional, and both **decided above this component**. The Activities panel itself is
+   * rendered at the view boundary, not here: this tree stays a pure projection of
+   * `(envelope, now)`, which is the property that lets S10 hand it a cached envelope with no
+   * network. Omitting `onOpenActivities` – which the offline branch does – simply means no control
+   * is offered, because Rounds are read online and are deliberately not in the cache (FR6).
+   */
+  openActivitiesFor?: string | null;
+  onOpenActivities?: (sessionId: string) => void;
 }
 
 export function ScheduleView({
@@ -34,6 +49,8 @@ export function ScheduleView({
   now,
   selectedDay,
   onSelectDay,
+  openActivitiesFor = null,
+  onOpenActivities,
 }: ScheduleViewProps): React.JSX.Element {
   const running = runningSessionIds(schedule, now);
   const day = schedule.days.find((entry) => entry.date === selectedDay) ?? schedule.days[0];
@@ -107,6 +124,25 @@ export function ScheduleView({
                   <p className="session-card__location">{session.location}</p>
                   {session.description !== null ? (
                     <p className="session-card__description">{session.description}</p>
+                  ) : null}
+
+                  {/*
+                   * The one control on this screen, and it chooses nothing about the Session: it
+                   * opens what the Session is *running* (FR2). Attendance is still neither chosen
+                   * nor recorded, and nothing here is sent to the server.
+                   */}
+                  {onOpenActivities !== undefined ? (
+                    <p className="session-card__activities">
+                      <button
+                        className="button button--small"
+                        type="button"
+                        aria-expanded={openActivitiesFor === session.id}
+                        data-testid={`attendee-activities-${session.id}`}
+                        onClick={() => onOpenActivities(session.id)}
+                      >
+                        Activities
+                      </button>
+                    </p>
                   ) : null}
 
                   {/*

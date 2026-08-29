@@ -97,6 +97,25 @@ export const ERROR_CODES = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   /** Deleting the sole Session of a published Conference, which must keep a schedule. */
   SESSION_LAST_IN_PUBLISHED_CONFERENCE: 'SESSION_LAST_IN_PUBLISHED_CONFERENCE',
+  /**
+   * A write gave up waiting on a row somebody else was holding (`lock_timeout`, SQLSTATE 55P03).
+   *
+   * Distinct from every other refusal in this file because it is the only one where **retrying
+   * unchanged is the right advice**. Nothing conflicts, nothing is stale, and the request was not
+   * wrong - the Conference was simply busy. The alternative was holding the Conference row for as
+   * long as the other writer took, which blocks every writer in that Conference rather than one.
+   */
+  CONFERENCE_BUSY: 'CONFERENCE_BUSY',
+  /**
+   * Deleting a Session that already holds collected output (S05 FR7).
+   *
+   * Its own reason and so its own code, kept apart from
+   * SESSION_LAST_IN_PUBLISHED_CONFERENCE because the two send the Organizer to do opposite
+   * things. That one means "add another session, then try again"; this one means the delete is
+   * never going to be possible and the way forward is to edit or reschedule instead. The message
+   * carries the counts because FR7's criterion is that the refusal *names what would be lost*.
+   */
+  SESSION_HOLDS_CONTRIBUTIONS: 'SESSION_HOLDS_CONTRIBUTIONS',
 
   // ---------- attendee schedule read (S06) ----------
   // Two reasons, two codes, because they are two different situations for the person holding the
@@ -156,6 +175,83 @@ export const ERROR_CODES = {
   CONFERENCE_STATE_CHANGED: 'CONFERENCE_STATE_CHANGED',
   /** The requested date span would leave existing Sessions outside the Conference's days. */
   CONFERENCE_SPAN_ORPHANS_SESSIONS: 'CONFERENCE_SPAN_ORPHANS_SESSIONS',
+
+  // ---------- session activities: rounds (S01) ----------
+  // One code per *reason*, following the convention above. Each one is a different thing for the
+  // Facilitator to do next: fix the kind or purpose they sent, fix the text, fix the option list,
+  // look somewhere else for the round, accept that this transition is not available, or accept
+  // that voting has already frozen what the poll asks. A single ROUND_REFUSED would collapse six
+  // different next actions into one sentence the client could not branch on.
+  /** The kind is not one of the two Activities, or the purpose does not match the kind. */
+  ROUND_KIND_INVALID: 'ROUND_KIND_INVALID',
+  /** The prompt or question is blank after trimming, or longer than the cap. */
+  ROUND_PROMPT_INVALID: 'ROUND_PROMPT_INVALID',
+  /** The option list is too short, carries a blank or over-long label, or repeats one. */
+  ROUND_OPTIONS_INVALID: 'ROUND_OPTIONS_INVALID',
+  /** An edit tried to change what a Round *is* – its kind or its Voting Round purpose. */
+  ROUND_KIND_IMMUTABLE: 'ROUND_KIND_IMMUTABLE',
+  /** No Round with that id on this Session, asked by someone entitled to know that. */
+  ROUND_NOT_FOUND: 'ROUND_NOT_FOUND',
+  /** The requested open/close move is not one this Round permits – reopening a Poll that has run. */
+  ROUND_TRANSITION_NOT_PERMITTED: 'ROUND_TRANSITION_NOT_PERMITTED',
+  /** A Poll's question or options were edited after its first Vote was cast. */
+  POLL_CONTENT_FROZEN: 'POLL_CONTENT_FROZEN',
+
+  // ---------- session activities: post-its (S02) ----------
+  // Three reasons, three codes, for three different next actions: fix what you typed, accept that
+  // this one is not yours to change, or accept that the round has stopped taking contributions.
+  // None of them is a synonym for a reason that already has a code above - a closed *Post-it*
+  // Round refusing a contribution is not ROUND_TRANSITION_NOT_PERMITTED, which answers "this poll
+  // has already shown its results" to a Facilitator working the run controls.
+  /** The post-it text is blank after trimming, or longer than POST_IT_MAX_LENGTH. */
+  POST_IT_TEXT_INVALID: 'POST_IT_TEXT_INVALID',
+  /**
+   * The Round is not taking contributions: it is closed, so contributing, correcting and removing
+   * are all refused at the API and not merely hidden by a disabled control.
+   */
+  POST_IT_ROUND_CLOSED: 'POST_IT_ROUND_CLOSED',
+  /**
+   * The post-it belongs to somebody else.
+   *
+   * Deliberately distinct from CONFERENCE_ROLE_REQUIRED and NOT_A_MEMBER: the caller is in the
+   * room and entitled to be here, and what refused them is authorship, not authority.
+   */
+  POST_IT_NOT_AUTHOR: 'POST_IT_NOT_AUTHOR',
+  /** No post-it with that id on this Round, asked by someone entitled to know that. */
+  POST_IT_NOT_FOUND: 'POST_IT_NOT_FOUND',
+
+  // ---------- session activities: votes (S03) ----------
+  // Four reasons, four codes, for four different next actions: your vote is already in and there
+  // is nothing further to do, pick an option that is actually on this ballot, the poll has
+  // finished, or wait for the result. None is a synonym for a code above.
+  //
+  // **No refusal on this path ever carries a count, a total or per-option data.** A tally that
+  // could be read out of an error body would make the result reachable to somebody the result was
+  // deliberately withheld from, and would do it through the one response nobody inspects
+  // (prd.md#fr5-poll-result-reveal, FIS -> Constraints & Gotchas).
+  /** This Member has already voted in this Poll. A Vote is final once cast. */
+  VOTE_ALREADY_CAST: 'VOTE_ALREADY_CAST',
+  /** The chosen option is not on this Poll's ballot – it belongs to another Round, or is gone. */
+  VOTE_OPTION_UNKNOWN: 'VOTE_OPTION_UNKNOWN',
+  /**
+   * The Poll has closed, said to somebody trying to vote in it.
+   *
+   * Deliberately **not** POST_IT_ROUND_CLOSED. That one is S02's, and it means "the round stopped
+   * taking post-its while you were typing – your text is still in the box and goes back up if the
+   * round reopens". A Poll that has run cannot reopen at all (S01's open predicate refuses a
+   * VotingRound carrying a `closed_at`), so that next move does not exist here: what happens next
+   * is that the result appears. And it is not ROUND_TRANSITION_NOT_PERMITTED either, which answers
+   * a Facilitator working the run controls rather than a Member refused a contribution.
+   */
+  VOTING_ROUND_CLOSED: 'VOTING_ROUND_CLOSED',
+  /**
+   * The tally was asked for on an open Poll by somebody who does not run this Session.
+   *
+   * **Refused rather than answered with an empty or zeroed tally**, which is the point: a zero
+   * returned to an Attendee mid-Poll would say something about the votes, and absence would then
+   * carry information. This says only that results appear when voting ends.
+   */
+  POLL_RESULTS_NOT_YET_AVAILABLE: 'POLL_RESULTS_NOT_YET_AVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

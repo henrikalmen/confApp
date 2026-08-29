@@ -209,6 +209,10 @@ describe('the session routes', () => {
   it.each([
     ['routes/sessions.ts', join(apiSrc, 'routes', 'sessions.ts')],
     ['sessions/session-repository.ts', join(apiSrc, 'sessions', 'session-repository.ts')],
+    // S05's deletion guard is a sessions module too, and a list of sessions modules that omits one
+    // is the trap `docs/LEARNINGS.md#testing` records ("a file-list grep is only as good as its
+    // longest omission"). Its own suite asserts this as well; both are cheap.
+    ['sessions/session-deletion.ts', join(apiSrc, 'sessions', 'session-deletion.ts')],
     ['sessions/overlap.ts', join(apiSrc, 'sessions', 'overlap.ts')],
     ['sessions/session-validation.ts', join(apiSrc, 'sessions', 'session-validation.ts')],
     ['sessions/wall-clock-time.ts', join(apiSrc, 'sessions', 'wall-clock-time.ts')],

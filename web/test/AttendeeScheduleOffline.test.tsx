@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { IDBFactory } from 'fake-indexeddb';
 import { AttendeeSchedulePanel } from '../src/attendee/AttendeeSchedulePanel.tsx';
 import {
+  DATABASE_VERSION,
   cachedKeys,
   readCachedSchedule,
   setCacheIdentity,
@@ -369,9 +370,18 @@ describe('a conference that was never read online', () => {
 // ---------- an entry this build cannot render is a miss, not a hang ----------
 
 describe('a cached entry whose envelope this build cannot turn into a clock', () => {
-  /** Writes past the store's own guard, the way a previous deploy would have. */
+  /**
+   * Writes past the store's own guard, the way a previous deploy would have.
+   *
+   * What simulates the older deploy is the **malformed envelope** this writes, not the database
+   * version. Opening at a hardcoded `1` was a latent trap rather than part of the simulation:
+   * S04 raised `DATABASE_VERSION` to 2, so this only kept working because it happens to run before
+   * anything that opens at the current version - and `indexedDB.open` at a version *below* the
+   * existing one throws `VersionError`, so a reordering would have failed this for a reason with
+   * nothing to do with what it tests. Tracking the constant keeps the simulation and drops the trap.
+   */
   async function writeRaw(value: unknown): Promise<void> {
-    const request = indexedDB.open('confapp-offline', 1);
+    const request = indexedDB.open('confapp-offline', DATABASE_VERSION);
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onupgradeneeded = () => {
         const database = request.result;

@@ -2,13 +2,23 @@ import type { AttendeeSchedule } from '../api/client.ts';
 import { rehydrateClock, type ClockAnchor } from '../clock/effective-clock.ts';
 
 /**
- * The one module that touches offline storage – S06's schedule envelope, per user and per
- * Conference, in IndexedDB.
+ * The offline database – S06's schedule envelope, per user and per Conference, in IndexedDB – and
+ * the shared machinery every offline store in this app is built on.
  *
- * **Read-only data, deliberately.** There is no outbox, no queue, no replay buffer and no
- * conflict resolution here, and adding one would cross the product's anti-goal rather than extend
- * this module (`docs/PRODUCT.md#anti-goals`). Everything below writes exactly what a *read*
- * returned and hands it back later; nothing here is ever sent anywhere.
+ * **This module owns the database, not every store in it.** It holds the schedule cache itself and
+ * the `open` / `transact` / `exclusively` helpers, the owner marker, and the purge. S04's queue of
+ * Post-its composed with no connection lives in `web/src/offline/post-it-queue.ts` and is a store
+ * *inside this database*, created by the upgrade below and emptied by the purge and the owner claim
+ * below – so a shared tablet has one teardown path rather than two.
+ *
+ * **Two offline capabilities exist, and exactly two.** Reading the Schedule, and holding a Post-it
+ * that was composed against a Round the app had already rendered open (`AGENTS.md`). There is no
+ * general deferred-write path, no sync engine and no conflict resolution anywhere in this folder,
+ * and adding one would cross the product's anti-goal rather than extend this module
+ * (`docs/PRODUCT.md#anti-goals`). Nothing else on the device is ever held for later: not a Vote,
+ * not a Round opening or closing, not a schedule edit, not a join or a leave. Everything *this*
+ * module stores writes exactly what a read returned and hands it back later; nothing here is ever
+ * sent anywhere.
  *
  * **The key is a pair.** `(sub, conferenceId)` – the OIDC subject, never an email (AGENTS.md), and
  * the Conference the envelope belongs to. Two Conferences are two entries and two employees on a
@@ -25,12 +35,31 @@ import { rehydrateClock, type ClockAnchor } from '../clock/effective-clock.ts';
  */
 
 const DATABASE_NAME = 'confapp-offline';
-const DATABASE_VERSION = 1;
+
+/**
+ * Raised from 1 to 2 by S04, which added `POST_IT_QUEUE`.
+ *
+ * `onupgradeneeded` runs **only when this number rises**, so a new store without a bump is not a
+ * store that is missing loudly – `transact` resolves `null` rather than throwing when a named store
+ * is absent, and every caller `void`s its result, so the store would be permanently and silently
+ * empty on every device that had ever opened the app before. Exported so the tests that stand a
+ * database up by hand open it at the version the module actually expects rather than a literal that
+ * quietly stops matching.
+ */
+export const DATABASE_VERSION = 2;
 /** Cached envelopes, keyed `[sub, conferenceId]`. */
 const SCHEDULES = 'schedules';
 /** Whose device this is – see `adoptCacheOwner`. One record, under `OWNER_KEY`. */
 const META = 'meta';
 const OWNER_KEY = 'owner-sub';
+/**
+ * Post-its typed with no connection, keyed `[sub, submissionId]` – see `post-it-queue.ts`.
+ *
+ * Named here rather than there because the two operations that must include it are here: the
+ * upgrade that creates it, and the purge and owner claim that empty it. A store this module did not
+ * know about would be a store the shared-tablet purge did not clear.
+ */
+export const POST_IT_QUEUE = 'post-it-queue';
 
 /**
  * One cached Schedule: the envelope, its watermark, and the clock anchor's second half.
@@ -111,6 +140,11 @@ function open(): Promise<IDBDatabase | null> {
       // *not* a field of the stored value – the value is the envelope as it arrived, unmodified.
       if (!database.objectStoreNames.contains(SCHEDULES)) database.createObjectStore(SCHEDULES);
       if (!database.objectStoreNames.contains(META)) database.createObjectStore(META);
+      // Behind the same guard as the two above, so the upgrade is additive: a device that already
+      // holds a cached Schedule at version 1 gains this store and keeps its Schedule.
+      if (!database.objectStoreNames.contains(POST_IT_QUEUE)) {
+        database.createObjectStore(POST_IT_QUEUE);
+      }
     };
     // Storage that will not open is storage that is not there. Same outcome as a miss.
     request.onerror = () => resolve(null);
@@ -122,9 +156,10 @@ function open(): Promise<IDBDatabase | null> {
 /**
  * Mutating operations run one at a time, in the order they were called.
  *
- * **Not a write queue.** Nothing is held for later and nothing is ever sent anywhere – this is
- * mutual exclusion over local storage, and every operation it serializes still completes within its
- * own call. The queue an outbox would be is an explicit anti-goal and is not what this is.
+ * **Not itself a store of anything.** This is mutual exclusion over local storage: every operation
+ * it serializes still completes within its own call, and nothing is retained here between them. The
+ * one thing this device does hold for later is a Post-it composed with no connection, and that
+ * lives in its own store (`post-it-queue.ts`) which uses this wrapper like any other writer.
  *
  * It exists because a user switch fires two independent async calls: S02's clearing hook purges,
  * and the sign-in that follows claims the store for the new `sub`. IndexedDB orders transactions by
@@ -139,7 +174,7 @@ function open(): Promise<IDBDatabase | null> {
  */
 let mutations: Promise<unknown> = Promise.resolve();
 
-function exclusively<T>(work: () => Promise<T>): Promise<T> {
+export function exclusively<T>(work: () => Promise<T>): Promise<T> {
   const next = mutations.then(work, work);
   // The chain must survive a rejection, or one failed write would deadlock every later one.
   mutations = next.then(
@@ -149,14 +184,37 @@ function exclusively<T>(work: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** One transaction, resolving with whatever the request produced, or `null` if anything failed. */
-async function transact<T>(
+/**
+ * One transaction, resolving with whatever the request produced, or `null` if anything failed.
+ *
+ * Exported for `post-it-queue.ts`, which is a store in this same database and must go through this
+ * same wrapper – a second transaction helper would be a second set of these settle-on-the-
+ * transaction and missing-store rules, and the two would eventually disagree.
+ */
+export async function transact<T>(
   stores: string[],
   mode: IDBTransactionMode,
   work: (transaction: IDBTransaction) => IDBRequest<T> | null,
+  /**
+   * Narrow `stores` to the ones this database actually has, instead of failing when one is absent.
+   *
+   * Off by default and deliberately so: for a read or a write of a *named* store, an absent store is
+   * a miss and the caller wants the `null`. It is on for the purge alone, where naming a store that
+   * is not there would turn the whole operation - every other store included - into a silent no-op.
+   * The callback reads `transaction.objectStoreNames` to see what it actually got.
+   */
+  presentOnly = false,
 ): Promise<T | null> {
   const database = await open();
   if (database === null) return null;
+
+  const named = presentOnly
+    ? stores.filter((store) => database.objectStoreNames.contains(store))
+    : stores;
+  if (named.length === 0) {
+    database.close();
+    return null;
+  }
 
   try {
     return await new Promise<T | null>((resolve) => {
@@ -166,7 +224,7 @@ async function transact<T>(
         // It has to be inside the guard: outside it, the throw rejects this promise instead of
         // resolving `null`, and every caller `void`s the result, so the sign-out purge would be
         // skipped by an unhandled rejection rather than reported as a failure.
-        const transaction = database.transaction(stores, mode);
+        const transaction = database.transaction(named, mode);
         const request = work(transaction);
 
         // The *transaction* is what settles the promise, not the request: a write is only true once
@@ -298,10 +356,30 @@ export async function purgeScheduleCache(): Promise<void> {
 
 /** The purge itself, without the ordering wrapper – so `adoptCacheOwner` can reuse it inside one. */
 async function purgeNow(): Promise<void> {
-  await transact([SCHEDULES, META], 'readwrite', (transaction) => {
-    transaction.objectStore(SCHEDULES).clear();
-    return transaction.objectStore(META).clear();
-  });
+  /*
+   * Every store in one transaction, so there is no instant at which one has been emptied and
+   * another has not. The queue is in here rather than behind a teardown path of its own: a Post-it
+   * Anna typed and never sent is exactly as much hers as the Schedule she was reading, and the
+   * sign-out that removes one has to remove the other (FR6 → validation rules).
+   *
+   * **Only the stores this database actually has.** `transaction()` throws when any named store is
+   * absent, and `transact` reports that as a plain `null` which every caller `void`s - so naming a
+   * store unconditionally would make the *whole* purge, schedules and owner marker included, a
+   * silent no-op on any device whose version upgrade did not complete. That is a privacy guarantee
+   * on a shared tablet, and it must not be made conditional on a later story's store existing.
+   */
+  await transact(
+    [SCHEDULES, META, POST_IT_QUEUE],
+    'readwrite',
+    (transaction) => {
+      let last: IDBRequest | null = null;
+      // Whatever the transaction was actually opened over – one connection, one round trip, no
+      // second `open()` widening the window a concurrent claim or sign-out has to race through.
+      for (const name of transaction.objectStoreNames) last = transaction.objectStore(name).clear();
+      return last;
+    },
+    true,
+  );
 }
 
 /**

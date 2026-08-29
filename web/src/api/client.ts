@@ -769,3 +769,359 @@ export async function removeMember(
     { method: 'DELETE' },
   );
 }
+
+// ---------- session activities: rounds (S01) ----------
+
+/**
+ * The two Activities a Session can run, and what a Voting Round is *for*.
+ *
+ * `Poll` is a **purpose**, never a kind (`docs/UBIQUITOUS_LANGUAGE.md`). Keeping the two levels
+ * apart here is what makes the deferred Prioritization and Rating purposes an addition to
+ * `RoundPurpose` rather than a rewrite of `RoundKind`.
+ */
+export type RoundKind = 'PostItRound' | 'VotingRound';
+export type RoundPurpose = 'Poll';
+export type RoundState = 'open' | 'closed';
+
+/** One answer option of a Poll. Ordered by the payload; nothing here re-sorts them. */
+export interface RoundOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * One Post-it on a Round's board, as the Session read returns it.
+ *
+ * `authorName` is joined from `app_user.display_name` server-side on every read, so a rename
+ * reaches every Post-it its owner ever wrote. `mine` is the **server's** answer to "may I change
+ * this one", consumed rather than re-derived - the same discipline as `canRun`, and the reason no
+ * client-side opinion about authorship exists to drift out of step with the write predicate that
+ * actually enforces it.
+ *
+ * There is no author `sub` and no timestamp here. The `sub` is an identity confApp has no reason to
+ * publish to the room, and an instant is something this client could only render by converting a
+ * timezone the product does not carry - `edited` is the flag the board shows instead.
+ */
+export interface PostIt {
+  id: string;
+  text: string;
+  authorName: string;
+  /** Whether the signed-in viewer wrote it. The server's answer. */
+  mine: boolean;
+  edited: boolean;
+  /**
+   * Whether it reached the board after its Round had closed - a Post-it composed with no
+   * connection and sent when the signal returned (FR6).
+   *
+   * The **server's** answer, decided from the Round's state at the instant the row was written.
+   * There is no client-side rule about lateness and none could exist here: the device does not
+   * know what the Round was doing when its queued item finally landed.
+   */
+  arrivedAfterClose: boolean;
+}
+
+/**
+ * One Round as the Session read returns it.
+ *
+ * `purpose` is present exactly on a `VotingRound` and `options` exactly on one too – the payload
+ * says the same thing the table's own constraint says. `postIts` and `textMaxLength` are present
+ * exactly on a `PostItRound`, for the same reason.
+ *
+ * **There is no cursor here, of any name.** Near-live propagation for Rounds is
+ * `round.activity_watermark`, and it reaches this client as one Session-level scalar
+ * (`SessionWithRounds.activityWatermark`) and the two-scalar poll beside the read. A cursor on
+ * *this* type would be a per-Round one - the second mechanism the plan's shared decision removed.
+ */
+export interface Round {
+  id: string;
+  kind: RoundKind;
+  purpose?: RoundPurpose;
+  /** The Post-it Round's prompt, or the Poll's question. */
+  prompt: string;
+  state: RoundState;
+  options?: RoundOption[];
+  /** The whole board, oldest first, in the same response as the Round. */
+  postIts?: PostIt[];
+  /**
+   * How long a Post-it may be, **as the server states it**.
+   *
+   * The client never carries this number. The cap has exactly one authoritative definition -
+   * `POST_IT_MAX_LENGTH` on the API's Post-it validation module - and this field is how it reaches
+   * the compose box. A literal here, or anywhere under `web/`, would be a second source that could
+   * disagree with the rule actually being enforced.
+   */
+  textMaxLength?: number;
+  /**
+   * Whether **the signed-in viewer** has voted in this Poll. The server's answer, consumed rather
+   * than re-derived, exactly as `canRun` and `mine` are.
+   *
+   * It is the only per-person fact about voting that exists anywhere on the wire, and it is about
+   * the viewer alone. There is no field here - and no endpoint - that says whether somebody *else*
+   * voted, let alone what they chose: a Vote is never linkable to its voter through any application
+   * path (`AGENTS.md`;
+   * `docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md`).
+   *
+   * Present exactly on a `VotingRound` the Session read looked it up for; absent on the authoring
+   * and run-control responses, which ask nothing of the vote tables.
+   */
+  hasVoted?: boolean;
+  /**
+   * Counts per option - the only Vote-shaped value this client can ever receive.
+   *
+   * Present only where the server permits it: to a Session Assignment holder while the Poll runs,
+   * and to every Member once it has closed. For an Attendee looking at an open Poll the key is
+   * simply **absent**, which is not the same as a tally of zeroes - a zero would be a statement
+   * about the votes, and the client must not manufacture one.
+   */
+  tally?: OptionTally[];
+}
+
+/** One option's count. Nothing about who chose it, because nothing about that is knowable here. */
+export interface OptionTally {
+  optionId: string;
+  votes: number;
+}
+
+/** What the authoring form sends. The acting identity is never in here – it is the credential. */
+export interface RoundDetailsInput {
+  kind: RoundKind;
+  purpose?: RoundPurpose | null;
+  prompt: string;
+  options?: string[];
+}
+
+/**
+ * A Session with its Rounds and this caller's authority over them, in **one** request.
+ *
+ * `canRun` is the server's answer, consumed rather than re-derived: the client never holds a second
+ * opinion about who may work the run controls.
+ */
+export interface SessionWithRounds {
+  session: Session;
+  rounds: Round[];
+  canRun: boolean;
+  /**
+   * The Session's activity cursor, beside the payload it describes.
+   *
+   * The same arrangement as S06's schedule envelope, which carries `conference.lastUpdatedAt`
+   * beside the Sessions it lists: a Member without a Session Assignment compares the poll's scalar
+   * against this one and refetches only when the two differ. `null` for a Session with no Round at
+   * all.
+   *
+   * **An opaque counter, and never a time.** The server sends the decimal digits of a database
+   * sequence value; there is no instant in it to parse, format or subtract, and the name no longer
+   * ends in `At` precisely so that nothing here reaches for `new Date`. It used to be a
+   * microsecond timestamp, which handed every Member the instant of every Vote in a Poll they are
+   * refused the running tally of - see
+   * `db/migrations/20260829120000000_activity-watermark-counter.sql`.
+   *
+   * **And a Vote does not move it at all** (ADR-007,
+   * `db/migrations/20260831090000000_vote-advances-no-cursor.sql`). The value is scoped to one
+   * Session, so on a Session running only a Poll every movement of it was a ballot arriving,
+   * whatever the value itself said. A holder's tally therefore has no change signal behind it and
+   * is re-read on every tick instead - see `activities/SessionActivitiesPanel.tsx`.
+   */
+  activityWatermark: string | null;
+}
+
+/**
+ * The two scalars an open Session view polls (S02 TI07).
+ *
+ * The same *shape* as `ScheduleWatermark`, for the same reasons: this is the request every phone in
+ * a workshop makes every few seconds, so it carries no Round and no Post-it content and the client
+ * pays for the Session payload only when the value has actually moved.
+ *
+ * Not the same *kind of value*, which is why the field is not called `lastUpdatedAt`. The
+ * Schedule's is a real instant S09 also compares as a concurrency base; this one is a counter, and
+ * the only question ever asked of it is whether it differs from the one already on screen.
+ */
+export interface ActivityWatermark {
+  /** The highest `round.activity_watermark` across the Session's Rounds. Digits, never a time. */
+  activityWatermark: string | null;
+  state: LifecycleState;
+}
+
+export async function fetchActivityWatermark(
+  conferenceId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ActivityWatermark> {
+  return apiRequest<ActivityWatermark>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/activities/watermark`,
+    signal ? { signal } : {},
+  );
+}
+
+export async function fetchSessionActivities(
+  conferenceId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionWithRounds> {
+  return apiRequest<SessionWithRounds>(
+    `/conferences/${conferenceId}/sessions/${sessionId}`,
+    signal ? { signal } : {},
+  );
+}
+
+export async function createRound(
+  conferenceId: string,
+  sessionId: string,
+  details: RoundDetailsInput,
+): Promise<Round> {
+  const body = await apiRequest<{ round: Round }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds`,
+    { method: 'POST', body: details },
+  );
+  return body.round;
+}
+
+export async function updateRound(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  details: RoundDetailsInput,
+): Promise<Round> {
+  const body = await apiRequest<{ round: Round }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}`,
+    { method: 'PATCH', body: details },
+  );
+  return body.round;
+}
+
+/**
+ * Opening and closing send no body: what they mean is entirely in the endpoint, and the server
+ * decides whether the move is legal from the Round's stored state. The client never asserts that a
+ * transition is allowed – it asks, and renders the refusal if there is one.
+ */
+export async function openRound(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+): Promise<Round> {
+  const body = await apiRequest<{ round: Round }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/open`,
+    { method: 'POST' },
+  );
+  return body.round;
+}
+
+export async function closeRound(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+): Promise<Round> {
+  const body = await apiRequest<{ round: Round }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/close`,
+    { method: 'POST' },
+  );
+  return body.round;
+}
+
+/**
+ * Contributing, correcting and removing a Post-it.
+ *
+ * **None of these sends an author.** Authorship is taken from the credential server-side and from
+ * nowhere else (Binding Constraint FR3), so there is no author parameter to pass and no field on
+ * the request the caller could get wrong. `text` is the whole body.
+ */
+function postItPath(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId?: string,
+): string {
+  const board = `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/post-its`;
+  return postItId === undefined ? board : `${board}/${postItId}`;
+}
+
+/**
+ * Casting a Vote.
+ *
+ * Carries the chosen option and nothing else. The voter is the credential on the request, decided
+ * entirely server-side - there is no parameter here for one, which is the client half of "author
+ * identity is taken from the authenticated credential, never from the request body".
+ *
+ * Resolves to nothing at all. The server answers that the Vote landed and never a tally, so there
+ * is no value to return and no way for a cast to become a second, ungated route to the result. A
+ * refused cast throws `ApiError`, whose `message` is the sentence the voter reads.
+ */
+export async function castVote(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  optionId: string,
+): Promise<void> {
+  await apiRequest<{ voted: boolean }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/votes`,
+    { method: 'POST', body: { optionId } },
+  );
+}
+
+/**
+ * Which submission a contribution is, and how it reached the API (FR6).
+ *
+ * **`submissionId` is minted once per composed idea and rides every attempt at it** – the first
+ * send *and* any retry after a queued wait. That is deliberate and it is the whole guarantee: the
+ * client cannot tell "the request never left the phone" from "the request reached the API, the row
+ * was written, and the answer was lost", because both arrive as the same transport failure. Minting
+ * the identity only when the item is queued would leave the first of those two cases producing a
+ * second Post-it under a real name on the retry, which is exactly what FR6's "a retried send
+ * produces one Post-it, not two" forbids. The server refuses the repeat through a database
+ * constraint and answers with the Post-it already stored.
+ *
+ * `offlineComposed` is present only on an attempt at an item that *was* held, and it is what
+ * unlocks the closed-Round branch server-side. It says only how this contribution reached the API;
+ * whether it is *marked* as having arrived late is the server's decision from the Round's own
+ * state, never this client's.
+ */
+export interface Submission {
+  submissionId: string;
+  offlineComposed?: true;
+}
+
+export async function contributePostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  text: string,
+  submission: Submission,
+): Promise<PostIt | null> {
+  const body = await apiRequest<{ postIt: PostIt | null }>(
+    postItPath(conferenceId, sessionId, roundId),
+    {
+      method: 'POST',
+      body: { text, ...submission },
+    },
+  );
+  /*
+   * `null` is a success with nothing to show: this submission reached the board once and its author
+   * has since removed the Post-it. The caller's job is to stop retrying, which a resolved promise
+   * already tells it - there is nothing to render and nothing to refuse.
+   */
+  return body.postIt;
+}
+
+export async function updatePostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+  text: string,
+): Promise<PostIt> {
+  const body = await apiRequest<{ postIt: PostIt }>(
+    postItPath(conferenceId, sessionId, roundId, postItId),
+    { method: 'PATCH', body: { text } },
+  );
+  return body.postIt;
+}
+
+export async function deletePostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+): Promise<void> {
+  await apiRequest<{ removed: boolean }>(postItPath(conferenceId, sessionId, roundId, postItId), {
+    method: 'DELETE',
+  });
+}

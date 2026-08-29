@@ -168,7 +168,7 @@ const PIN_DEVICE_CLOCK = `
 async function waitForCacheClaimed(page: Page): Promise<void> {
   await page.waitForFunction(async () => {
     const db = await new Promise<IDBDatabase | null>((resolve) => {
-      const open = indexedDB.open('confapp-offline', 1);
+      const open = indexedDB.open('confapp-offline');
       open.onsuccess = () => resolve(open.result);
       open.onerror = () => resolve(null);
       open.onblocked = () => resolve(null);
@@ -212,7 +212,7 @@ async function seedCache(
   await page.evaluate(
     async ({ envelopeValue, watermark, ageMillis, conferenceId }) => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const open = indexedDB.open('confapp-offline', 1);
+        const open = indexedDB.open('confapp-offline');
         open.onupgradeneeded = () => {
           const database = open.result;
           if (!database.objectStoreNames.contains('schedules')) {

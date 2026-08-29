@@ -80,6 +80,24 @@ export function isEditable(conference: LifecycleSubject): boolean {
   return conference.lifecycleState !== 'archived';
 }
 
+/**
+ * Still a draft – nothing has been published to anyone yet.
+ *
+ * Asked by the reads that are open to every Conference Member, so the answer to "may a member read
+ * this" is one rule in one place rather than a `lifecycleState === 'draft'` growing in each handler
+ * that needs it (S01 TI07).
+ *
+ * S06's attendee schedule asks the same question and still answers it with an inline comparison in
+ * `routes/attendee.ts`. The two are not yet one rule, and they refuse differently on purpose: the
+ * attendee read answers CONFERENCE_NOT_READABLE ("nothing is published yet") to a member who has
+ * nothing to do about it, while the Session read answers CONFERENCE_ROLE_REQUIRED because a draft's
+ * Rounds are visible to the people composing it. Folding the comparison into this predicate is a
+ * tidy-up for whoever next touches that file, not a behaviour change.
+ */
+export function isDraft(conference: LifecycleSubject): boolean {
+  return conference.lifecycleState === 'draft';
+}
+
 export function assertEditable(conference: LifecycleSubject): void {
   if (isEditable(conference)) return;
   throw new AppError(

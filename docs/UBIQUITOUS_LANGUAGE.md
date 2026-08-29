@@ -55,7 +55,8 @@
 |------|-----------|-------------------|-----------------|
 | **Report** | The per-Conference document produced for Leadership: Action Points, follow-ups, Voting Round results, and categorized Workshop output. | summary, export, recap | Insight |
 | **Action Point** | A concrete follow-up surfaced by the Conference and carried in the Report. confApp surfaces these; it does not track their completion. | action item, todo, task, ticket | Insight |
-| **Board View** | The projected big-screen view of a Workshop's Post-it board, driven by the Facilitator. | projector mode, big screen, presenter view, TV mode | Participation |
+| **Board** | The collection of Post-its contributed to a Post-it Round, shown live to every participant. | wall, post-it wall, canvas, whiteboard | Participation |
+| **Board View** | The projected big-screen view of a Workshop's Post-it Board, driven by the Facilitator. | projector mode, big screen, presenter view, TV mode | Participation |
 | **Archive** | Past Conferences and their Reports, retained and readable after the event. | history, log | Insight |
 
 ## Overloaded Terms
@@ -70,5 +71,6 @@
 > **Watch out**: "post-it session" is a natural phrase but collides with **Session**, which is a scheduled slot. The Activity inside a Session is a **Post-it Round**. Same for "voting session" → **Voting Round**.
 
 ## Changelog
+- 2026-08-29: Registered **Board** as the canonical noun for the collection of Post-its on a Post-it Round, and amended **Board View** to read against it. Surfaced by session-activities S02, which had introduced "wall" across component names, testids, CSS classes and repository seams; that surface is renamed to Board.
 - 2026-08-16: Added Membership, Role Assignment, Session Assignment, Join Code, and the Conference lifecycle states (Draft / Published / Archived); recorded the **Archive** vs **Archived** overload. Surfaced by the Conference setup & schedule plan bundle, where all five became first-class specified terms.
 - 2026-08-16: Initial extraction from product clarification.

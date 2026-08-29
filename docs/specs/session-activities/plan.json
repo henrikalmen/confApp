@@ -1,0 +1,262 @@
+{
+  "schemaVersion": "1",
+  "prd": "docs/specs/session-activities/prd.md",
+  "references": [
+    "docs/UBIQUITOUS_LANGUAGE.md",
+    "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md",
+    "docs/adrs/ADR-003-postgresql-containerized-development.md",
+    "docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md",
+    "docs/specs/conference-setup-and-schedule/s09-live-schedule-editing.md",
+    "docs/specs/conference-setup-and-schedule/s10-offline-schedule-access.md",
+    "docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md"
+  ],
+  "overview": {
+    "summary": "Turns a Session from a schedule entry into a container that runs something. A Presenter/Facilitator authors Post-it Rounds and Poll-purpose Voting Rounds ahead of the Session and runs them live; Attendees contribute named Post-its and cast anonymous Votes from their phones.\n\nFive vertical stories across db, api and web, following the slice shape the conference-setup plan already established. S01 is the enabler both participation stories need: without a Round there is nothing to contribute to. S02 and S03 are independent of each other and run in parallel, which is also what keeps the named and anonymous paths from being built by the same reflex.\n\nThe load-bearing risk sits in S03. Vote anonymity is a storage-level guarantee, so its acceptance is a property of the schema rather than of any screen, and it is the one story where a passing UI proves nothing.",
+    "phases": [
+      {
+        "id": "P1",
+        "name": "Foundation",
+        "waves": [
+          "W1"
+        ]
+      },
+      {
+        "id": "P2",
+        "name": "Participation",
+        "waves": [
+          "W1"
+        ]
+      },
+      {
+        "id": "P3",
+        "name": "Hardening",
+        "waves": [
+          "W1"
+        ]
+      }
+    ]
+  },
+  "sharedDecisions": [
+    {
+      "title": "Round entity and its open/closed state model",
+      "description": "S01 defines the Round – its kind, its prompt or question-plus-options, and the open/closed state every other story reads before accepting a write. S02, S03, S04 and S05 consume it and must not introduce a second notion of whether an Activity is running.",
+      "stories": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05"
+      ]
+    },
+    {
+      "title": "Authorization split: Membership contributes, Session Assignment runs",
+      "description": "S01 establishes that contributing requires Conference Membership while opening, closing and reopening requires a Session Assignment for that Session. S02 and S03 apply the same split to their own write paths rather than inventing per-Activity authority.",
+      "stories": [
+        "S01",
+        "S02",
+        "S03"
+      ]
+    },
+    {
+      "title": "Near-live propagation: one cursor, round.activity_watermark_at",
+      "description": "Settled 2026-08-28 by cross-cutting review finding H-3, which found S01 and S02 had each built a Round cursor and a client poll loop. The bundle uses S02's `round.activity_watermark_at` plus its cheap two-scalar poll endpoint - chosen for S09 parity, because it is delete-observable, and because it avoids a full-payload refetch per tick. S01 drops `roundsLastUpdatedAt` and its column; S02 migrates S01's client loop as a second call site rather than adding a third. S03's tally rides the same cursor and must advance it on ballot insert (finding H-4).",
+      "stories": [
+        "S01",
+        "S02",
+        "S03"
+      ]
+    },
+    {
+      "title": "Anonymity storage split: ballot and has-voted are separate and unjoinable",
+      "description": "S03 stores a Vote as a Round plus an option with no voter reference of any kind, and records the has-voted fact separately such that neither can identify the other. S05 must count contributions for its deletion guard without reintroducing a join.",
+      "stories": [
+        "S03",
+        "S05"
+      ]
+    }
+  ],
+  "bindingConstraints": [
+    {
+      "featureId": "FR4",
+      "anchor": "prd.md#constraints",
+      "verbatim": "**Vote anonymity is a hard constraint, scoped by ADR-006.** A Vote must be unlinkable to its voter through **every application path** - no API response, screen, export or report may associate them, and no declared column, constraint, index or query available to the application may relate them. A ballot carries no voter reference (`AGENTS.md`). The guarantee explicitly does **not** extend to a holder of direct database credentials. No document may claim that correlation requires raw table access or elevated rights - ordinary `SELECT` suffices."
+    },
+    {
+      "featureId": "FR6",
+      "anchor": "prd.md#constraints",
+      "verbatim": "**Offline support must not widen** beyond schedule reads and Post-it queueing (`AGENTS.md`)."
+    },
+    {
+      "featureId": "FR3",
+      "anchor": "prd.md#fr3-named-post-it-contribution",
+      "verbatim": "Author identity is taken from the authenticated credential, never from the request body."
+    },
+    {
+      "featureId": "FR1",
+      "anchor": "prd.md#constraints",
+      "verbatim": "**Plain PostgreSQL only** – production hosting is undecided and portability is the reason (ADR-003)."
+    },
+    {
+      "featureId": "FR2",
+      "anchor": "prd.md#constraints",
+      "verbatim": "**No in-process state between requests** – the API scales across replicas with no sticky sessions."
+    }
+  ],
+  "stories": [
+    {
+      "id": "S01",
+      "name": "Round authoring and lifecycle",
+      "phase": "P1",
+      "wave": "W1",
+      "dependsOn": [],
+      "parallel": false,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s01-round-authoring-and-lifecycle.md",
+      "owner": null,
+      "scope": "A Presenter/Facilitator or Admin can add Rounds to a Session they hold a Session Assignment for: a Post-it Round with a prompt, or a Voting Round of the Poll purpose with a question and 2-N options. Rounds are created closed, are listed on the Session for every Conference Member with their own state, and can be opened, closed and reopened live - reopening permitted for Post-it Rounds and refused for Polls. A Post-it Round's prompt stays editable; a Poll's question and options freeze once its first Vote exists. Includes the authoring surface, the run controls, and the read that returns a Session with its Rounds in one request. Excludes contributions of any kind: nothing can yet be posted or voted into a Round.",
+      "sourceRefs": [
+        "FR1",
+        "FR2",
+        "prd.md#fr1-round-authoring",
+        "prd.md#fr2-round-lifecycle-control",
+        "prd.md#us01",
+        "prd.md#us02"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "The enabler for everything downstream, so its entity shape and authority split are the plan's two widest-reaching sharedDecisions. The freeze rule has an interpretation flagged in the PRD's Constraints & Assumptions - the question text is frozen with the options - which should be confirmed rather than silently implemented."
+    },
+    {
+      "id": "S02",
+      "name": "Named post-it contribution",
+      "phase": "P2",
+      "wave": "W1",
+      "dependsOn": [
+        "S01"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s02-named-post-it-contribution.md",
+      "owner": null,
+      "scope": "While a Post-it Round is open, any Conference Member can contribute Post-its that always display their author's name, and every participant sees them arrive near-live. An author can edit and delete their own Post-it while the Round is open and neither after it closes. A closed Round refuses live contribution at the API. A closed Round's wall stays readable when a Member returns to the Session later. Excludes offline queueing, which is S04, and excludes any organizer-side sorting, categorization or discarding.",
+      "sourceRefs": [
+        "FR3",
+        "prd.md#fr3-named-post-it-contribution",
+        "prd.md#us03",
+        "prd.md#us04",
+        "prd.md#us11"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "Establishes the near-live propagation pattern S03 then reuses. Reuse S09's watermark polling rather than adding a second mechanism - a new polling path here would be the smell the PRD's dependency table names."
+    },
+    {
+      "id": "S03",
+      "name": "Anonymous poll voting and result reveal",
+      "phase": "P2",
+      "wave": "W1",
+      "dependsOn": [
+        "S01",
+        "S02"
+      ],
+      "parallel": false,
+      "risk": "high",
+      "status": "done",
+      "fis": "s03-anonymous-poll-voting-and-result-reveal.md",
+      "owner": null,
+      "scope": "While a Poll is open, each Conference Member can cast exactly one single-choice Vote, final once cast, with no stored data linking a Vote to the Member who cast it. A second attempt is refused without revealing the tally, and a Member who reinstalls the app is still recorded as having voted. The tally is visible to a Session Assignment holder while the Round is open and to every Member once it closes; a Poll closed with zero Votes reads zero. A closed Poll's result stays visible when a Member returns to the Session later. Excludes the Prioritization and Rating purposes.",
+      "sourceRefs": [
+        "FR4",
+        "FR5",
+        "prd.md#fr4-anonymous-poll-voting",
+        "prd.md#fr5-poll-result-reveal",
+        "prd.md#us05",
+        "prd.md#us06",
+        "prd.md#us07",
+        "prd.md#us08",
+        "prd.md#us11"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-002-authenticate-with-google-workspace-oidc.md"
+      ],
+      "notes": "The plan's highest-risk story. Acceptance is a property of the schema, not of a screen. C-1 (xmin correlation) settled 2026-08-28 by ADR-006: the residual is accepted and scoped to application paths; the ballot still carries no voter reference. The FIS must not claim correlation needs elevated rights - ordinary SELECT reaches it."
+    },
+    {
+      "id": "S04",
+      "name": "Offline post-it queueing",
+      "phase": "P3",
+      "wave": "W1",
+      "dependsOn": [
+        "S02"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s04-offline-post-it-queueing.md",
+      "owner": null,
+      "scope": "A Post-it typed without a connection is held on the device, shown as pending, and sent when connectivity returns. It is accepted into its Round even when the Round closed in the meantime and is marked as having arrived late; if the Round was reopened before it syncs it is an ordinary contribution with no late marking. Queued items belong to the Member who composed them and are discarded on sign-out or user switch. Offline behaviour is not widened beyond schedule reads and Post-it queueing.",
+      "sourceRefs": [
+        "FR6",
+        "prd.md#fr6-offline-post-it-queueing",
+        "prd.md#us09"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/specs/conference-setup-and-schedule/s10-offline-schedule-access.md"
+      ],
+      "notes": "The one deliberate exception to S02's refusal of contributions to a closed Round, and the PRD states the exception in both FR3 and FR6 so it cannot be implemented as a contradiction. Rides S10's existing offline boundary and its sign-out purge; must not introduce a general outbox."
+    },
+    {
+      "id": "S05",
+      "name": "Contribution-safe session deletion",
+      "phase": "P3",
+      "wave": "W1",
+      "dependsOn": [
+        "S02",
+        "S03"
+      ],
+      "parallel": true,
+      "risk": "low",
+      "status": "done",
+      "fis": "s05-contribution-safe-session-deletion.md",
+      "owner": null,
+      "scope": "Deleting a Session that holds any Post-it or Vote is refused server-side, naming what would be lost; deleting a Session that has Rounds but no contributions succeeds and takes its Rounds with it. Deleting a whole Conference stays permitted and still cascades to its Sessions, Rounds and contributions - the guard is deliberately Session-level only, with archiving as the intended path for a finished Conference. Excludes any change to the Conference lifecycle itself.",
+      "sourceRefs": [
+        "FR7",
+        "prd.md#fr7-contribution-safe-session-deletion",
+        "prd.md#us10"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "Depends on both participation stories because the guard must detect either kind of contribution. Counting Votes for the guard must not reintroduce a voter join - see the anonymity sharedDecision. The Conference-level cascade is deliberately retained and needs a test asserting it still works, so a later reader does not mistake it for an oversight."
+    }
+  ],
+  "riskSummary": [
+    {
+      "story": "S01",
+      "risk": "medium",
+      "mitigation": "Two sharedDecisions - the Round entity and the authority split - are pinned here because four other stories read them. Get the state model and the Membership/Session-Assignment split right before P2 starts rather than reconciling two interpretations later."
+    },
+    {
+      "story": "S02",
+      "risk": "medium",
+      "mitigation": "Assert near-live propagation behaviourally rather than by counting requests, and reuse S09's watermark poll. LEARNINGS records that a guard which watches the request instead of the resulting state stays green while the payload is wrong."
+    },
+    {
+      "story": "S03",
+      "risk": "high",
+      "mitigation": "Prove anonymity against the schema, not the UI: a Structural Criterion asserting no column, constraint or index permits joining a ballot to a Member, plus a test that fails if such a path is added. Treat ordering and timestamp correlation as part of the guarantee, not as a refinement."
+    },
+    {
+      "story": "S04",
+      "risk": "medium",
+      "mitigation": "The late-arrival path is the exception to S02's closed-Round refusal, so specify both sides together and test the interaction rather than each rule alone. Keep the queue inside S10's existing offline boundary; a general outbox is an explicit anti-goal."
+    }
+  ],
+  "executionNotes": "Run P1 to completion first - S01 is the enabler both participation stories need, and its Round entity plus authority split are consumed by every later story. S02 and S03 are genuinely independent and should run in parallel; keeping them apart is also what stops the named and the anonymous path being built by the same reflex, which is the one mistake this feature cannot afford. P3's two stories can run in parallel once P2 is done.\n\nS03 is the story to slow down on. Its acceptance is a property of storage rather than of behaviour, so a green UI test proves nothing - the Structural Criteria carry the guarantee and should be written before the implementation, not after.\n\nOne PRD interpretation is flagged for confirmation before S01 executes: a Poll's question text is frozen on the same trigger as its options. The decision named options explicitly and was silent on the question.\n\nOVERSIZE override, 2026-08-28, recorded rather than silent. After remediation S01 (6,619 words) and S03 (7,326) crossed the ~6,000-word FIS bar; both were under on lines (238, 255 of ~700) and tasks (12, 10 of ~18). Overridden on measured evidence rather than on the authors' argument: this repository has already executed s09-live-schedule-editing (6,464 words), s10-offline-schedule-access (7,251) and offline-session-expiry (7,134) to done in single runs, so the bar is miscalibrated for this project's narrative density rather than these stories being too broad. Decomposition was rejected on merit too - S03's only natural seam splits the anonymity guarantee across two exec runs, which is precisely what this plan's riskSummary says to avoid, and S01's would undo the consolidation that merged FR1 and FR2. Revisit if an exec run on either story actually saturates its context."
+}

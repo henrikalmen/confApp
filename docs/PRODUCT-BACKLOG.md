@@ -48,9 +48,10 @@
 | REQ-ID  | Description | Priority | Open Questions |
 |---------|-------------|----------|----------------|
 | REQ-030 | Report export format | Should | PDF, shareable in-app link, or both? |
-| REQ-031 | Post-it category definition | Must | Defined at conference setup, or created ad hoc while sorting? |
+| REQ-031 | Post-it category definition | Must | Owner input 2026-08-29 answers this with a third option neither alternative anticipated: a category is a named **column on the Board**, defined on the Board itself during the Session rather than at conference setup or during a later sorting pass. See REQ-038, which carries the capability. Remaining question: do categories still need a conference-level default set, or is per-Board definition the whole story? |
 | REQ-032 | Workshop group capacity | Could | Do groups have size limits, and what happens when one is full? |
 | REQ-034 | Poll result visibility | Should | Can attendees see results, or only the facilitator and the report? |
+| REQ-038 | A Board can be split into named columns (categories), and Post-its placed into them. The Board's layout is editable during a Session **only while the Board holds no Post-its**. | Must | Owner-stated 2026-08-29 during the session-activities exec-plan run; recorded verbatim, not yet clarified. What happens to the layout once the first Post-it lands – locked for the Session, or unlocked again if the Board is emptied? Does a Post-it have to be in a column, or is there an uncategorised default? Does the contributor choose the column, or the Organizer place it afterwards? How does this relate to the deferred Organizer sorting pass, which assumed categorisation happened after collection? |
 
 ## Out of Scope
 <!-- Explicitly excluded requirements – useful to prevent scope creep. See `docs/PRODUCT.md` → Anti-Goals. -->

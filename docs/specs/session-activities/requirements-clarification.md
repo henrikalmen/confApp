@@ -282,13 +282,9 @@ worth an explicit Structural Criterion rather than being left to the executor.
 
 ## Open Questions
 
-- Does deleting or archiving a whole **Conference** destroy collected Post-its and Votes? The
-  Session-level answer is settled (refuse), but `conference → sessions` cascades today, so the same
-  question one level up is currently answered by the schema rather than by a decision.
-- Can a Facilitator edit a Round's prompt or a Poll's options after contributions exist? Editing a
-  question after votes are cast changes what the tally means.
-- Should an Attendee see *which* Rounds in a Session they have already contributed to when
-  returning to it later, or only the currently open one?
+_The three questions raised here on 2026-08-28 were closed the same day during the PRD pass; see the
+Decisions Log below._
+
 - Area to revisit: how a Round reaches an Attendee's attention when they are not already looking at
   the Session – what would sharpen it is the REQ-005 push decision, which is unbuilt and whose
   delivery service is unchosen.
@@ -310,3 +306,6 @@ worth an explicit Structural Criterion rather than being left to the executor.
 | Post-it Rounds may be reopened; Polls may not | A wall can take another idea; a revealed tally cannot be un-revealed | 2026-08-28 |
 | Deleting a Session holding contributions is refused | The product exists so workshop output stops evaporating | 2026-08-28 |
 | Post-its have a length cap and no per-attendee count cap | Capping ideas per person works against the contribution metric | 2026-08-28 |
+| Deleting a whole Conference stays permitted and still cascades to its contributions | Archiving is the intended path for a finished Conference; deletion remains available for one created in error. The contribution guard is deliberately Session-level only | 2026-08-28 |
+| A Post-it Round's prompt stays editable; a Poll's question and options freeze at the first Vote | Post-its are free text and stand on their own; ballots point at options, so editing them after voting starts would change what the tally means | 2026-08-28 |
+| A Member sees every Round in a Session with its own state, not just the open one | The Session becomes a record of what happened in it; every Member sees the same list | 2026-08-28 |

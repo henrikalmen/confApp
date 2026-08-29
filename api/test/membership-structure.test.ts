@@ -244,23 +244,39 @@ describe('nothing is evicted, and nothing is queued', () => {
 describe('the schema', () => {
   /**
    * This story adds no migration: it revokes against the tables S03 created, and the delete rules
-   * it depends on were already declared there. The assertion is that it stayed that way – a new
-   * migration here would mean the revocation grew a table of its own (a tombstone, an audit row),
+   * it depends on were already declared there. The assertion is that it stayed that way – a
+   * migration *here* would mean the revocation grew a table of its own (a tombstone, an audit row),
    * which is exactly what "no trace of having left" rules out.
+   *
+   * Stated as "the migrations that existed when this story landed are still exactly those, and
+   * nothing added since is a revocation record" rather than as an exact directory listing. The
+   * listing form failed on the next story to add any migration at all (S01's `round`), reporting a
+   * perfectly ordinary schema addition as a membership tombstone – a false positive that teaches
+   * the next reader to relax the guard rather than to look.
    */
   it('is unchanged by this story, and uses plain PostgreSQL throughout', () => {
     const migrations = readdirSync(join(repoRoot, 'db', 'migrations')).filter((name) =>
       name.endsWith('.sql'),
     );
 
-    expect(migrations).toEqual([
+    const atThisStory = [
       '20260816120000000_app-meta.sql',
       '20260817090000000_app-user.sql',
       '20260817120000000_conference.sql',
       '20260817150000000_session.sql',
       '20260817180000000_join-code.sql',
       '20260817210000000_session-assignment.sql',
-    ]);
+    ];
+    // Migrations sort by their timestamp prefix, so this story's are the head of the list and a
+    // later story's can only be appended – never inserted among them or removed.
+    expect(migrations.slice(0, atThisStory.length)).toEqual(atThisStory);
+
+    // …and nothing added since records the fact that somebody left.
+    for (const name of migrations.slice(atThisStory.length)) {
+      expect(name, name).not.toMatch(/revocation|tombstone|audit|left|removal/i);
+      const sql = read(repoRoot, 'db', 'migrations', name).replace(/^\s*--.*$/gm, '');
+      expect(sql, name).not.toMatch(/create table \w*(revocation|tombstone|audit)\w*/i);
+    }
 
     for (const name of migrations) {
       // Comments explain that the rule is followed; matching them would assert the prose.

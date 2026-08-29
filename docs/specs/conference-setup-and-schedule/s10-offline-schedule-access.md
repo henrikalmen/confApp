@@ -82,7 +82,7 @@
 - [x] **S07 [OC01] [TI09] Offline offers no way to change anything, and nothing is queued for later**
   - **Given** Nadia is reading the cached "Kickoff 2026" Schedule with no connectivity
   - **When** she looks for the join, leave, and any schedule-editing affordances, and an in-flight mutating request is attempted
-  - **Then** every mutating affordance is unavailable or refused with a message stating a connection is required, and no pending write, outbox entry, or replay queue is created anywhere on the device – on reconnect nothing is submitted
+  - **Then** every mutating affordance is unavailable or refused with a message stating a connection is required, and no pending write, outbox entry, or replay queue is created for the Schedule path – join, leave, schedule edit – on reconnect nothing of theirs is submitted (scoped 2026-08-29 by S04, which added the one licensed exception `AGENTS.md` names: a Post-it composed against a Round the app had already rendered open is held on the device and sent when the signal returns. Nothing else on the device is, and no S10 behaviour changed)
 
 - [x] **S08 [OC01] [TI01,TI04] After a force-quit and an offline relaunch the running Session is still highlighted, from the persisted offset**
   - **Given** Nadia's last successful sync of "Kickoff 2026" carried `serverNow` = `{instant: 2026-09-15T07:40:12.345678Z, day: "2026-09-15", time: "09:40"}`, her device clock read three hours fast at that moment, and "Opening Keynote" is authored 09:00–10:30 on 2026-09-15
@@ -99,7 +99,7 @@
 - [x] The offline render path supplies **both** inputs of S06's `render(envelope, effectiveWallClockNow)` contract: the cached envelope **and** an `effectiveWallClockNow` produced by S06's clock module rehydrated from the persisted `(serverNow anchor, device clock reading at receipt)` pair. No offline code path reads the raw device clock as "now", and none renders the schedule with the clock input absent, null, or defaulted.
 - [x] Exactly one envelope-diff implementation exists in the codebase – S09's. This story's reconnect summary calls it; no second added/edited/deleted comparison is written here, and no diff logic lives in this story's summary module beyond presenting S09's result.
 - [x] No staleness or "last updated" string displayed by this story is produced by converting the watermark instant (or any other `timestamptz`) into a wall-clock time on the device; staleness is rendered as elapsed age.
-- [x] No write, mutation, or deferred-submission path exists in the offline layer: no outbox table, sync queue, replay buffer, or conflict-resolution code is introduced (`docs/PRODUCT.md#anti-goals`).
+- [x] No write, mutation, or deferred-submission path exists in the offline layer's **Schedule** modules: no outbox table, sync queue, replay buffer, or conflict-resolution code is introduced (`docs/PRODUCT.md#anti-goals`). Scoped 2026-08-29 by S04: the offline layer gained exactly one deferred write, `web/src/offline/post-it-queue.ts`, which is the second of the two allowances in `AGENTS.md` and holds nothing but a Post-it. The Schedule cache remains read-only, there is still no general outbox and no conflict resolution, and nothing this criterion prohibited became permitted.
 - [x] A cached Session's day, start time and end time survive the cache write/read round trip as the same strings the API returned – no schedule time value passes through `new Date(...)`, `Date.parse`, a JSON reviver, or a timezone-conversion library (S04 contract).
 - [x] Cache clearing is invoked through S02's sign-out / user-switch hook and at sign-in identity mismatch – this story introduces no independent auth teardown or token handling.
 - [x] Static build assets are the only thing the service worker precaches; no API response and no user data is stored in a Cache Storage entry, so the sign-out purge is complete.
@@ -213,8 +213,8 @@ _S06 (W6) and S09 (W7) both land before this story (W8): take the envelope shape
   - **Verify**: `Test (S06): after sign-out the store is empty and an offline launch shows no conference; after a kill-then-sign-in as a different sub, no conference name, session title or timestamp from the previous sub is readable from storage or the UI`
 
 - [x] **TI09** The offline experience offers no mutating action and queues nothing
-  - Join, leave and any schedule-editing affordance is unavailable or refused while offline with a message stating a connection is required. No outbox, replay queue or deferred-submission path is introduced anywhere (`docs/PRODUCT.md#anti-goals`).
-  - **Verify**: `Test (S07): every mutating affordance is disabled or refused while offline; after reconnect no request is submitted that was initiated offline, and no pending-write record exists in device storage`
+  - Join, leave and any schedule-editing affordance is unavailable or refused while offline with a message stating a connection is required. No outbox, replay queue or deferred-submission path is introduced for them (`docs/PRODUCT.md#anti-goals`). Scoped 2026-08-29 by S04 as above – a queued Post-it is the one exception, and it is not one of these affordances.
+  - **Verify**: `Test (S07): every mutating affordance is disabled or refused while offline; after reconnect no request is submitted that was initiated offline, and no pending-write record for a join, a leave or a schedule edit exists in device storage`
 
 - [x] **TI10** The web build launches with no connection
   - A service worker precaches the built static assets only – no API response and no user data enters Cache Storage, so TI08's purge remains complete. The Capacitor shells already serve assets locally and need no equivalent.

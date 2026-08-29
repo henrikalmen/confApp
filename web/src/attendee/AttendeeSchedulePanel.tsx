@@ -12,7 +12,9 @@ import {
   type EffectiveClock,
   type WallClockReading,
 } from '../clock/effective-clock.ts';
+import { useWatermarkPoll } from '../poll/use-watermark-poll.ts';
 import { ScheduleView } from './ScheduleView.tsx';
+import { SessionActivitiesPanel } from '../activities/SessionActivitiesPanel.tsx';
 import { ScheduleChangeBanner } from './ScheduleChangeBanner.tsx';
 import { LeaveConferenceControl } from '../members/LeaveConferenceControl.tsx';
 import { defaultDay } from './schedule-view-model.ts';
@@ -38,22 +40,18 @@ import { SignInRequiredNotice } from '../offline/SignInRequiredNotice.tsx';
  * same tree a cached envelope with no network available, and a tree that fetched anywhere inside
  * itself could not be handed anything.
  *
- * **S09 added the poll loop here, and here only.** The Schedule is fetched when the view opens, when
- * the conference changes, on an explicit retry, and now whenever the server's schedule watermark
- * has moved. All of that lives at this boundary because the tree below still must not fetch: S10
- * hands it a cached envelope with no network available, and a tree that fetched anywhere inside
- * itself could not be handed anything. Caching remains S10's; nothing here writes one.
- */
-
-/**
- * How often an open Schedule asks whether anything changed.
+ * **S09 added the poll loop here, and S02 moved it out.** The Schedule is fetched when the view
+ * opens, when the conference changes, on an explicit retry, and whenever the server's schedule
+ * watermark has moved. All of that still lives at this boundary because the tree below must not
+ * fetch: S10 hands it a cached envelope with no network available, and a tree that fetched anywhere
+ * inside itself could not be handed anything. Caching remains S10's; nothing here writes one.
  *
- * Five seconds meets the propagation row in the PRD's non-functional requirements without polling
- * for its own sake. The request is two scalars, and at most one is ever in flight, so a hall of a
- * hundred attendees costs the API a hundred tiny reads every five seconds - the capacity case the
- * PRD actually names.
+ * What changed is where the *loop* lives. The cadence, the one-in-flight guard, the
+ * visibility/focus/online ticks and the abort-on-unmount are `web/src/poll/use-watermark-poll.ts`
+ * now - one implementation, two call sites, this being the first
+ * (`plan.json#sharedDecisions` -> "Near-live propagation: one cursor"). What to ask and what to do
+ * about the answer is still entirely here, in `syncIfChanged`.
  */
-const POLL_INTERVAL_MS = 5_000;
 
 /** A failure the person can act on: the server's own sentence, plus a way to try again. */
 interface Failure {
@@ -154,6 +152,16 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
   conferenceIdRef.current = conferenceId;
 
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
+  /**
+   * The Session whose Activities are open (S01 TI10).
+   *
+   * Nothing more is held for it. S01 bumped a counter inside this boundary's tick and handed it
+   * down as `refreshTick`, because the Round cursor did not exist yet; S02 built that cursor and
+   * the panel is now a call site of the same shared poll loop this one uses, comparing
+   * `round.activity_watermark` for itself. There is no tick to pass and no second view here that
+   * knows a Session's Activities have moved.
+   */
+  const [activitiesFor, setActivitiesFor] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   /** What the last refresh changed, until the attendee dismisses it. */
   const [changes, setChanges] = useState<ScheduleDiff | null>(null);
@@ -406,15 +414,15 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           : null;
   }, [phase]);
 
-  /** At most one poll in flight; a tick arriving while one is outstanding is skipped, not queued. */
-  const pollingRef = useRef(false);
-
+  /*
+   * What to ask, and what to do about the answer. The *loop* that calls this - the cadence, the
+   * one-in-flight guard, the visibility/focus/online ticks - is the shared module's (TI08).
+   */
   const syncIfChanged = useCallback(
     async (signal: AbortSignal): Promise<void> => {
       const rendered = renderedRef.current;
-      if (conferenceId === null || rendered === null || pollingRef.current) return;
+      if (conferenceId === null || rendered === null) return;
 
-      pollingRef.current = true;
       try {
         const watermark = await fetchScheduleWatermark(conferenceId, signal);
 
@@ -517,50 +525,21 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
           }
           return;
         }
-      } finally {
-        pollingRef.current = false;
       }
     },
     [conferenceId, loadConferences],
   );
 
-  useEffect(() => {
-    // A cached view polls on the same loop. That poll is the whole reconnect mechanism: the first
-    // watermark request that succeeds is the connection coming back, and a request that fails is
-    // the connection still being gone – neither is decided by `navigator.onLine` (S10 TI06).
-    if (phase.kind !== 'ready' && phase.kind !== 'cached') return;
-
-    /*
-     * Nothing is asked of the network while the tab is hidden or the app is backgrounded: a phone
-     * in a pocket for an hour must not spend battery on a schedule nobody is reading. Becoming
-     * visible or focused refreshes **immediately** rather than waiting for the next tick, because
-     * an attendee returning to the app expects current data at once.
-     */
-    const controller = new AbortController();
-    const tick = (): void => {
-      if (!document.hidden) void syncIfChanged(controller.signal);
-    };
-
-    const timer = setInterval(tick, POLL_INTERVAL_MS);
-    document.addEventListener('visibilitychange', tick);
-    window.addEventListener('focus', tick);
-    // The link returning is a *prompt* to try, never the proof that anything is reachable – the
-    // request's own success is that. Without it, an attendee whose wifi came back would wait out
-    // the next tick for no reason.
-    window.addEventListener('online', tick);
-
-    return () => {
-      clearInterval(timer);
-      // Any request still in flight belongs to the conference being left, so it is cancelled rather
-      // than allowed to resolve into the next one's view. The in-flight flag is *not* cleared here:
-      // the aborted poll's own `finally` owns it, and clearing it from the cleanup could release a
-      // flag a newly started poll already holds, breaking the one-in-flight guarantee.
-      controller.abort();
-      document.removeEventListener('visibilitychange', tick);
-      window.removeEventListener('focus', tick);
-      window.removeEventListener('online', tick);
-    };
-  }, [phase.kind, conferenceId, syncIfChanged]);
+  /*
+   * A cached view polls on the same loop. That poll is the whole reconnect mechanism: the first
+   * watermark request that succeeds is the connection coming back, and a request that fails is the
+   * connection still being gone – neither is decided by `navigator.onLine` (S10 TI06).
+   *
+   * `syncIfChanged` is rebuilt when the conference changes, so the shared loop tears down and
+   * **aborts** whatever the previous conference had in flight – which is what keeps a slow poll for
+   * the conference just left from painting its schedule under the new one's name.
+   */
+  useWatermarkPoll(phase.kind === 'ready' || phase.kind === 'cached', syncIfChanged);
 
   /**
    * The way out of the terminal offline state.
@@ -832,12 +811,37 @@ export function AttendeeSchedulePanel(): React.JSX.Element {
             <ScheduleChangeBanner diff={changes} onDismiss={() => setChanges(null)} />
           ) : null}
 
+          {/*
+           * The Activities control is offered only on a live view. Rounds are read from their own
+           * endpoint, online, and are deliberately absent from the offline cache – offering the
+           * control over a cached Schedule would promise something the cache cannot answer (FR6).
+           */}
           <ScheduleView
             schedule={rendering.schedule}
             now={now}
             selectedDay={openDay}
             onSelectDay={setSelectedDay}
+            {...(phase.kind === 'ready'
+              ? {
+                  openActivitiesFor: activitiesFor,
+                  onOpenActivities: (sessionId: string) =>
+                    setActivitiesFor((current) => (current === sessionId ? null : sessionId)),
+                }
+              : {})}
           />
+
+          {/*
+           * Rendered at the **view boundary**, not inside `ScheduleView`: that tree stays a pure
+           * projection of `(envelope, now)` so S10 can hand it a cached envelope with no network,
+           * and a tree that fetched anywhere inside itself could not be handed one.
+           */}
+          {phase.kind === 'ready' && activitiesFor !== null ? (
+            <SessionActivitiesPanel
+              conferenceId={rendering.schedule.conference.id}
+              sessionId={activitiesFor}
+              onClose={() => setActivitiesFor(null)}
+            />
+          ) : null}
         </>
       ) : null}
 

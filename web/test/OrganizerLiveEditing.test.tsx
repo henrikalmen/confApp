@@ -762,3 +762,81 @@ describe('a session edit refused because the conference was published under it',
     expect(screen.getByTestId('session-form').textContent).toContain('published');
   });
 });
+
+// ---------- the organizer's own view catches up, but never mid-edit ----------
+
+/**
+ * S09 gave the attendee view a near-live refresh and left the Organizer's composing view without
+ * one, because the shared loop did not exist yet and S01 TI11 forbade adding a second. It does exist
+ * now, so this surface is a call site of it (product decision, 2026-08-29).
+ *
+ * The reason it is **idle-only** is the whole design. This panel holds S09's optimistic-concurrency
+ * base versions: refetching while a form is open would move the base under the person typing and
+ * turn a co-organizer's unrelated change into a conflict banner over half-finished work. S09's
+ * re-apply flow still handles a change that arrives after they started - that is what it is for.
+ * What this avoids is manufacturing that case while they are mid-sentence.
+ *
+ * The tick is provoked with the `focus` event the shipped loop genuinely listens for. No remount,
+ * no navigation, no test-only entry point.
+ */
+describe('the organizer schedule catching up with a co-organizer', () => {
+  const WATERMARK_PATH = `GET /conferences/${CONFERENCE_ID}/schedule/watermark`;
+
+  it('refetches when the watermark moves and nothing is being edited', async () => {
+    const sent: Sent[] = [];
+    let moved = false;
+    globalThis.fetch = routeFetch(
+      {
+        [SCHEDULE_PATH]: () => ({
+          status: 200,
+          body: moved
+            ? {
+                ...schedule(),
+                days: [
+                  { day: '2026-09-15', sessions: [session({ title: 'Keynote, moved' })] },
+                  { day: '2026-09-16', sessions: [] },
+                ],
+              }
+            : schedule(),
+        }),
+        [WATERMARK_PATH]: () => ({
+          status: 200,
+          body: { lastUpdatedAt: moved ? NEWER_VERSION : LOADED_VERSION, state: 'published' },
+        }),
+      },
+      sent,
+    );
+    render(
+      <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="published" />,
+    );
+    await screen.findByTestId(`session-${KEYNOTE.id}`);
+
+    moved = true;
+    window.dispatchEvent(new Event('focus'));
+
+    // Read on the rendered schedule, not on a request count.
+    await vi.waitFor(() =>
+      expect(screen.getByTestId(`session-${KEYNOTE.id}`).textContent).toContain('moved'),
+    );
+  });
+
+  it('holds off entirely while a session form is open', async () => {
+    const sent = await openEditor({
+      [SCHEDULE_PATH]: { status: 200, body: schedule() },
+      [`GET /conferences/${CONFERENCE_ID}/schedule/watermark`]: {
+        status: 200,
+        body: { lastUpdatedAt: NEWER_VERSION, state: 'published' },
+      },
+    });
+    await screen.findByTestId('session-form');
+
+    const before = sent.length;
+    window.dispatchEvent(new Event('focus'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Not even the cheap watermark read: an open editor means this surface asks nothing at all.
+    expect(sent.length).toBe(before);
+    // And the form is still there, with the base it was opened against.
+    expect(screen.queryByTestId('session-form')).not.toBeNull();
+  });
+});

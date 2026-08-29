@@ -142,8 +142,11 @@ interface SessionParams extends ConferenceParams {
  * `day`, `startTime` and `endTime` are naive wall-clock strings – 'YYYY-MM-DD' and 'HH:mm', with
  * no seconds, no `Z`, no offset and no instant anywhere. `lastUpdatedAt` is the one field that
  * genuinely is an instant: the row version S09 will send back as the base of an edit.
+ *
+ * Exported so the Session-with-Rounds read (S01 TI07) shapes its Session half through this one
+ * function rather than a second, drifting copy of the schedule's wire contract.
  */
-function toWire(session: Session): Record<string, unknown> {
+export function toWire(session: Session): Record<string, unknown> {
   return {
     id: session.id,
     conferenceId: session.conferenceId,
@@ -209,6 +212,22 @@ function requireSaved(result: GuardedWrite, subject: string): Session {
       ERROR_CODES.SESSION_NOT_FOUND,
       404,
       'That session no longer exists in this conference.',
+    );
+  }
+
+  /*
+   * The Conference was busy: this write waited on a row somebody else was holding for longer than
+   * its `lock_timeout` allows and gave up rather than park the Conference row indefinitely.
+   *
+   * `503` with `Retry-After`-shaped advice in the sentence rather than a `409`: nothing conflicts,
+   * nothing is stale, and the caller's request was not wrong. Trying again in a moment is the whole
+   * of what they need to do, and it is the only refusal in this route for which that is true.
+   */
+  if (result.outcome === 'busy') {
+    throw new AppError(
+      ERROR_CODES.CONFERENCE_BUSY,
+      503,
+      'Somebody else is making a change to this conference right now. Try again in a moment.',
     );
   }
 
@@ -445,8 +464,13 @@ export function registerSessionRoutes(
 
       assertLifecyclePreconditions({ conference, base });
 
-      // The version comparison, the last-session count and the delete all share one transaction and
-      // one row lock inside the repository - so nothing can move between them.
+      /*
+       * The row locks, the contribution guard, the version comparison, the last-session count and
+       * the delete all share one transaction inside the repository, in the order fixed there - so
+       * nothing can move between them. A Session holding collected output is refused here with
+       * SESSION_HOLDS_CONTRIBUTIONS (S05 FR7), which travels out through this same envelope and
+       * needs no branch of its own.
+       */
       requireSaved(await sessions.remove(conference.id, sessionId, base.version), 'session');
       return {
         deleted: sessionId,

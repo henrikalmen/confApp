@@ -1197,3 +1197,284 @@ body {
 .schedule-changes--reconnect {
   border-left: 4px solid var(--accent);
 }
+
+/* ---------- session activities: rounds (S01) ---------- */
+
+/*
+ * The Activities panel sits inside another panel - the organizer's schedule, or the attendee's
+ * home - so it is inset rather than raised. Nothing here declares a width: it inherits the column
+ * it is dropped into and rescales with it, from a 375px phone to a 1280px desktop.
+ */
+.activities {
+  margin: var(--gap) 0 0;
+  background: var(--surface-sunken);
+}
+
+/*
+ * A round is a session card with a different left edge, so the two lists read as the same kind of
+ * object at two levels. The edge is the state: muted while the round is not running, accent while
+ * it is, which is the one thing a facilitator scans the list for.
+ */
+.round-card {
+  border-left-color: var(--text-muted);
+}
+
+.round-card--open {
+  border-left-color: var(--accent);
+}
+
+/*
+ * No `overflow-wrap` of its own. A prompt is free text a facilitator typed and can contain an
+ * unbroken string long enough to push a 375px phone sideways - but `body` already declares
+ * `overflow-wrap: break-word` for exactly that, and it inherits. Restating it here would look
+ * load-bearing while changing nothing, and the next reader would keep it out of caution.
+ * `visual/session-activities.spec.ts` measures the wrap on a real unbroken token, so if the
+ * inherited rule ever goes, this surface is where it is reported.
+ */
+.round-card__prompt {
+  margin: 0;
+  font-weight: 600;
+}
+
+.round-card__options {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.badge--round-kind {
+  color: var(--text-muted);
+}
+
+.badge--round-open {
+  color: var(--accent);
+}
+
+.badge--round-closed {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+/* One option per row, label above input, so a long label never competes with its field. */
+.round-form__options {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.round-form__option {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.field__label--inline {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* The way into a session's rounds, from the attendee card. Its own line, so it wraps cleanly. */
+.session-card__activities {
+  margin: 0.5rem 0 0;
+}
+
+/* ---------- the post-it board (S02) ---------- */
+
+.board {
+  margin: 0.6rem 0 0;
+}
+
+/*
+ * The board itself. `auto-fill` with a `minmax` floor rather than a fixed column count: at 375px
+ * that resolves to one column and at 1280px to as many as fit, which is the whole responsive rule
+ * for this surface stated once. `min()` keeps the floor below the narrowest phone's content box, so
+ * a single column never overflows it.
+ */
+.board__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: 0.5rem;
+}
+
+/*
+ * `min-width: 0` is load-bearing on a grid item: without it the item's automatic minimum size is
+ * its content, so one unbroken token pushes the whole grid - and the page - sideways rather than
+ * wrapping. `body` already declares `overflow-wrap: break-word` and it inherits here.
+ */
+.post-it {
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* Your own, marked by the same accent an open round uses - it is the one you can act on. */
+.post-it[data-mine='true'] {
+  border-left-color: var(--accent);
+}
+
+.post-it__text {
+  margin: 0;
+}
+
+/* The author's name is never optional and never small enough to miss - it is what a post-it is. */
+.post-it__by {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.post-it__edited {
+  font-style: italic;
+}
+
+/*
+ * A post-it that reached the board after its round closed, and one still waiting on this device
+ * (S04).
+ *
+ * Both say so **in words**. The dashed edge and the muted type are a second signal for the people
+ * who can use one - on a projector at the back of a room, and to anybody reading in a hurry - and
+ * neither carries the meaning on its own. Nothing here sets a width or a height: the sentences wrap
+ * with the card they sit in, at every viewport.
+ */
+.post-it__late,
+.post-it__held {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/*
+ * Held items sit in their own list below the board, because they are not on the board yet - nobody
+ * else's device has them. The dashed border is what that reads as at a glance; the sentence inside
+ * is what says it.
+ */
+.board__list--held {
+  margin-top: 0.5rem;
+}
+
+.post-it--held {
+  border-style: dashed;
+  border-left-style: dashed;
+}
+
+.post-it__input {
+  width: 100%;
+}
+
+.post-it__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+}
+
+.board__compose {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.6rem 0 0;
+}
+
+/*
+ * The count and the primary control on one line, wrapping to two when there is no room. The button
+ * comes last in the source and is pushed to the trailing edge, which puts the one control somebody
+ * reaches for one-handed at the bottom-right of the compose box on a 375px phone.
+ */
+.board__compose-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin: 0.3rem 0 0;
+}
+
+/*
+ * One Poll: the choices, the settled state, and the result.
+ *
+ * Everything here sizes in `rem` and percentages, so the card rescales with the viewport and with
+ * the reader's own font size rather than snapping between breakpoints. Nothing carries a fixed
+ * width: an option label is a sentence somebody typed in a hurry and can be as long as they liked,
+ * which is what pushes a 375px phone sideways if it is given a width to overflow.
+ */
+.poll {
+  margin: 0.6rem 0 0;
+}
+
+/*
+ * The whole row is the target, not the dot. A radio alone is a few pixels of tap area, which is the
+ * wrong thing to hand somebody answering a question from the back of a room on a phone.
+ */
+.poll__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  /* A pasted identifier with no spaces in it has no break opportunity of its own. */
+  overflow-wrap: anywhere;
+}
+
+.poll__choice input {
+  /* Aligned to the first line of the label rather than to the middle of a wrapped paragraph. */
+  margin-top: 0.25rem;
+  flex: none;
+}
+
+.poll__actions {
+  margin: 0.5rem 0 0;
+}
+
+.poll__voted {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.poll__results {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+/*
+ * Label, bar, count - and the bar is the only part that flexes. `minmax(0, …)` on the label is what
+ * lets a long option wrap instead of forcing the row wider than its container, which is the classic
+ * grid overflow: a grid item's default minimum is its content size, not zero.
+ */
+.poll__result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(2rem, 30%) auto;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.poll__result-label {
+  overflow-wrap: anywhere;
+}
+
+.poll__result-bar {
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent);
+  /* A bar for zero votes still occupies its track; the number beside it is what says "none". */
+  min-width: 0;
+}
+
+.poll__result-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

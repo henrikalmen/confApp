@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
   createSession,
   deleteSession,
   fetchOrganizerSchedule,
+  fetchScheduleWatermark,
   updateSession,
   type OrganizerSchedule,
   type OverlapWarning,
@@ -12,7 +13,9 @@ import {
   type SessionDetailsInput,
   type WriteBase,
 } from '../api/client.ts';
+import { useWatermarkPoll } from '../poll/use-watermark-poll.ts';
 import { SessionForm } from './SessionForm.tsx';
+import { SessionActivitiesPanel } from '../activities/SessionActivitiesPanel.tsx';
 import { dayLabel, formatTimeRange } from './wall-clock-time.ts';
 
 /**
@@ -95,6 +98,13 @@ export function SchedulePanel({
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>({ open: false });
+  /**
+   * The Session whose Activities panel is open, if any (S01 TI10).
+   *
+   * Held here rather than inside the card, so opening one closes nothing else the organizer has
+   * typed and the panel is rendered once, below the list, where it has room at 375px.
+   */
+  const [activitiesFor, setActivitiesFor] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
   const [warning, setWarning] = useState<OverlapWarning | null>(null);
@@ -153,6 +163,54 @@ export function SchedulePanel({
   }, [load]);
 
   const schedule = state.kind === 'ready' ? state.schedule : null;
+
+  /*
+   * The cursor and the busy flag, read through refs so the tick callback keeps a stable identity
+   * and the shared loop's cadence is never restarted by ordinary typing.
+   */
+  const watermarkRef = useRef<string | null>(null);
+  const editingRef = useRef(false);
+  useEffect(() => {
+    watermarkRef.current = schedule?.conference.lastUpdatedAt ?? null;
+  }, [schedule]);
+  useEffect(() => {
+    editingRef.current = editor.open || saving || conflict !== null;
+  }, [editor.open, saving, conflict]);
+
+  /**
+   * Bring a co-organizer's changes in near-live, but never underneath an edit in progress (TI11).
+   *
+   * This panel had no loop at all: an Organizer looking at the schedule while somebody else moved a
+   * Session saw the old one until they reloaded. S01 could not add one - the shared implementation
+   * did not exist yet, and a second loop is what `plan.json#sharedDecisions` forbids - so this rides
+   * S02's tick like every other polling surface, and owns no cadence, timer or listener of its own.
+   *
+   * **Idle only, and that is the whole of the design.** This surface holds S09's optimistic
+   * concurrency base versions: refetching while a Session form is open, a save is in flight, or a
+   * conflict is waiting to be re-applied would move the base under the person typing and turn a
+   * co-organizer's unrelated edit into a conflict banner over half-finished work. S09's re-apply
+   * flow still covers the case where the change arrives *after* they started - that is what it is
+   * for. What this avoids is manufacturing that case while they are mid-sentence.
+   *
+   * Compare-then-refetch on the same two scalars the attendee view uses, so a quiet schedule costs
+   * one small read per tick and nothing else.
+   */
+  const syncIfIdle = useCallback(
+    async (signal: AbortSignal): Promise<void> => {
+      try {
+        if (editingRef.current) return;
+        const watermark = await fetchScheduleWatermark(conferenceId, signal);
+        if (signal.aborted || editingRef.current) return;
+        if (watermark.lastUpdatedAt === watermarkRef.current) return;
+        await load(signal, true);
+      } catch {
+        // A failed tick changes nothing on screen; the next one tries again.
+      }
+    },
+    [conferenceId, load],
+  );
+
+  useWatermarkPoll(state.kind === 'ready', syncIfIdle);
   const days = useMemo(() => schedule?.days.map((entry) => entry.day) ?? [], [schedule]);
 
   const activeDay = selectedDay !== null && days.includes(selectedDay) ? selectedDay : days[0];
@@ -336,6 +394,13 @@ export function SchedulePanel({
                 onClick={() => {
                   setSelectedDay(day);
                   setEditor({ open: false });
+                  /*
+                   * Closed explicitly rather than filtered out. The panel is rendered only for a
+                   * Session on the selected day, so leaving this set would unmount it silently and
+                   * take any half-typed round with it - and coming back would look like the panel
+                   * had reopened itself.
+                   */
+                  setActivitiesFor(null);
                 }}
               >
                 {dayLabel(day, index)}
@@ -405,34 +470,77 @@ export function SchedulePanel({
                       ) : null}
                     </div>
 
-                    {readOnly ? null : (
-                      <div className="session-card__actions">
-                        <button
-                          className="button"
-                          type="button"
-                          data-testid={`edit-${session.id}`}
-                          onClick={() => {
-                            setEditor({ open: true, editing: session });
-                            setSaveError(null);
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="button"
-                          type="button"
-                          data-testid={`delete-${session.id}`}
-                          onClick={() => void remove(session)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
+                    <div className="session-card__actions">
+                      {/*
+                       * The way into the Session's Activities (S01). Offered on an archived
+                       * conference too: archiving makes a conference read-only, not invisible, and
+                       * the rounds it ran are exactly what an organizer comes back for. What the
+                       * panel then offers is decided by the server's `canRun`, never here.
+                       */}
+                      <button
+                        className="button"
+                        type="button"
+                        data-testid={`activities-${session.id}`}
+                        aria-expanded={activitiesFor === session.id}
+                        onClick={() =>
+                          setActivitiesFor((current) =>
+                            current === session.id ? null : session.id,
+                          )
+                        }
+                      >
+                        Activities
+                      </button>
+                      {readOnly ? null : (
+                        <>
+                          <button
+                            className="button"
+                            type="button"
+                            data-testid={`edit-${session.id}`}
+                            onClick={() => {
+                              setEditor({ open: true, editing: session });
+                              setSaveError(null);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="button"
+                            type="button"
+                            data-testid={`delete-${session.id}`}
+                            onClick={() => void remove(session)}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </li>
                 );
               })}
             </ol>
           )}
+
+          {/*
+           * The Session Activities panel, below the list rather than inside the card: at 375px a
+           * round list, its run controls and an authoring form have nowhere to go inside a card
+           * that is already a wrapping flex row.
+           */}
+          {activitiesFor !== null && activeSessions.some((entry) => entry.id === activitiesFor) ? (
+            /*
+             * Nothing is passed to keep it current, and nothing needs to be. S01 handed this panel
+             * a `refreshTick` from a loop it did not have; S02 gave the panel the cursor
+             * (`round.activity_watermark`) and made it a call site of the one shared poll loop,
+             * so it follows a colleague's open/close and every post-it wherever it is rendered.
+             *
+             * The *schedule* around it still does not refresh on this surface - that is this
+             * panel's own gap, tracked separately, and deliberately not widened into here.
+             */
+            <SessionActivitiesPanel
+              conferenceId={conferenceId}
+              sessionId={activitiesFor}
+              onClose={() => setActivitiesFor(null)}
+            />
+          ) : null}
 
           {/*
            * What the server holds now, beside what the admin typed. Both are on screen at once on

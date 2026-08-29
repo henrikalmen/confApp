@@ -399,3 +399,17 @@ export function useAuth(): AuthContextValue {
   if (value === null) throw new Error('useAuth must be used inside an AuthProvider.');
   return value;
 }
+
+/**
+ * The signed-in employee's display name, or `null` when there is nobody – or no provider.
+ *
+ * A read, and deliberately a forgiving one: it registers nothing, changes nothing about the session,
+ * and does **not** throw outside a provider the way `useAuth` does. It exists for surfaces that show
+ * something under your own name before the server has ever seen it – a Post-it waiting on the device
+ * for a signal (S04) is the case – where the alternative would be either a panel that cannot be
+ * rendered in isolation or a name copied into device storage beside the text.
+ */
+export function useSignedInName(): string | null {
+  const value = useContext(AuthContext);
+  return value !== null && value.state.kind === 'signed-in' ? value.state.user.displayName : null;
+}
