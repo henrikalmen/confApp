@@ -62,6 +62,7 @@
 - **A structure guard sees only what its parser matches** – S03's column regex assumed two-space indent, so a four-space `ballot_no` cleared all 21 vote-anonymity assertions. Anchor on `^\s*`.
 - **A SQL-scanning guard must read all three quote styles** – Prettier's `singleQuote` leaves strings containing `'open'` in double quotes, so a per-author count hid there and passed S05's guard.
 - **An unfiltered `pg_locks` wait proves nothing** – and a `relation` filter hangs forever: a blocked `FOR UPDATE` waits on a `transactionid` lock whose relation is null. Wait on its `tuple` lock.
+- **A revert that silently matches nothing is a false green in the one step whose job is doubt.** A `perl -pe` strip matched nothing; the suite passed and read as proof. Check the guard count fell.
 
 ## React State & Refusals
 
@@ -93,6 +94,7 @@
 
 ## Environment / WSL
 
+- **`docker: command not found` on the Windows side does not mean Docker is absent** – the engine lives in the `Ubuntu` distro, not on the Windows PATH and not in `docker-desktop` (which sits Stopped). Reach it with `wsl -d Ubuntu -e bash -lc 'cd /mnt/c/git/confApp && docker compose …'`; the published ports forward to Windows, so `127.0.0.1:8082` works from either side. This has now cost twice: an erroneous S13 execution hold (2026-08-20, corrected 08-21) and a visual suite left unrun (2026-08-29). Probe the distro before recording a Docker blocker.
 - **WSL OOM can surface as `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`** – it looks like a broken install; freeing host memory fixed it. First sign: the distro shuts down mid-session, taking dockerd.
 
 ## Remediation Sequences
@@ -125,3 +127,4 @@
 - **A test helper named `join` shadows `node:path`'s `join`** – surfaces as `app.inject is not a function` far from the cause. Name domain helpers `submit`/`post` in modules importing node:path.
 - **A deferred FIS ends with `## Deferred Decisions`, below `## Implementation Observations`** – append later observations inside Observations, not at EOF. S13 is in this state.
 - **Disjoint files is not disjoint resources** – two agents with no common file shared one test PostgreSQL; migrations failed the advisory lock and reddened 80+ tests. Check DBs and ports too.
+- **A comment claiming behaviour the code does not have is worse than no comment.** A `lock_timeout` note said the route mapped 55P03 to a refusal; unmapped it was a 500. Grep what a comment asserts.
