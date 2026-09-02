@@ -76,9 +76,20 @@ const BOARD: Round = {
   kind: 'PostItRound',
   prompt: 'What slows us down most?',
   state: 'open',
-  postIts: [
-    { id: 'p-1', text: 'Handovers', authorName: 'Ada Lovelace', mine: false, edited: false },
-  ],
+  categories: [],
+  uncategorised: {
+    postIts: [
+      {
+        id: 'p-1',
+        text: 'Handovers',
+        authorName: 'Ada Lovelace',
+        mine: false,
+        edited: false,
+        arrivedAfterClose: false,
+      },
+    ],
+    postItCount: 1,
+  },
   textMaxLength: 40,
 };
 
@@ -102,6 +113,7 @@ function payload(
     },
     rounds,
     canRun,
+    canRemovePermanently: false,
     activityWatermark,
   };
 }

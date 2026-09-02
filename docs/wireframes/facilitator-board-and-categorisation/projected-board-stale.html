@@ -1,0 +1,1290 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframe — Projected board view (connection lost)</title>
+    <!-- WIREFRAME - projected Board View with connectivity lost at the room machine. The last-rendered Board stays on screen behind a staleness indicator and resumes on its own. An indicator, never a retry button. Projection viewport class: 1920x1080. -->
+    <style>
+      /*
+       * Grayscale structural wireframe. No colour, no external asset, no network request.
+       *
+       * THE PROJECTION VIEWPORT CLASS — 1920x1080, its own layout, not the 1280px layout enlarged.
+       * Read at several metres from the back of a room, by nobody who can touch the machine.
+       *
+       * One screen, always. `overflow: hidden` on the root is deliberate and load-bearing: there is
+       * no scrollbar to reach for, because there is nobody at the machine to reach for it. Every
+       * Category and every Post-it is laid out to fit within the screen it is given.
+       */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        padding: 12px;
+        background: #f5f5f5;
+        color: #1a1a1a;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow-wrap: break-word;
+      }
+
+      /* The band. It names the round and states the size of the board. It is not a control. */
+      .screen-head {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 3px solid #999;
+        padding: 0 4px 6px;
+      }
+      .screen-head__prompt {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .screen-head__meta {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+        color: #555;
+        white-space: nowrap;
+      }
+
+      /*
+       * The Category grid. Sized to the number of regions, so every Category and Uncategorised are on
+       * screen at once whatever the board holds. Rows are equal fractions of the space that is left,
+       * so the grid never grows past the screen and never needs to scroll.
+       */
+      .grid {
+        flex: 1 1 auto;
+        min-height: 0;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+      .grid--21 {
+        grid-template-columns: repeat(7, 1fr);
+        grid-template-rows: repeat(3, minmax(0, 1fr));
+      }
+      .grid--5 {
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: repeat(2, minmax(0, 1fr));
+      }
+
+      .tile {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border: 2px solid #999;
+        border-radius: 6px;
+        background: #fff;
+        padding: 5px 6px;
+      }
+      /* Uncategorised is drawn as itself, not as one more Category. */
+      .tile--uncategorised {
+        border-style: dashed;
+        background: #ebebeb;
+      }
+
+      /*
+       * The Category name and its count are the two things that never degrade. They hold the same
+       * size whatever the tile holds, because they are what a reader at the back of the room is
+       * actually reading.
+       */
+      .tile__head {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 6px;
+        border-bottom: 2px solid #ddd;
+        padding: 0 0 4px;
+        margin: 0 0 4px;
+      }
+      .tile__name {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.15;
+        font-weight: 700;
+        min-width: 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .tile__count {
+        flex: 0 0 auto;
+        font-size: 22px;
+        font-weight: 700;
+        color: #444;
+        border: 2px solid #999;
+        border-radius: 999px;
+        padding: 0 8px;
+        line-height: 1.2;
+      }
+
+      .tile__body {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .tile__none {
+        margin: 4px 0 0;
+        font-size: 18px;
+        color: #666;
+      }
+
+      .tile__list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        align-content: start;
+      }
+      .pi {
+        min-width: 0;
+      }
+      .pi__by {
+        color: #555;
+        font-weight: 600;
+      }
+
+      /*
+       * THE THREE DETAIL TIERS, chosen per Category by how many that Category holds. Post-it detail
+       * is what gives way; the Category name, the count and the boundary never do.
+       *
+       *   full      - text wraps freely, author on its own line
+       *   clamped   - text clamped to two lines, author on its own line
+       *   condensed - text on one line, author beside it and never clipped
+       */
+      .tile__list--full {
+        gap: 6px;
+      }
+      .tile__list--full .pi__text {
+        display: block;
+        font-size: 17px;
+        line-height: 1.25;
+      }
+      .tile__list--full .pi__by {
+        display: block;
+        font-size: 15px;
+        margin-top: 2px;
+      }
+
+      .tile__list--clamped {
+        gap: 5px;
+      }
+      .tile__list--clamped .pi__text {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+      .tile__list--clamped .pi__by {
+        display: block;
+        font-size: 14px;
+        margin-top: 1px;
+      }
+
+      .tile__list--condensed {
+        gap: 3px;
+      }
+      .tile__list--condensed .pi {
+        display: flex;
+        align-items: baseline;
+        gap: 5px;
+        line-height: 1.35;
+      }
+      .tile__list--condensed .pi__text {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /*
+       * The author's name is never the thing that gets clipped. A Post-it always displays its
+       * author's name — that is what a Post-it is — so the name keeps its width and the text gives
+       * up its tail instead.
+       */
+      .tile__list--condensed .pi__by {
+        flex: 0 0 auto;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      /*
+       * The staleness indicator. A statement, never a control: there is nobody at this machine to
+       * press a retry, and nothing on this class may be pressable. It says what is true and what
+       * will happen on its own.
+       */
+      .stale {
+        flex: 0 0 auto;
+        border: 3px dashed #666;
+        background: #ebebeb;
+        border-radius: 6px;
+        padding: 6px 12px;
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .stale__lead {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+      }
+      .stale__detail {
+        margin: 0;
+        font-size: 20px;
+        color: #444;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stale">
+      <p class="stale__lead">Not updating &mdash; this screen has lost its connection</p>
+      <p class="stale__detail">
+        Showing the board as it stood at 15:12. It will catch up on its own when the connection
+        returns.
+      </p>
+    </div>
+
+    <div class="screen-head">
+      <p class="screen-head__prompt">What slows you down most in a normal week?</p>
+      <p class="screen-head__meta">200 post-its · 20 categories</p>
+    </div>
+
+    <ul class="grid grid--21">
+        <li class="tile tile--uncategorised" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Uncategorised</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="2" data-tier="full">
+          <div class="tile__head">
+            <h2 class="tile__name">Recognition and thanks</h2>
+            <span class="tile__count">2</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--full">
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="3" data-tier="clamped">
+          <div class="tile__head">
+            <h2 class="tile__name">Tooling gaps</h2>
+            <span class="tile__count">3</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--clamped">
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="4" data-tier="clamped">
+          <div class="tile__head">
+            <h2 class="tile__name">Meeting overload</h2>
+            <span class="tile__count">4</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--clamped">
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="4" data-tier="clamped">
+          <div class="tile__head">
+            <h2 class="tile__name">Onboarding and ramp-up</h2>
+            <span class="tile__count">4</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--clamped">
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Release process</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Documentation</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Cross-team handovers</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Hiring and recruiting</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Customer feedback loop</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Technical debt</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Office and facilities</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Career progression</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Remote and hybrid working</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Incident response</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Planning and estimation</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Data and reporting</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Security and compliance</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Design and research</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We keep writing status reports nobody reads.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Hybrid days are set per team, so cross-team days never line up.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The build takes 22 minutes and fails about a third of the time.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Standups run 40 minutes because we do them for four teams at once.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Budget and procurement</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Staging data is six months stale so nothing reproduces.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Nobody knows who owns the deployment scripts any more.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We rewrite the same integration every second project.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Local setup takes a new starter most of their first week.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Two issue trackers, and the one people use is not the official one.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Thanks to Sara for the migration runbook, it saved us a day.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Half my week is meetings I could have read the notes for.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+        <li class="tile" data-count="11" data-tier="condensed">
+          <div class="tile__head">
+            <h2 class="tile__name">Things we should just stop doing</h2>
+            <span class="tile__count">11</span>
+          </div>
+          <div class="tile__body">
+<ul class="tile__list tile__list--condensed">
+            <li class="pi">
+              <span class="pi__text">Recruiting takes so long the team plans around not hiring.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The onboarding buddy scheme actually works. Keep it.</span>
+              <span class="pi__by">Mia Holm</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Handovers between the two support teams lose things.</span>
+              <span class="pi__by">Nils Ohlsson</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">We find out about incidents from customers before our own alerts.</span>
+              <span class="pi__by">Ana Ruiz</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Estimates are treated as commitments about a week after we give them.</span>
+              <span class="pi__by">Erik Sandberg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">There is no one place to look up how a decision was made.</span>
+              <span class="pi__by">Sara Falk</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">The coffee machine on floor 3 has been broken since spring.</span>
+              <span class="pi__by">Leo Marchetti</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Design gets pulled in after the build has already started.</span>
+              <span class="pi__by">Priya Nair</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Every dashboard tells a slightly different story about the same week.</span>
+              <span class="pi__by">Tomas Berg</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Buying a 40 euro tool takes three approvals and six weeks.</span>
+              <span class="pi__by">Iben Krag</span>
+            </li>
+            <li class="pi">
+              <span class="pi__text">Support rota covered the release weekend without being asked.</span>
+              <span class="pi__by">Jonas Lind</span>
+            </li>
+          </ul>
+          </div>
+        </li>
+    </ul>
+  </body>
+</html>

@@ -97,29 +97,52 @@ const ACTIVITIES = {
       prompt: `${LONG_PROMPT} ${UNBROKEN}`,
       state: 'open',
       textMaxLength: 280,
-      postIts: [
+      /*
+       * The Board, grouped (facilitator-board S02). Uncategorised is always on the payload, and a
+       * Category name is free text somebody typed in a hurry - so one of them carries the unbroken
+       * token too, because a region head is a second place a pasted identifier can push the grid.
+       */
+      categories: [
         {
-          id: 'post-it-ada',
-          text: `Waiting three days for test data. ${UNBROKEN_POST_IT}`,
-          authorName: 'Ada Lovelace',
-          mine: false,
-          edited: false,
+          id: 'category-tooling',
+          name: `Tooling and continuous integration ${UNBROKEN}`,
+          postItCount: 1,
+          postIts: [
+            {
+              id: 'post-it-bo',
+              text: 'Too many meetings',
+              authorName: 'Bo Nilsson',
+              mine: false,
+              edited: false,
+            },
+          ],
         },
         {
-          id: 'post-it-mine',
-          text: 'Handovers between teams, especially where nobody owns the piece in the middle',
-          authorName: 'Ida Andersson',
-          mine: true,
-          edited: true,
-        },
-        {
-          id: 'post-it-bo',
-          text: 'Too many meetings',
-          authorName: 'Bo Nilsson',
-          mine: false,
-          edited: false,
+          id: 'category-meetings',
+          name: 'Meeting overload',
+          postItCount: 0,
+          postIts: [],
         },
       ],
+      uncategorised: {
+        postItCount: 2,
+        postIts: [
+          {
+            id: 'post-it-ada',
+            text: `Waiting three days for test data. ${UNBROKEN_POST_IT}`,
+            authorName: 'Ada Lovelace',
+            mine: false,
+            edited: false,
+          },
+          {
+            id: 'post-it-mine',
+            text: 'Handovers between teams, especially where nobody owns the piece in the middle',
+            authorName: 'Ida Andersson',
+            mine: true,
+            edited: true,
+          },
+        ],
+      },
     },
     {
       id: 'round-poll',
@@ -170,7 +193,33 @@ const ACTIVITIES = {
     },
   ],
   canRun: true,
+  /*
+   * The viewer of this fixture is an Admin, so the irreversible control is on the payload
+   * (facilitator-board S06 FR5). Deliberately a *second* flag rather than a reuse of `canRun`: a
+   * Board carrying both the sorting controls and the Admin's own is the widest this surface ever
+   * gets, and it is the one that has to hold at 375px.
+   */
+  canRemovePermanently: true,
   activityWatermark: '4171',
+};
+
+/**
+ * This Board's discarded Post-its (facilitator-board S05).
+ *
+ * The text carries the unbroken token deliberately: a discarded Post-it's text is free text somebody
+ * typed in a hurry, and the trace line beneath it carries two names and an instant, so this surface
+ * has three separate places a pasted identifier can push a 375px phone sideways.
+ */
+const DISCARDED_POST_ITS = {
+  discarded: [
+    {
+      id: 'post-it-discarded',
+      text: `Same point as the one above, written twice. ${UNBROKEN_POST_IT}`,
+      authorName: 'Erik Sandberg',
+      discardedByName: 'Ida Andersson',
+      discardedAt: '2026-09-15 14:32 UTC',
+    },
+  ],
 };
 
 /** The two-scalar poll the Session view runs. Stubbed unmoved, so no capture refetches under it. */
@@ -238,10 +287,30 @@ async function captureBoard(page: Page, width: number, label: string): Promise<v
   // Every post-it carries its author's name - that is what a post-it round is.
   await expect(page.getByTestId('post-it-by-post-it-ada')).toContainText('Ada Lovelace');
 
-  for (const testId of ['board-round-post-it', 'post-it-post-it-ada', 'compose-round-post-it']) {
+  /*
+   * Uncategorised is on the Board at every width and on both surfaces, with the server's count -
+   * it is where every post-it arrives, and it renders whether or not any Category exists
+   * (facilitator-board S02, FR2).
+   */
+  await expect(page.getByTestId('uncategorised-round-post-it')).toBeVisible();
+  await expect(page.getByTestId('uncategorised-count-round-post-it')).toHaveText('2 post-its');
+  await expect(page.getByTestId('category-name-category-tooling')).toContainText(UNBROKEN);
+  await expect(page.getByTestId('category-count-category-meetings')).toHaveText('0 post-its');
+
+  for (const testId of [
+    'board-round-post-it',
+    'post-it-post-it-ada',
+    'compose-round-post-it',
+    'regions-round-post-it',
+    'uncategorised-round-post-it',
+    'category-category-tooling',
+    'category-category-meetings',
+  ]) {
     await assertWithinViewport(page, testId, width);
   }
   await assertWrapsInsideItsBox(page, 'post-it-text-post-it-ada');
+  // A category name is free text too, and a region head is a grid item like any other.
+  await assertWrapsInsideItsBox(page, 'category-name-category-tooling');
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
 
   // The primary contribute control is genuinely tappable, and reachable one-handed on the narrowest
@@ -254,6 +323,306 @@ async function captureBoard(page: Page, width: number, label: string): Promise<v
     path: `screenshots/session-activities-board-${label}.png`,
     fullPage: true,
   });
+}
+
+/**
+ * The Facilitator's Category controls, at one width (facilitator-board S02 TI12).
+ *
+ * Offered only where the payload says the viewer runs the Session, so this runs on the organizer
+ * path alone - the attendee capture above proves the same Board renders without any of it.
+ *
+ * What is measured here is the thing the 375px case decides: four controls plus the create form,
+ * all present, all tappable, none of them reachable only by scrolling sideways. The control at the
+ * end of the order is `aria-disabled` rather than `disabled`, so it is still in the tab order and
+ * still has a layout box to measure.
+ */
+async function captureCategories(page: Page, width: number, label: string): Promise<void> {
+  /*
+   * **Both Categories**, because the two ends of the order carry different controls: the first
+   * region's "move up" is the one marked unavailable, and the last region's "move down" is - and
+   * measuring only the first would leave the end-of-order case unproven at every width.
+   *
+   * A width floor as well as a height floor: a control squeezed to a few pixels is inside the
+   * viewport and still unusable, which a containment assertion alone reports as a pass.
+   */
+  const controls = ['category-tooling', 'category-meetings'].flatMap((category) =>
+    ['rename', 'up', 'down', 'remove'].map((action) => `category-${action}-${category}`),
+  );
+  for (const testId of controls) {
+    await expect(page.getByTestId(testId)).toBeVisible();
+    const box = await page.getByTestId(testId).boundingBox();
+    expect(box!.height, testId).toBeGreaterThanOrEqual(40);
+    expect(box!.width, testId).toBeGreaterThanOrEqual(64);
+    expect(box!.x, testId).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, testId).toBeLessThanOrEqual(width + 1);
+  }
+
+  // Reorder names its own outcome, and the first region's "move up" is announced unavailable
+  // rather than removed - the control set does not change shape as a category moves.
+  await expect(page.getByTestId('category-down-category-tooling')).toHaveText(
+    'Move down – to position 2',
+  );
+  // Both ends, laid out: the first region's "move up" and the last region's "move down".
+  await expect(page.getByTestId('category-up-category-tooling')).toHaveAttribute(
+    'aria-disabled',
+    'true',
+  );
+  await expect(page.getByTestId('category-down-category-meetings')).toHaveAttribute(
+    'aria-disabled',
+    'true',
+  );
+  await expect(page.getByTestId('category-down-category-meetings')).toHaveText('Move down');
+  await expect(page.getByTestId('category-position-category-tooling')).toHaveText(
+    'Position 1 of 2',
+  );
+
+  /*
+   * Uncategorised carries none of them, and says so in words.
+   *
+   * Scoped to the *category* controls rather than to every button in the region: a post-it in
+   * Uncategorised still offers its own author the correct-and-remove pair, which is a different
+   * rule and belongs to whoever wrote it.
+   */
+  expect(
+    await page
+      .getByTestId('uncategorised-round-post-it')
+      .locator(
+        '[data-testid^="category-rename-"], [data-testid^="category-up-"], ' +
+          '[data-testid^="category-down-"], [data-testid^="category-remove-"]',
+      )
+      .count(),
+  ).toBe(0);
+  await expect(page.getByTestId('uncategorised-note-round-post-it')).toContainText(
+    'renamed, reordered or removed',
+  );
+
+  // The create form is present at every width, in the same place.
+  for (const testId of ['new-category-round-post-it', 'new-category-add-round-post-it']) {
+    await assertWithinViewport(page, testId, width);
+  }
+  const add = await page.getByTestId('new-category-add-round-post-it').boundingBox();
+  expect(add!.height, 'the create control').toBeGreaterThanOrEqual(40);
+
+  // The occupied-category removal question, which is the widest thing this surface opens.
+  await page.getByTestId('category-remove-category-tooling').click();
+  const prompt = page.getByTestId('category-removal-category-tooling');
+  await expect(prompt).toBeVisible();
+  await expect(page.getByTestId('category-removal-count-category-tooling')).toContainText(
+    '1 post-it',
+  );
+  await assertWithinViewport(page, 'category-removal-category-tooling', width);
+  await assertWithinViewport(page, 'category-destination-category-tooling', width);
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+  await page.screenshot({
+    path: `screenshots/session-activities-categories-${label}.png`,
+    fullPage: true,
+  });
+
+  await page.getByTestId('category-removal-cancel-category-tooling').click();
+  await expect(prompt).toBeHidden();
+}
+
+/**
+ * The Facilitator's placement control, at one width (facilitator-board S03 TI08).
+ *
+ * The 375px case is the one that decides the interaction model
+ * (`docs/wireframes/facilitator-board-and-categorisation/design-decisions.md` → "The non-drag
+ * placement interaction model"), and it decides it here: a destination list and a commit control on
+ * every Post-it, in Uncategorised and in every Category alike, both tappable, neither reachable only
+ * by scrolling sideways.
+ *
+ * Measured on **two** Post-its in two different regions, because the control's own label carries the
+ * Post-it's text - free text somebody typed in a hurry, and the one with the pasted identifier in it
+ * is the one that pushes a grid item sideways if the label is given a width it can overflow.
+ */
+async function captureSorting(page: Page, width: number, label: string): Promise<void> {
+  const sorting = ['post-it-ada', 'post-it-bo'];
+
+  for (const postIt of sorting) {
+    await expect(page.getByTestId(`move-${postIt}`)).toBeVisible();
+
+    // The destination list is a real control, not a few pixels of it.
+    const select = await page.getByTestId(`move-to-${postIt}`).boundingBox();
+    expect(select!.height, `the destination list on ${postIt}`).toBeGreaterThanOrEqual(40);
+    expect(select!.width, `the destination list on ${postIt}`).toBeGreaterThanOrEqual(64);
+    expect(select!.x, postIt).toBeGreaterThanOrEqual(0);
+    expect(select!.x + select!.width, postIt).toBeLessThanOrEqual(width + 1);
+
+    // And so is the control that commits it - the one reached one-handed on the narrowest phone.
+    const commit = await page.getByTestId(`move-submit-${postIt}`).boundingBox();
+    expect(commit!.height, `the move control on ${postIt}`).toBeGreaterThanOrEqual(40);
+    expect(commit!.width, `the move control on ${postIt}`).toBeGreaterThanOrEqual(64);
+    expect(commit!.x + commit!.width, postIt).toBeLessThanOrEqual(width + 1);
+
+    await assertWithinViewport(page, `move-${postIt}`, width);
+  }
+
+  /*
+   * The label names the Post-it and the act, and it wraps inside its own box - it carries free text,
+   * so an ancestor clipping it would cut a Post-it's identity out of the one control that names it.
+   */
+  const naming = page.locator('label[for="move-to-post-it-ada"]');
+  await expect(naming).toContainText('Move “');
+  const labelOverflow = await naming.evaluate((node) => {
+    const element = node as HTMLElement;
+    return element.scrollWidth - element.clientWidth;
+  });
+  expect(labelOverflow, 'the placement label should wrap rather than overflow').toBeLessThanOrEqual(
+    1,
+  );
+
+  // Uncategorised and every Category are offered by name, with the current home marked in words.
+  const options = await page.getByTestId('move-to-post-it-ada').locator('option').allTextContents();
+  expect(options[0]).toContain('Uncategorised');
+  expect(options.some((option) => option.includes('where it is now'))).toBe(true);
+  expect(options.length).toBeGreaterThan(1);
+
+  // No drag affordance at any width, 1280px included.
+  expect(await page.locator('[draggable]').count()).toBe(0);
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+  await page.screenshot({
+    path: `screenshots/session-activities-sorting-${label}.png`,
+    fullPage: true,
+  });
+}
+
+/**
+ * The Facilitator's Discard control and the surface a Discard is reversed from (S05 TI11).
+ *
+ * **Two surfaces, one capture**, because the second is only reachable through the first: the
+ * per-Post-it Discard control sits beside the placement controls on every Post-it, and the entry
+ * point to the discarded list is permanent on the Board whether or not anything has been discarded
+ * (`docs/wireframes/facilitator-board-and-categorisation/design-decisions.md` -> "The discarded
+ * Post-its surface").
+ *
+ * The list is the harder of the two at 375px: each entry carries free text, its author's name, and a
+ * trace line naming a second person and an instant, and the restore control's own label is the
+ * longest on the surface - `Restore to Uncategorised`.
+ */
+async function captureDiscarded(page: Page, width: number, label: string): Promise<void> {
+  // Discard is offered on every Post-it, wherever it sits - Uncategorised and every Category alike.
+  for (const postIt of ['post-it-ada', 'post-it-bo']) {
+    const box = await page.getByTestId(`post-it-discard-${postIt}`).boundingBox();
+    expect(box!.height, `the discard control on ${postIt}`).toBeGreaterThanOrEqual(40);
+    expect(box!.x, postIt).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, postIt).toBeLessThanOrEqual(width + 1);
+  }
+
+  // The entry point, always here and carrying the count.
+  const entry = page.getByTestId('discarded-toggle-round-post-it');
+  await expect(entry).toBeVisible();
+  await expect(entry).toContainText('Discarded post-its (1)');
+  const entryBox = await entry.boundingBox();
+  expect(entryBox!.height, 'the discarded post-its entry point').toBeGreaterThanOrEqual(40);
+  expect(entryBox!.x + entryBox!.width, 'the entry point').toBeLessThanOrEqual(width + 1);
+
+  await entry.click();
+  await expect(page.getByTestId('discarded-panel-round-post-it')).toBeVisible();
+
+  // The trace, in full: the author, then who discarded it and when.
+  await expect(page.getByTestId('discarded-by-post-it-discarded')).toContainText('Erik Sandberg');
+  await expect(page.getByTestId('discarded-trace-post-it-discarded')).toContainText(
+    'Discarded by Ida Andersson',
+  );
+
+  // Free text and a trace line, each wrapping inside its own box rather than pushing the page.
+  for (const testId of [
+    'discarded-item-post-it-discarded',
+    'discarded-trace-post-it-discarded',
+    'discarded-rules-round-post-it',
+  ]) {
+    await assertWrapsInsideItsBox(page, testId);
+    await assertWithinViewport(page, testId, width);
+  }
+
+  // The restore control is genuinely tappable on the narrowest phone, and names its destination.
+  const restore = page.getByTestId('discarded-restore-post-it-discarded');
+  await expect(restore).toContainText('Restore to Uncategorised');
+  const restoreBox = await restore.boundingBox();
+  expect(restoreBox!.height, 'the restore control').toBeGreaterThanOrEqual(40);
+  expect(restoreBox!.x, 'the restore control').toBeGreaterThanOrEqual(0);
+  expect(restoreBox!.x + restoreBox!.width, 'the restore control').toBeLessThanOrEqual(width + 1);
+
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+  await page.screenshot({
+    path: `screenshots/session-activities-discarded-${label}.png`,
+    fullPage: true,
+  });
+
+  // Left as it was found: the surface is a place that can be left and returned to.
+  await entry.click();
+}
+
+/**
+ * The Admin's **Permanent Removal** control and its confirmation (S06 TI08, FR5).
+ *
+ * The hardest thing on this surface at 375px, and for a reason nothing before it had: the
+ * confirmation is an in-place block that opens *inside* a region, under a Post-it, beside the
+ * region's own head - so at the narrowest width three wrapping blocks stack in a column that is
+ * already indented twice. A modal would have dodged that and hidden the Post-it being decided
+ * about, which is precisely the thing the person needs to read while deciding.
+ *
+ * It is opened on the Post-it whose text is the unbroken, non-hyphenated run: that card is what
+ * sits immediately above the open confirmation, and it is the one that pushes a phone sideways if
+ * anything on this path sets a width of its own.
+ */
+async function capturePermanentRemoval(page: Page, width: number, label: string): Promise<void> {
+  /*
+   * Offered on every Post-it, wherever it sits - Uncategorised and every Category alike, exactly as
+   * Discard is. `post-it-bo` is the one inside the Category whose name carries the unbroken token,
+   * so its control is the one measured against a region head that is already at full stretch.
+   */
+  for (const postIt of ['post-it-ada', 'post-it-bo']) {
+    const box = await page.getByTestId(`post-it-permanent-removal-${postIt}`).boundingBox();
+    expect(box!.height, `the removal control on ${postIt}`).toBeGreaterThanOrEqual(40);
+    expect(box!.x, postIt).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, postIt).toBeLessThanOrEqual(width + 1);
+  }
+
+  await page.getByTestId('post-it-permanent-removal-post-it-ada').click();
+  const confirmation = page.getByTestId('permanent-removal-post-it-ada');
+  await expect(confirmation).toBeVisible();
+
+  // It names the author and says the act cannot be undone - the two things FR5 requires of it.
+  await expect(confirmation).toContainText('Ada Lovelace');
+  await expect(page.getByTestId('permanent-removal-warning-post-it-ada')).toContainText(
+    'cannot be undone',
+  );
+
+  // Every block of it wraps inside its own box rather than pushing the page.
+  for (const testId of [
+    'permanent-removal-post-it-ada',
+    'permanent-removal-warning-post-it-ada',
+    'post-it-text-post-it-ada',
+  ]) {
+    await assertWrapsInsideItsBox(page, testId);
+    await assertWithinViewport(page, testId, width);
+  }
+
+  // Both controls are genuinely tappable on the narrowest phone, and neither is clipped.
+  for (const testId of [
+    'permanent-removal-confirm-post-it-ada',
+    'permanent-removal-cancel-post-it-ada',
+  ]) {
+    const box = await page.getByTestId(testId).boundingBox();
+    expect(box!.height, testId).toBeGreaterThanOrEqual(40);
+    expect(box!.x, testId).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, testId).toBeLessThanOrEqual(width + 1);
+  }
+
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+  await page.screenshot({
+    path: `screenshots/session-activities-permanent-removal-${label}.png`,
+    fullPage: true,
+  });
+
+  // Dismissed: nothing is sent, and the surface is left as it was found.
+  await page.getByTestId('permanent-removal-cancel-post-it-ada').click();
+  await expect(page.getByTestId('permanent-removal-post-it-ada')).toHaveCount(0);
 }
 
 /**
@@ -337,6 +706,9 @@ async function stubApi(page: Page): Promise<void> {
     `**/api/conferences/${CONFERENCE_ID}/sessions/${SESSION_ID}/activities/watermark`,
     (route) => route.fulfill(json(ACTIVITY_WATERMARK)),
   );
+  await page.route('**/rounds/round-post-it/discarded-post-its', (route) =>
+    route.fulfill(json(DISCARDED_POST_ITS)),
+  );
   await page.route(`**/api/conferences/${CONFERENCE_ID}/sessions/${SESSION_ID}`, (route) =>
     route.fulfill(json(ACTIVITIES)),
   );
@@ -410,6 +782,10 @@ for (const viewport of VIEWPORTS) {
     });
 
     await captureBoard(page, viewport.width, `organizer-${viewport.name}`);
+    await captureCategories(page, viewport.width, viewport.name);
+    await captureSorting(page, viewport.width, viewport.name);
+    await captureDiscarded(page, viewport.width, viewport.name);
+    await capturePermanentRemoval(page, viewport.width, viewport.name);
     // The organizer facilitates this Session, so the running tally is theirs to watch.
     await capturePoll(page, viewport.width, `organizer-${viewport.name}`, true);
 
@@ -513,6 +889,7 @@ async function stubAttendeeApi(page: Page): Promise<void> {
       json({
         ...ACTIVITIES,
         canRun: false,
+        canRemovePermanently: false,
         rounds: ACTIVITIES.rounds.map((round) =>
           round.kind === 'VotingRound' && round.state === 'open'
             ? { ...round, tally: undefined }
@@ -598,17 +975,20 @@ const QUEUE_ACTIVITIES = {
     round.id === 'round-post-it'
       ? {
           ...round,
-          postIts: [
-            ...(round.postIts ?? []),
-            {
-              id: 'post-it-late',
-              text: `Sent from the car park once the signal came back. ${UNBROKEN_POST_IT}`,
-              authorName: 'Ida Andersson',
-              mine: true,
-              edited: false,
-              arrivedAfterClose: true,
-            },
-          ],
+          uncategorised: {
+            postItCount: (round.uncategorised?.postItCount ?? 0) + 1,
+            postIts: [
+              ...(round.uncategorised?.postIts ?? []),
+              {
+                id: 'post-it-late',
+                text: `Sent from the car park once the signal came back. ${UNBROKEN_POST_IT}`,
+                authorName: 'Ida Andersson',
+                mine: true,
+                edited: false,
+                arrivedAfterClose: true,
+              },
+            ],
+          },
         }
       : round,
   ),
@@ -778,6 +1158,354 @@ for (const viewport of VIEWPORTS) {
 
     await page.screenshot({
       path: `screenshots/session-activities-queued-${viewport.name}.png`,
+      fullPage: true,
+    });
+  });
+}
+
+// ---------- facilitator-board S03 TI08: the sorting surface at the design ceiling --------------
+
+/**
+ * The Board at the bound the layout must not break: ~200 Post-its across 20 Categories.
+ *
+ * The ceiling is the **bound**, not the case the surface is tuned for
+ * (`prd.md#non-functional-requirements`, `docs/wireframes/.../design-decisions.md`). A typical
+ * Board holds nearer ten Post-its per Category; what this capture asks is whether the Facilitator's
+ * own surface still holds together at the number the PRD names - twenty region heads, twenty
+ * position sentences, four Category controls each, and a placement control on every one of two
+ * hundred Post-its, each of whose destination lists carries twenty-one options.
+ *
+ * Its own test rather than an extra fixture on the one above, because it is a different question:
+ * that one asks whether free text pushes the page sideways, and this one asks whether *volume*
+ * does. Both are the 375px case in the end.
+ */
+const CEILING_CATEGORIES = 20;
+const CEILING_POST_ITS = 200;
+
+const CEILING_NAMES = [
+  'Handovers between teams',
+  'Tooling and continuous integration',
+  'Meeting overload',
+  'Recognition and thanks',
+  'Onboarding',
+  'Test data and staging',
+  'Release process',
+  'Documentation',
+  'On-call and support',
+  'Hiring and growth',
+  'Planning and estimates',
+  'Customer feedback loops',
+  'Technical debt',
+  'Security and compliance',
+  'Remote and hybrid working',
+  'Cross-team dependencies',
+  'Product discovery',
+  'Incident follow-ups',
+  'Team rituals',
+  'Everything else',
+];
+
+const CEILING_AUTHORS = ['Ada Lovelace', 'Bo Nilsson', 'Ida Andersson', 'Priya Raman'];
+
+/**
+ * Twenty Categories and two hundred Post-its, distributed unevenly on purpose.
+ *
+ * An even spread would give every region the same height and hide the case a real Board produces:
+ * one Category collecting most of what the room wrote while its neighbour holds two. The first
+ * region also carries the unbroken token, because a placement label repeats a Post-it's text and a
+ * pasted identifier inside one is what pushes a grid item - and the page - sideways.
+ */
+function ceilingBoard(): {
+  categories: {
+    id: string;
+    name: string;
+    postItCount: number;
+    postIts: Record<string, unknown>[];
+  }[];
+  uncategorised: { postItCount: number; postIts: Record<string, unknown>[] };
+} {
+  let issued = 0;
+  const postIt = (index: number): Record<string, unknown> => {
+    const author = CEILING_AUTHORS[index % CEILING_AUTHORS.length]!;
+    return {
+      id: `ceiling-post-it-${index}`,
+      text:
+        index === 0
+          ? `Waiting three days for test data. ${UNBROKEN_POST_IT}`
+          : `Idea number ${index}: something the room wrote down in a hurry and wants sorted.`,
+      authorName: author,
+      mine: index % 7 === 0,
+      edited: index % 11 === 0,
+      arrivedAfterClose: false,
+    };
+  };
+
+  // Uneven by design: 1, 2, 3, … up to the ceiling, with the remainder left in Uncategorised.
+  const categories = CEILING_NAMES.map((name, position) => {
+    const held = Math.min(position + 1, CEILING_POST_ITS - issued);
+    const postIts = Array.from({ length: Math.max(held, 0) }, () => postIt(issued++));
+    return {
+      id: `ceiling-category-${position}`,
+      name: position === 0 ? `${name} ${UNBROKEN}` : name,
+      postItCount: postIts.length,
+      postIts,
+    };
+  });
+
+  const rest = Array.from({ length: CEILING_POST_ITS - issued }, () => postIt(issued++));
+  return {
+    categories,
+    uncategorised: { postItCount: rest.length, postIts: rest },
+  };
+}
+
+const CEILING_ACTIVITIES = {
+  ...ACTIVITIES,
+  rounds: [
+    {
+      id: 'round-post-it',
+      kind: 'PostItRound',
+      prompt: 'What slowed us down this quarter?',
+      state: 'closed',
+      textMaxLength: 280,
+      ...ceilingBoard(),
+    },
+  ],
+};
+
+for (const viewport of VIEWPORTS) {
+  test(`the sorting surface holds at the design ceiling at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await stubApi(page);
+    await page.route(`**/api/conferences/${CONFERENCE_ID}/sessions/${SESSION_ID}`, (route) =>
+      route.fulfill(json(CEILING_ACTIVITIES)),
+    );
+
+    await page.goto('/');
+    await page.getByText('Autumn Offsite').click();
+    await expect(page.getByTestId('schedule')).toBeVisible();
+    await page.getByTestId(`activities-${SESSION_ID}`).click();
+    await expect(page.getByTestId('board-round-post-it')).toBeVisible();
+
+    // The Board really is at the ceiling: twenty Categories plus Uncategorised, 200 Post-its, and
+    // a placement control on every one of them.
+    expect(await page.locator('[data-testid^="category-name-"]').count()).toBe(CEILING_CATEGORIES);
+    expect(await page.locator('[data-testid^="post-it-text-"]').count()).toBe(CEILING_POST_ITS);
+    expect(await page.locator('[data-testid^="move-submit-"]').count()).toBe(CEILING_POST_ITS);
+    // Every destination list offers Uncategorised and all twenty Categories.
+    expect(await page.getByTestId('move-to-ceiling-post-it-0').locator('option').count()).toBe(
+      CEILING_CATEGORIES + 1,
+    );
+
+    /*
+     * Nothing is clipped horizontally, and nothing overflows its own box - checked on the region
+     * head and the placement label that carry the unbroken token, which are the two places volume
+     * and free text meet.
+     */
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    for (const testId of [
+      'board-round-post-it',
+      'regions-round-post-it',
+      'uncategorised-round-post-it',
+      'category-ceiling-category-0',
+      'category-ceiling-category-19',
+      'move-ceiling-post-it-0',
+    ]) {
+      await assertWithinViewport(page, testId, viewport.width);
+    }
+    await assertWrapsInsideItsBox(page, 'category-name-ceiling-category-0');
+    await assertWrapsInsideItsBox(page, 'post-it-text-ceiling-post-it-0');
+
+    // The primary sorting control is still a real control at the last Category on the Board, not a
+    // sliver squeezed out by the nineteen above it.
+    const last = await page.getByTestId('move-submit-ceiling-post-it-199').boundingBox();
+    expect(last!.height, 'the move control on the last post-it').toBeGreaterThanOrEqual(40);
+    expect(last!.x + last!.width).toBeLessThanOrEqual(viewport.width + 1);
+
+    await page.screenshot({
+      path: `screenshots/session-activities-ceiling-${viewport.name}.png`,
+      fullPage: true,
+    });
+  });
+}
+
+// ---------- S08 TI09: the Attendee's Board at the design ceiling ----------
+
+/**
+ * The same twenty Categories and two hundred Post-its, on the surface that has to hold them on a
+ * phone (S08 OC01, `prd.md#non-functional-requirements`).
+ *
+ * The Facilitator's ceiling capture above proves the *sorting* surface holds; this one proves the
+ * surface with no sorting controls at all does, which is not the same layout: every card loses its
+ * placement select, its Move button and its Discard, so the regions are shorter, denser and pack
+ * differently, and the widest thing left on a card is a Post-it's own text.
+ *
+ * `canRun: false` and `canRemovePermanently: false` - the server's answers, which is the only thing
+ * that decides what is offered here.
+ */
+const ATTENDEE_CEILING = {
+  ...CEILING_ACTIVITIES,
+  canRun: false,
+  canRemovePermanently: false,
+};
+
+for (const viewport of VIEWPORTS) {
+  test(`the attendee's board holds at the design ceiling at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await stubAttendeeApi(page);
+    await page.route(`**/api/conferences/${CONFERENCE_ID}/sessions/${SESSION_ID}`, (route) =>
+      route.fulfill(json(ATTENDEE_CEILING)),
+    );
+
+    await page.goto('/');
+    await expect(page.getByTestId('attendee-schedule')).toBeVisible();
+    await page.getByTestId(`attendee-activities-${SESSION_ID}`).click();
+    await expect(page.getByTestId('board-round-post-it')).toBeVisible();
+
+    // Every Category and Uncategorised are there, with every Post-it under its author's name.
+    expect(await page.locator('[data-testid^="category-name-"]').count()).toBe(CEILING_CATEGORIES);
+    expect(await page.locator('[data-testid^="post-it-text-"]').count()).toBe(CEILING_POST_ITS);
+    expect(await page.locator('[data-testid^="post-it-by-"]').count()).toBe(CEILING_POST_ITS);
+    await expect(page.getByTestId('uncategorised-round-post-it')).toBeVisible();
+
+    /*
+     * And not one lever on any of them - on this Member's own Post-its as much as anyone else's.
+     * The ceiling fixture marks every seventh Post-it `mine`, so this is asserted over a Board that
+     * really does hold some of theirs.
+     */
+    expect(await page.locator('[data-testid^="move-"]').count()).toBe(0);
+    expect(await page.locator('[data-testid^="post-it-discard-"]').count()).toBe(0);
+    expect(await page.locator('[data-testid^="post-it-permanent-removal-"]').count()).toBe(0);
+    expect(await page.locator('[data-testid^="category-controls-"]').count()).toBe(0);
+    await expect(page.getByTestId('new-category-round-post-it')).toHaveCount(0);
+
+    // How current it is, beside it rather than instead of it.
+    await expect(page.getByTestId('activities-age')).toBeVisible();
+
+    /*
+     * Nothing is clipped horizontally, and nothing overflows its own box - measured on each
+     * element's own `scrollWidth` rather than the page's, which an ancestor that clips would
+     * absorb (`docs/LEARNINGS.md#css--responsive-layout`).
+     */
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    for (const testId of [
+      'session-activities',
+      'board-round-post-it',
+      'regions-round-post-it',
+      'uncategorised-round-post-it',
+      'category-ceiling-category-0',
+      'category-ceiling-category-19',
+      'post-it-ceiling-post-it-0',
+      'activities-age',
+    ]) {
+      await assertWithinViewport(page, testId, viewport.width);
+    }
+    await assertWrapsInsideItsBox(page, 'category-name-ceiling-category-0');
+    await assertWrapsInsideItsBox(page, 'post-it-text-ceiling-post-it-0');
+    await assertWrapsInsideItsBox(page, 'post-it-by-ceiling-post-it-0');
+
+    await page.screenshot({
+      path: `screenshots/session-activities-attendee-ceiling-${viewport.name}.png`,
+      fullPage: true,
+    });
+  });
+}
+
+// ---------- the Display Link controls (S04 TI13) ----------
+
+/**
+ * A projected-board link is a **43-character token on the end of an origin**: one unbroken string
+ * with nowhere to wrap, on a surface that has to hold at 375px.
+ *
+ * That is exactly the shape that pushes a phone sideways, and it is not hypothetical here - it is
+ * every link this feature ever produces. The failure being captured is a facilitator who cannot
+ * reach Revoke without scrolling the page horizontally while a room is watching the wall.
+ */
+const DISPLAY_TOKEN = 'wJq3B7nVYt1sK0pLmXcZaR8dEfGhIjKlMnOpQrStUvW';
+
+const DISPLAY_LINK_ACTIVITIES = {
+  ...ACTIVITIES,
+  rounds: [
+    {
+      id: 'round-post-it',
+      kind: 'PostItRound',
+      prompt: LONG_PROMPT,
+      state: 'closed',
+      textMaxLength: 280,
+      categories: [
+        {
+          id: 'cat-tooling',
+          name: 'Tooling',
+          postItCount: 1,
+          postIts: [
+            {
+              id: 'p-1',
+              text: 'Review queue backed up on Fridays',
+              authorName: 'Ada Lovelace',
+              mine: false,
+              edited: false,
+              arrivedAfterClose: false,
+            },
+          ],
+        },
+      ],
+      uncategorised: { postItCount: 0, postIts: [] },
+    },
+  ],
+};
+
+for (const viewport of VIEWPORTS) {
+  test(`the display link controls hold at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await stubApi(page);
+    await page.route(`**/api/conferences/${CONFERENCE_ID}/sessions/${SESSION_ID}`, (route) =>
+      route.fulfill(json(DISPLAY_LINK_ACTIVITIES)),
+    );
+    await page.route('**/rounds/round-post-it/display-link', (route) =>
+      route.fulfill(
+        json({ displayLink: { token: DISPLAY_TOKEN, issuedAt: '2026-09-15T09:00:00.000000Z' } }),
+      ),
+    );
+
+    await page.goto('/');
+    await page.getByText('Autumn Offsite').click();
+    await expect(page.getByTestId('schedule')).toBeVisible();
+    await page.getByTestId(`activities-${SESSION_ID}`).click();
+    await expect(page.getByTestId('display-link-round-post-it')).toBeVisible();
+
+    // The whole URL is on screen and inside its own box, at every width.
+    const field = page.getByTestId('display-link-url-round-post-it');
+    await expect(field).toHaveValue(new RegExp(`/display/${DISPLAY_TOKEN}$`));
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    for (const testId of [
+      'display-link-round-post-it',
+      'display-link-url-round-post-it',
+      'display-link-issued-round-post-it',
+      'display-link-revoke-round-post-it',
+    ]) {
+      await assertWithinViewport(page, testId, viewport.width);
+    }
+
+    /*
+     * The controls are real controls at 375px, not slivers: a facilitator taking a room screen back
+     * is doing it one-handed, standing up, in front of people.
+     */
+    for (const testId of [
+      'display-link-copy-round-post-it',
+      'display-link-revoke-round-post-it',
+      'display-link-reissue-round-post-it',
+    ]) {
+      const box = await page.getByTestId(testId).boundingBox();
+      expect(box!.height, testId).toBeGreaterThanOrEqual(40);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+    }
+
+    await page.screenshot({
+      path: `screenshots/session-activities-display-link-${viewport.name}.png`,
       fullPage: true,
     });
   });

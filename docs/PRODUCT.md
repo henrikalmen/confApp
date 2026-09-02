@@ -80,7 +80,6 @@ There is no incumbent tool to displace. The alternative today is email, slides, 
 ## Open Questions
 
 - What format does the report take – exportable PDF, a shareable in-app link, or both?
-- Are post-it categories defined during conference setup, or created ad hoc by the organizer while sorting?
 - Do self-selected workshop groups have capacity limits, and what happens when an attendee picks a full group?
 - Can attendees see poll results themselves, or only the facilitator and the report?
 - Area to revisit: how far confApp follows an action point after the conference – what would sharpen it is knowing whether leadership tracks follow-ups inside the app or exports them into an existing process.
@@ -89,6 +88,8 @@ There is no incumbent tool to displace. The alternative today is email, slides, 
 
 | Decision | Rationale | Date |
 |----------|-----------|------|
+| Post-it categories are created on the Board itself, during or after the Session – not at conference setup, and not in a separate later sorting pass | Resolves the standing REQ-015 vs REQ-031/REQ-038 contradiction: sorting is one continuous activity on one Board. Follows the 2026-08-16 decision that sorting is a group activity visible to the room. See `docs/specs/facilitator-board-and-categorisation/requirements-clarification.md` | 2026-08-30 |
+| The projected Board View is reached by an unauthenticated, revocable per-Round display link | A room machine is a shared device, which the session model assumes away; a read-only link keeps a personal Workspace session off shared hardware | 2026-08-30 |
 | Internal conference app for company-run 1–4 day conferences | Core product identity, confirmed by the user | 2026-08-16 |
 | Reused for many conferences over time, not a single event | Setup flow is reusable; past reports stay accessible as an archive | 2026-08-16 |
 | Three roles: Admin, Presenter/Facilitator, Attendee | A facilitator needs to run their own session without conference-wide admin rights | 2026-08-16 |

@@ -2,6 +2,8 @@ declare global {
   interface Window {
     __CONFAPP_CONFIG__?: {
       apiBaseUrl?: string;
+      /** Where *this SPA* is served from, for building links other machines have to open. */
+      webBaseUrl?: string;
       auth?: {
         clientId?: string;
         authorizationEndpoint?: string;
@@ -27,6 +29,34 @@ export function resolveApiBaseUrl(w: ConfigWindow = window): string {
   const base = configured && configured !== '' ? configured : '/api';
   // Trailing slashes would produce //health when joined with a path.
   return base.replace(/\/+$/, '');
+}
+
+/**
+ * The origin **another machine** can open this SPA at – not the origin this code is running at.
+ *
+ * The two differ exactly where it matters most. Inside the Capacitor shells the WebView origin is
+ * `capacitor://localhost` (iOS) or `https://localhost` (Android) – see `web/capacitor.config.ts`,
+ * which records both – so a Display Link built from `location.origin` on a Facilitator's phone
+ * comes out as `capacitor://localhost/display/<token>`: a URL no room machine can open, in a field
+ * that looks perfectly plausible. That is the same reason `resolveApiBaseUrl` exists rather than
+ * assuming same-origin (review 2026-08-31, finding 2).
+ *
+ * `null` means "this build cannot state a URL another machine could open". The caller must say so
+ * rather than render a broken one – silently emitting an unusable link is the failure being
+ * prevented, and a wrong URL is worse than an absent one because nobody checks it until the room
+ * is waiting.
+ *
+ * The fallback to `location.origin` is deliberately narrow: an http(s) origin only. A browser
+ * served over http or https genuinely is reachable at its own origin, which keeps local
+ * development and the composed stack configuration-free; every other scheme is a shell.
+ */
+export function resolveWebBaseUrl(w: ConfigWindow = window): string | null {
+  const configured = w.__CONFAPP_CONFIG__?.webBaseUrl?.trim();
+  if (configured !== undefined && configured !== '') return configured.replace(/\/+$/, '');
+
+  if (typeof location === 'undefined') return null;
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return null;
+  return location.origin;
 }
 
 export interface WebAuthConfig {

@@ -255,12 +255,34 @@ describe('the round routes', () => {
   it('routes every decision through requireConferenceRole and requireMembership', () => {
     expect(code).toMatch(/authorization\.requireMembership\(/);
 
-    // No role other than PresenterFacilitator is ever asked for here.
+    /*
+     * Two roles are asked for in this file and no more.
+     *
+     * `PresenterFacilitator` is the sorting-authority gate every write on this surface goes
+     * through. `Admin` is S06's Permanent Removal and nothing else: FR5 says a Session Assignment
+     * does not confer the irreversible act, so the second question exists precisely because the
+     * first one cannot answer it. A third role name appearing here would be a new authority
+     * concept and has to be argued for, which is what this assertion makes somebody do.
+     */
     const roles = [...code.matchAll(/requireConferenceRole\([\s\S]{0,80}?'(\w+)'/g)].map(
       (match) => match[1],
     );
     expect(roles.length).toBeGreaterThan(0);
-    expect(new Set(roles)).toEqual(new Set(['PresenterFacilitator']));
+    expect(new Set(roles)).toEqual(new Set(['PresenterFacilitator', 'Admin']));
+
+    /*
+     * And the Admin question is asked in exactly **one** function, which is what keeps it from
+     * spreading into a second authority path. Everything that needs the answer - the removal route
+     * and the capability flag on the Session read - reads it from `holdsConferenceAdmin`, exactly
+     * as `mayRun` and the tally gate both read `holdsAssignment`.
+     */
+    const adminAsks = [...code.matchAll(/requireConferenceRole\([\s\S]{0,80}?'Admin'/g)];
+    expect(adminAsks.length, 'the Admin check should be asked in one place').toBe(1);
+    const asked = code.slice(0, adminAsks[0]!.index);
+    expect(
+      asked.slice(asked.lastIndexOf('async function ')),
+      'the Admin check belongs to holdsConferenceAdmin',
+    ).toContain('async function holdsConferenceAdmin(');
 
     /*
      * The Session narrowing, asserted **per function** rather than once for the file. A single
@@ -305,8 +327,14 @@ describe('the round routes', () => {
       );
     }
 
-    // The draft read is the one place a conference-wide check is correct: a draft's rounds are for
-    // the people composing it, whichever session they hold.
+    /*
+     * Two conference-wide checks are correct, and they are the only two.
+     *
+     * The draft read: a draft's rounds are for the people composing it, whichever session they
+     * hold. And `holdsConferenceAdmin`, which is conference-wide *because* that is the requirement
+     * - narrowing it to a Session is precisely the bug FR5 names, since a Session Assignment would
+     * then confer the irreversible act.
+     */
     expect(code).toMatch(/isDraft\(conference\)[\s\S]{0,240}requireConferenceRole\(/);
   });
 

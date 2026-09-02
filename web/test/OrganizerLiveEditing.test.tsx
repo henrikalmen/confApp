@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SchedulePanel } from '../src/schedule/SchedulePanel.tsx';
 import { ConferenceDetail } from '../src/components/ConferenceDetail.tsx';
@@ -96,6 +96,39 @@ function routeFetch(routes: Record<string, Route | (() => Route)>, sent: Sent[])
 
 const SCHEDULE_PATH = `GET /conferences/${CONFERENCE_ID}/schedule/organizer`;
 const EDIT_PATH = `PATCH /conferences/${CONFERENCE_ID}/sessions/${KEYNOTE.id}`;
+
+/**
+ * Lets React run the effects of the commit that has already happened.
+ *
+ * **This is what a dispatched tick needs in front of it, and the reason is measured rather than
+ * guessed.** `findBy*` resolves as soon as the node exists, which is a microtask after the commit -
+ * but `useEffect` bodies are flushed on a *later* task, and `poll/use-watermark-poll.ts` registers
+ * its `focus`, `visibilitychange` and `online` listeners in one of them. A `focus` dispatched in
+ * between reaches nothing at all, the loop's first real chance is its own five-second interval, and
+ * a wait shorter than that expires with the surface never having been asked to catch up. Wrapping
+ * the dispatch in `act` does not help: `act` runs its callback *before* it flushes anything.
+ *
+ * Measured on a 250-iteration replica of the refetch test below, on a loaded machine: bare dispatch
+ * and `act`-wrapped dispatch each failed once in 250 with no listener registered at dispatch time
+ * and no watermark ever read; with this flush in front, 250 of 250 had the listener and the read.
+ * The satisfied cases take about 60 ms, so nothing here is waiting on a cadence.
+ *
+ * That is `web/test/setup.ts`'s note about a wait expiring "four seconds before the next tick would
+ * have satisfied it", reaching this file through `vi.waitFor` - whose own one-second default is
+ * **not** the 15 s that `configure({ asyncUtilTimeout })` sets, because that configures Testing
+ * Library's `waitFor` and nothing else. The budget is deliberately left under the shipped cadence
+ * so that a tick going astray fails here rather than being quietly rescued by the interval.
+ */
+async function settleEffects(): Promise<void> {
+  await act(async () => {});
+}
+
+/** One tick of the shipped poll loop, provoked through the `focus` event it registers for. */
+async function tick(): Promise<void> {
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+}
 
 beforeEach(() => {
   window.__CONFAPP_CONFIG__ = { apiBaseUrl: '/api', googleClientId: 'x', googleRedirectUri: 'x' };
@@ -810,9 +843,10 @@ describe('the organizer schedule catching up with a co-organizer', () => {
       <SchedulePanel conferenceId={CONFERENCE_ID} readOnly={false} lifecycleState="published" />,
     );
     await screen.findByTestId(`session-${KEYNOTE.id}`);
+    await settleEffects();
 
     moved = true;
-    window.dispatchEvent(new Event('focus'));
+    await tick();
 
     // Read on the rendered schedule, not on a request count.
     await vi.waitFor(() =>
@@ -829,9 +863,10 @@ describe('the organizer schedule catching up with a co-organizer', () => {
       },
     });
     await screen.findByTestId('session-form');
+    await settleEffects();
 
     const before = sent.length;
-    window.dispatchEvent(new Event('focus'));
+    await tick();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Not even the cheap watermark read: an open editor means this surface asks nothing at all.

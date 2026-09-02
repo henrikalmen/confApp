@@ -148,12 +148,33 @@ interface WirePostIt {
   arrivedAfterClose: boolean;
 }
 
+/**
+ * One Category on a Board, as the grouped Board read returns it (facilitator-board S02).
+ *
+ * `postItCount` is the server's count, consumed rather than re-derived - the same discipline as
+ * `mine` and `canRun`.
+ */
+interface WireCategory {
+  id: string;
+  name: string;
+  postIts: WirePostIt[];
+  postItCount: number;
+}
+
 interface WireRound {
   id: string;
   kind: string;
   prompt: string;
   state: string;
-  postIts?: WirePostIt[];
+  /**
+   * The Board, grouped. Present exactly on a `PostItRound` the read loaded a board for, and
+   * `uncategorised` is present whenever `categories` is - even when both are empty.
+   *
+   * There is no flat `postIts` array on a Round any more: a Post-it appears exactly once in the
+   * payload, under the Category holding it or in Uncategorised, so no surface groups client-side.
+   */
+  categories?: WireCategory[];
+  uncategorised?: { postIts: WirePostIt[]; postItCount: number };
   textMaxLength?: number;
   options?: { id: string; label: string }[];
 }
@@ -413,7 +434,22 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
     sub: string,
   ): Promise<WirePostIt[]> {
     const { rounds } = await readSession(app, conferenceId, sessionId, sub);
-    return rounds[0]!.postIts ?? [];
+    return boardOf(rounds[0]!);
+  }
+
+  /**
+   * Every Post-it on one Round, wherever it sits, in Board order.
+   *
+   * S02 of this bundle contributes nothing to a Category, so this is Uncategorised followed by
+   * whatever any Category holds - and the assertions below are about the Post-its themselves, which
+   * the grouping did not change. The point of reading it this way rather than from a flat array is
+   * that a Post-it appearing twice would show up here as a duplicate.
+   */
+  function boardOf(round: WireRound): WirePostIt[] {
+    return [
+      ...(round.uncategorised?.postIts ?? []),
+      ...(round.categories ?? []).flatMap((category) => category.postIts),
+    ];
   }
 
   /** The stored row, read straight from the table – never from a response. */
@@ -651,7 +687,7 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
     const { rounds } = await readSession(app, conferenceId, sessionId, ADA);
     expect(rounds[0]!.state).toBe('closed');
     expect(rounds[0]!.prompt).toBe(POST_IT_ROUND.prompt);
-    expect(rounds[0]!.postIts).toEqual([
+    expect(boardOf(rounds[0]!)).toEqual([
       {
         id: adas,
         text: 'Still here',
@@ -762,13 +798,20 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
 
     const payload = await readSession(app, conferenceId, sessionId, CLEO);
     expect(payload.rounds[0]!.state).toBe('closed');
-    expect(payload.rounds[0]!.postIts!.map((postIt) => [postIt.text, postIt.authorName])).toEqual([
+    expect(boardOf(payload.rounds[0]!).map((postIt) => [postIt.text, postIt.authorName])).toEqual([
       ['Test data', NAMES[ADA]],
       ['Handover gaps', NAMES[BO]],
       ['Meeting load', NAMES[CLEO]],
     ]);
     // Only Cleo's is hers, so only hers would be offered a control.
-    expect(payload.rounds[0]!.postIts!.map((postIt) => postIt.mine)).toEqual([false, false, true]);
+    expect(boardOf(payload.rounds[0]!).map((postIt) => postIt.mine)).toEqual([false, false, true]);
+    /*
+     * And all three are in **Uncategorised**, which is present with its own count on a Board that
+     * has no Category at all. Nothing is auto-placed and nothing has to be created for a Post-it to
+     * have somewhere to be (facilitator-board S02, FR2).
+     */
+    expect(payload.rounds[0]!.categories).toEqual([]);
+    expect(payload.rounds[0]!.uncategorised!.postItCount).toBe(3);
     // The cap the compose box renders from, and it is the API's one constant.
     expect(payload.rounds[0]!.textMaxLength).toBe(POST_IT_MAX_LENGTH);
   });
@@ -815,7 +858,8 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
     const after = await readSession(app, conferenceId, sessionId, ADA);
     expect(after.rounds[0]!.prompt).toBe('What slowed us down this quarter, exactly?');
     // Byte-identical in text, author, order and edited-marker.
-    expect(after.rounds[0]!.postIts).toEqual(before.rounds[0]!.postIts);
+    expect(after.rounds[0]!.uncategorised).toEqual(before.rounds[0]!.uncategorised);
+    expect(after.rounds[0]!.categories).toEqual(before.rounds[0]!.categories);
     // The round stayed open across the edit, so the room can keep contributing.
     expect(after.rounds[0]!.state).toBe('open');
 
@@ -1028,7 +1072,19 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
       // post-it rather than two.
       'arrived_after_close',
       'submission_id',
+      /*
+       * The facilitator-board bundle's placement, and the **only** column it adds to this row.
+       *
+       * NULL is Uncategorised - the absence of a placement is the state, not a sentinel - so the
+       * row still carries no tombstone, no soft-delete flag and no `deleted_at`, and an author
+       * deleting their own post-it still leaves no trace at all (Binding Constraint FR4). This list
+       * is what would fail if a later story tried to add one.
+       */
+      'category_id',
     ]);
+    // Named explicitly as well as by the list above, because it is the assertion that survives a
+    // careless "just add the column to the array" edit.
+    for (const name of names) expect(name).not.toMatch(/deleted|discard|tombstone|removed/i);
     for (const name of names) expect(name).not.toMatch(/mail/i);
 
     // No display name copied onto the row either - it is joined, so a rename reaches every post-it.
@@ -1106,6 +1162,436 @@ describe.skipIf(!reachable)('named post-it contribution against a real PostgreSQ
    * drift into a contradiction (FIS -> Testing Strategy). The refusal and the acceptance are the
    * same predicate with one term switched, and this is what says so.
    */
+  // ---------- S08: what a Member without sorting authority reaches, and reads ----------
+
+  /** The idea Ada writes down, reused across the three scenarios below. */
+  const WAITING = 'Waiting three days for test data';
+
+  /*
+   * The Board writes S03, S05 and S06 built, addressed here only to be **refused**. This story adds
+   * no route, no gate and no Attendee-specific branch: what it proves is that the shipped
+   * `authorizeWrite` narrowing already stands between every Member and every one of them.
+   */
+  function boardWrite(
+    app: FastifyInstance,
+    conferenceId: string,
+    sessionId: string,
+    roundId: string,
+    postItId: string,
+    act: 'discard' | 'restore' | 'permanent-removal',
+    sub: string,
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: `${boardPath(conferenceId, sessionId, roundId, postItId)}/${act}`,
+      headers: as(sub),
+    });
+  }
+
+  function place(
+    app: FastifyInstance,
+    conferenceId: string,
+    sessionId: string,
+    roundId: string,
+    postItId: string,
+    categoryId: string | null,
+    sub: string,
+  ) {
+    return app.inject({
+      method: 'PATCH',
+      url: `${boardPath(conferenceId, sessionId, roundId, postItId)}/placement`,
+      headers: as(sub),
+      payload: { categoryId },
+    });
+  }
+
+  /** A Category on this Round, created by the Facilitator who is assigned to the Session. */
+  async function createdCategory(
+    app: FastifyInstance,
+    conferenceId: string,
+    sessionId: string,
+    roundId: string,
+    name: string,
+  ): Promise<string> {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/categories`,
+      headers: as(IDA),
+      payload: { name },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    return response.json().category.id as string;
+  }
+
+  /** The stored placement, read straight from the table – never from a response. */
+  async function storedPlacement(postItId: string): Promise<string | null | undefined> {
+    const { rows } = await client.query<{ category_id: string | null }>(
+      'select category_id from post_it where id = $1',
+      [postItId],
+    );
+    return rows[0]?.category_id;
+  }
+
+  /** Whether a Discard trace exists for this Post-it – the state S05 stores outside the row. */
+  async function storedDiscard(postItId: string): Promise<boolean> {
+    const { rows } = await client.query('select 1 from post_it_discard where post_it_id = $1', [
+      postItId,
+    ]);
+    return rows.length > 0;
+  }
+
+  /** One Round's Board as `sub` reads it, region by region. */
+  async function regionsSeenBy(
+    app: FastifyInstance,
+    conferenceId: string,
+    sessionId: string,
+    sub: string,
+  ): Promise<WireRound> {
+    const { rounds } = await readSession(app, conferenceId, sessionId, sub);
+    return rounds[0]!;
+  }
+
+  /**
+   * **A Member is refused every Board write – on the Post-it they wrote themselves** (Acceptance
+   * Scenario S02, TI03).
+   *
+   * Ada authored it and Ida placed it into "Handovers". Ada then addresses the placement route, the
+   * Discard route and the restore route directly, as somebody with a phone and a copy of the URL
+   * would: all three are refused by the **shipped** sorting-authority gate, before anything about
+   * the Board is consulted, and each refusal names the authority required rather than saying
+   * something about the Post-it.
+   *
+   * Every reading afterwards is of the **stored row and the discard table**, not of the envelope: a
+   * refusal that answered 403 and moved the Post-it anyway would pass an envelope assertion.
+   */
+  it('refuses a member every board write on their own post-it, and moves nothing', async () => {
+    const app = appWith();
+    const { conferenceId, sessionId } = await autumnOffsite(app);
+    const roundId = await openPostItRound(app, conferenceId, sessionId);
+    const handovers = await createdCategory(app, conferenceId, sessionId, roundId, 'Handovers');
+    const postItId = await contributed(app, conferenceId, sessionId, roundId, ADA, WAITING);
+
+    const placed = await place(app, conferenceId, sessionId, roundId, postItId, handovers, IDA);
+    expect(placed.statusCode, placed.body).toBe(200);
+
+    // Her own post-it, and still not hers to sort: placement, Discard and restore alike.
+    const attempts = [
+      await place(app, conferenceId, sessionId, roundId, postItId, null, ADA),
+      await boardWrite(app, conferenceId, sessionId, roundId, postItId, 'discard', ADA),
+      await boardWrite(app, conferenceId, sessionId, roundId, postItId, 'restore', ADA),
+    ];
+    for (const attempt of attempts) {
+      expect(attempt.statusCode, attempt.body).toBe(403);
+      expect(attempt.json().error.code).toBe('CONFERENCE_ROLE_REQUIRED');
+      /*
+       * The **code** is what names the authority required; the sentence deliberately does not,
+       * because distinguishing "you hold no role here" from "this is not one of your sessions"
+       * would tell a caller which Sessions of a Conference they cannot see exist
+       * (`api/src/conferences/authorization.ts`). What it must never do is say anything about the
+       * Post-it - a refusal that mentioned the placement or its author would answer a question the
+       * caller was refused.
+       */
+      expect(attempt.json().error.message).toMatch(/do not have permission/i);
+      expect(attempt.json().error.message).not.toMatch(/post-it|category|author|discard/i);
+      // Nothing moved, after each one.
+      expect(await storedPlacement(postItId)).toBe(handovers);
+      expect(await storedDiscard(postItId)).toBe(false);
+    }
+
+    // And the two acts that **are** an author's stay hers: correcting her own words, and deleting
+    // them. Neither is placement, and the placement is untouched by either.
+    const corrected = await correct(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      postItId,
+      ADA,
+      'Waiting three days for test data, still',
+    );
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(await storedPlacement(postItId)).toBe(handovers);
+
+    const removed = await remove(app, conferenceId, sessionId, roundId, postItId, ADA);
+    expect(removed.statusCode, removed.body).toBe(200);
+    expect(await storedRow(postItId)).toBeUndefined();
+  });
+
+  /**
+   * **A Discard, a restore and a permanent removal, read from the author's own phone** (Acceptance
+   * Scenario S03, TI04).
+   *
+   * The exclusion is S05's anti-join in the read statement itself, and this is what it looks like
+   * from the one place the temptation to make an exception lives: the author's own Board. There is
+   * no marker, no placeholder and no field anywhere on the payload from which the removal could be
+   * inferred - the serialised payload is searched for the word, because a flag added later would
+   * have to be named to be excluded and this does not name one.
+   *
+   * A restore returns it to **Uncategorised**, not to the Category it was discarded from: absence of
+   * a placement is what Uncategorised is, and the Discard took the placement with it.
+   */
+  it('carries nothing of a discarded, restored or permanently removed post-it to its author’s board', async () => {
+    const app = appWith();
+    const { conferenceId, sessionId } = await autumnOffsite(app);
+    const roundId = await openPostItRound(app, conferenceId, sessionId);
+    const tooling = await createdCategory(app, conferenceId, sessionId, roundId, 'Tooling');
+    const discarded = await contributed(app, conferenceId, sessionId, roundId, ADA, WAITING);
+    const removed = await contributed(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      ADA,
+      'and a whiteboard',
+    );
+
+    await place(app, conferenceId, sessionId, roundId, discarded, tooling, IDA);
+    await place(app, conferenceId, sessionId, roundId, removed, tooling, IDA);
+
+    const discardedResponse = await boardWrite(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      discarded,
+      'discard',
+      IDA,
+    );
+    expect(discardedResponse.statusCode, discardedResponse.body).toBe(200);
+
+    // Priya is a conference-wide Admin with no Session Assignment: the permanent removal is hers.
+    const permanently = await boardWrite(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      removed,
+      'permanent-removal',
+      PRIYA,
+    );
+    expect(permanently.statusCode, permanently.body).toBe(200);
+
+    const afterBoth = await regionsSeenBy(app, conferenceId, sessionId, ADA);
+    expect(boardOf(afterBoth).map((one) => one.id)).toEqual([]);
+    expect(afterBoth.categories!.find((one) => one.id === tooling)!.postItCount).toBe(0);
+    expect(afterBoth.uncategorised!.postItCount).toBe(0);
+    // Nothing on what Ada received says either post-it ever existed.
+    const payload = JSON.stringify(afterBoth);
+    expect(payload).not.toMatch(/discard/i);
+    expect(payload).not.toContain(discarded);
+    expect(payload).not.toContain(removed);
+
+    // Restored, it comes back to Uncategorised - never to the Category it was sitting in.
+    const restored = await boardWrite(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      discarded,
+      'restore',
+      IDA,
+    );
+    expect(restored.statusCode, restored.body).toBe(200);
+
+    const afterRestore = await regionsSeenBy(app, conferenceId, sessionId, ADA);
+    expect(afterRestore.uncategorised!.postIts.map((one) => one.text)).toEqual([WAITING]);
+    expect(afterRestore.uncategorised!.postItCount).toBe(1);
+    expect(afterRestore.categories!.find((one) => one.id === tooling)!.postItCount).toBe(0);
+    // The permanently removed one is still gone, and stays gone on every later read.
+    expect(JSON.stringify(afterRestore)).not.toContain(removed);
+  });
+
+  /**
+   * **Nothing about votes reaches the payload the Attendee's Board is rendered from** (Structural
+   * Criterion 1, Binding Constraint FR8, ADR-006).
+   *
+   * The structural half of this lives in `post-it-structure.test.ts` and reads a list of modules.
+   * This is the half that **knows no list** (`docs/LEARNINGS.md#testing`): a real application
+   * assembles a real Session read for a real Member and every key it produced, at every depth, is
+   * swept. A per-voter field added anywhere on the assembly path - in the Board projection, in the
+   * wire builder, or at the point in `routes/rounds.ts` where the tally is decided for the whole
+   * payload - fails here whichever file it was written in, which is exactly what the file-list
+   * guard cannot promise (S08 quick-review C05).
+   *
+   * Keys rather than the serialized text, deliberately: a Post-it's own words are a Member's to
+   * choose, and somebody writing "we should vote on this" must not turn a guard red.
+   */
+  it('names no vote data anywhere on an attendee’s session read', async () => {
+    const app = appWith();
+    const { conferenceId, sessionId } = await autumnOffsite(app);
+    const roundId = await openPostItRound(app, conferenceId, sessionId);
+    const tooling = await createdCategory(app, conferenceId, sessionId, roundId, 'Tooling');
+    const placed = await contributed(app, conferenceId, sessionId, roundId, ADA, WAITING);
+    await place(app, conferenceId, sessionId, roundId, placed, tooling, IDA);
+    await contributed(app, conferenceId, sessionId, roundId, BO, 'and a whiteboard');
+
+    // Ada is a Member with no Session Assignment and no Admin: this is the Attendee's own read.
+    const payload = await readSession(app, conferenceId, sessionId, ADA);
+
+    // Swept over a payload that really carries the Board - an empty read would prove nothing.
+    expect(boardOf(payload.rounds[0]!).map((one) => one.text)).toContain(WAITING);
+
+    const keys = new Set<string>();
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const entry of value) walk(entry);
+        return;
+      }
+      if (value === null || typeof value !== 'object') return;
+      for (const [key, entry] of Object.entries(value)) {
+        keys.add(key);
+        walk(entry);
+      }
+    };
+    walk(payload);
+
+    expect(keys.size, 'the sweep should have found the payload’s keys').toBeGreaterThan(10);
+    expect([...keys].filter((key) => /vote|ballot|tally|option/i.test(key))).toEqual([]);
+  });
+
+  /**
+   * **A queued Post-it drained after the sorting began lands in Uncategorised, and is never
+   * auto-placed** (Acceptance Scenario S04, TI05).
+   *
+   * The Facilitator has emptied Uncategorised into "Handovers" before either drain arrives, which is
+   * the state that makes "never auto-placed" a claim worth proving: the obvious wrong answer is to
+   * put a late arrival wherever the Board's activity is. Run twice - once while the Round is still
+   * open and once after it has closed - because the queue drains whenever the link returns and the
+   * Round's state at that moment is not the device's business.
+   */
+  it('lands a post-it drained after sorting began in uncategorised, open round or closed', async () => {
+    const app = appWith();
+    const { conferenceId, sessionId } = await autumnOffsite(app);
+    const roundId = await openPostItRound(app, conferenceId, sessionId);
+    const handovers = await createdCategory(app, conferenceId, sessionId, roundId, 'Handovers');
+
+    const first = await contributed(app, conferenceId, sessionId, roundId, ADA, WAITING);
+    const second = await contributed(app, conferenceId, sessionId, roundId, BO, 'Flaky CI');
+    for (const postItId of [first, second]) {
+      await place(app, conferenceId, sessionId, roundId, postItId, handovers, IDA);
+    }
+
+    const sorted = await regionsSeenBy(app, conferenceId, sessionId, CLEO);
+    expect(sorted.uncategorised!.postItCount).toBe(0);
+    expect(sorted.categories![0]!.postItCount).toBe(2);
+
+    // Cleo's phone drains what it has been holding. The Round is still open.
+    const drained = await contribute(app, conferenceId, sessionId, roundId, CLEO, {
+      text: 'The venue wifi died at ten',
+      offlineComposed: true,
+      submissionId: '9b7d2c14-0000-4000-8000-0000000008a1',
+    });
+    expect(drained.statusCode, drained.body).toBe(200);
+
+    const afterOpen = await regionsSeenBy(app, conferenceId, sessionId, CLEO);
+    expect(afterOpen.uncategorised!.postIts.map((one) => one.text)).toEqual([
+      'The venue wifi died at ten',
+    ]);
+    expect(afterOpen.uncategorised!.postItCount).toBe(1);
+    // No Category moved: the contribution path writes no placement, so there is none to move.
+    expect(afterOpen.categories![0]!.postItCount).toBe(2);
+    expect(afterOpen.categories![0]!.postIts.map((one) => one.text)).toEqual([WAITING, 'Flaky CI']);
+
+    // And again after the Round has closed, where the only difference is the late marking.
+    const closed = await transition(app, conferenceId, sessionId, roundId, 'close');
+    expect(closed.statusCode, closed.body).toBe(200);
+
+    const late = await contribute(app, conferenceId, sessionId, roundId, CLEO, {
+      text: 'And the coffee machine',
+      offlineComposed: true,
+      submissionId: '9b7d2c14-0000-4000-8000-0000000008a2',
+    });
+    expect(late.statusCode, late.body).toBe(200);
+    expect(late.json().postIt.arrivedAfterClose).toBe(true);
+
+    const afterClose = await regionsSeenBy(app, conferenceId, sessionId, CLEO);
+    expect(afterClose.uncategorised!.postIts.map((one) => one.text)).toEqual([
+      'The venue wifi died at ten',
+      'And the coffee machine',
+    ]);
+    expect(afterClose.uncategorised!.postItCount).toBe(2);
+    expect(afterClose.categories![0]!.postItCount).toBe(2);
+    // Nothing is placed by arriving: neither drain carries a category on the stored row.
+    expect(await storedPlacement(late.json().postIt.id)).toBeNull();
+  });
+
+  /**
+   * **Membership ends access to the Board and nothing else** (Acceptance Scenario S06, TI07).
+   *
+   * Ada's Membership is revoked while she has the Session open. Her next read is refused with the
+   * shipped Membership sentence - and her Post-its stay exactly where they are on every other
+   * Member's Board, still under her name. A Post-it is the room's record of what was said; losing
+   * the right to read the Board is not a reason to unsay it, and the Report is built from these.
+   *
+   * The non-Member's read is the same refusal, word for word, and it discloses nothing: whether that
+   * Conference exists, whether that Session exists, and whether anything was ever written on it are
+   * all questions it does not answer.
+   */
+  it('refuses the board once membership ends, and leaves that member’s post-its attributed', async () => {
+    const app = appWith();
+    const { conferenceId, sessionId } = await autumnOffsite(app);
+    const roundId = await openPostItRound(app, conferenceId, sessionId);
+    const tooling = await createdCategory(app, conferenceId, sessionId, roundId, 'Tooling');
+
+    const placed = await contributed(app, conferenceId, sessionId, roundId, ADA, WAITING);
+    const unplaced = await contributed(
+      app,
+      conferenceId,
+      sessionId,
+      roundId,
+      ADA,
+      'and a whiteboard',
+    );
+    await place(app, conferenceId, sessionId, roundId, placed, tooling, IDA);
+
+    // She can read it, and both of hers are on it, before anything is revoked.
+    const before = await regionsSeenBy(app, conferenceId, sessionId, ADA);
+    expect(
+      boardOf(before)
+        .map((one) => one.id)
+        .sort(),
+    ).toEqual([placed, unplaced].sort());
+
+    await client.query('delete from membership where conference_id = $1 and user_sub = $2', [
+      conferenceId,
+      ADA,
+    ]);
+
+    const refused = await app.inject({
+      method: 'GET',
+      url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
+      headers: as(ADA),
+    });
+    expect(refused.statusCode, refused.body).toBe(403);
+    expect(refused.json().error.code).toBe('NOT_A_MEMBER');
+
+    // A signed-in employee who never joined gets the identical answer - which is what stops the
+    // refusal from being a way to discover which conferences and sessions are real.
+    const outsider = await app.inject({
+      method: 'GET',
+      url: `/api/conferences/${conferenceId}/sessions/${sessionId}`,
+      headers: as(OUTSIDER),
+    });
+    expect(outsider.statusCode, outsider.body).toBe(403);
+    expect(outsider.json().error).toEqual(refused.json().error);
+    expect(outsider.json().error.message).not.toMatch(/session|round|post-it|ways of working/i);
+
+    // And on Bo's Board, who is still a Member: both of Ada's, where they were, under her name.
+    const after = await regionsSeenBy(app, conferenceId, sessionId, BO);
+    expect(after.categories!.find((one) => one.id === tooling)!.postIts).toEqual([
+      {
+        id: placed,
+        text: WAITING,
+        authorName: NAMES[ADA],
+        mine: false,
+        edited: false,
+        arrivedAfterClose: false,
+      },
+    ]);
+    expect(after.uncategorised!.postIts.map((one) => one.authorName)).toEqual([NAMES[ADA]]);
+    expect(after.uncategorised!.postItCount).toBe(1);
+  });
+
   it('refuses a live post-it to a closed round and takes an offline-composed one, marked late', async () => {
     const app = appWith();
     const { conferenceId, sessionId } = await autumnOffsite(app);

@@ -1,0 +1,500 @@
+/*
+ * The projected Board View's own layout and type scale - **the fourth viewport class** (S07).
+ *
+ * Not `styles.css`'s 1280px layout at a larger root font. Reading distance here is metres, there is
+ * no pointer, and the content is fixed at the design ceiling rather than scrollable, which is a
+ * different design problem from a desktop window. What is here comes from S01's projected wireframe
+ * and its settled overflow decision
+ * (`docs/wireframes/facilitator-board-and-categorisation/design-decisions.md#the-projected-views-overflow-behaviour`),
+ * and every class is prefixed `display-` so it shares no rule with the signed-in app's `.region`,
+ * `.post-it` or `.panel`. It maps onto `styles.css`'s **token names** - `--surface`,
+ * `--surface-sunken`, `--border`, `--text`, `--text-muted` - and nothing else of it.
+ *
+ * **Sizes are viewport-relative, never fixed.** The wireframe's numbers are its numbers at
+ * 1920x1080; expressed as `clamp(min, Nvw, max)` they land on them there and still hold on the
+ * 2560- and 3840-wide screens a room may actually have, which a fixed px scale would not
+ * (AGENTS.md - a layout that does not rescale is a defect). The same expression is what lets a
+ * Facilitator open the link on their phone to check it before it goes on the wall.
+ */
+
+/*
+ * Below the projection class this is a *phone check*, not a projection: the regions stack, the
+ * document scrolls, and type is sized for arm's length. The one-screen rule belongs to the class it
+ * was decided for and would be nonsense at 375px, where "no scrolling" can only be bought by making
+ * the text unreadable.
+ */
+.display {
+  min-height: 100dvh;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+/* ---------- the band: what the room is answering, and how big the board is ---------- */
+
+.display__head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: clamp(0.5rem, 0.8vw, 1rem);
+  border-bottom: 3px solid var(--border);
+  padding: 0 0.25rem 0.4rem;
+}
+
+.display__prompt {
+  margin: 0;
+  font-size: clamp(1.15rem, 1.35vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.1;
+  /* Never fixed-width, and never wider than the space it was given. */
+  min-width: min(12rem, 100%);
+}
+
+.display__meta {
+  margin: 0;
+  font-size: clamp(0.95rem, 1.05vw, 2rem);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ---------- the regions ---------- */
+
+/*
+ * The grid is sized to the number of regions (`board-layout.ts`), so every Category and
+ * Uncategorised are on screen at once whatever the Board holds. `--display-regions-across` and
+ * `--display-regions-down` are written by the component from that calculation; the fallbacks keep
+ * the sheet meaningful on its own.
+ */
+.display-regions {
+  flex: 1 1 auto;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: clamp(0.25rem, 0.35vw, 0.75rem);
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+}
+
+.display-region {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: clamp(0.25rem, 0.3vw, 0.6rem) clamp(0.3rem, 0.35vw, 0.7rem);
+}
+
+/* Uncategorised is drawn as itself, not as one more Category - it is the absence of a placement. */
+.display-region--uncategorised {
+  border-style: dashed;
+  background: var(--surface-sunken);
+}
+
+/*
+ * The Category name and its count are the two things that **never** degrade. They hold the same
+ * size whatever the region holds, at every tier, because they are what a reader at the back of the
+ * room is reading.
+ */
+.display-region__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: clamp(0.25rem, 0.35vw, 0.6rem);
+  border-bottom: 2px solid var(--border);
+  padding: 0 0 0.25rem;
+  margin: 0 0 0.25rem;
+}
+
+.display-region__name {
+  margin: 0;
+  min-width: 0;
+  font-size: clamp(1rem, 1.15vw, 2.2rem);
+  font-weight: 700;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.display-region__count {
+  /* `min-width` rather than `flex-shrink: 0` with a rem floor: at a larger root font a hard floor
+     walks off the screen (`docs/LEARNINGS.md#css--responsive-layout`). */
+  flex: 0 0 auto;
+  min-width: min(2.2em, 100%);
+  text-align: center;
+  font-size: clamp(1rem, 1.15vw, 2.2rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.4em;
+  line-height: 1.2;
+}
+
+/*
+ * **The tile's floor, and the containment that makes it one.**
+ *
+ * `overflow: hidden` is not a way of hiding a problem here - it is what keeps a region's overflow
+ * inside its own boundary instead of painting through the tile below it, which is what a Board
+ * skewed towards one Category actually did (S07, 2026-08-31, review H1). The fit rule below is what
+ * stops there being anything to contain.
+ *
+ * A **size container**, so the Post-it list beneath can size itself from the height it was actually
+ * given. That height is not knowable in TypeScript and not expressible in `calc()` - it falls out
+ * of the grid, which is sized to the number of regions - and `cqh` is the one way to read it.
+ */
+.display-region__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  container-type: size;
+}
+
+.display-region__none {
+  margin: 0.25rem 0 0;
+  font-size: clamp(0.85rem, 0.95vw, 1.8rem);
+  color: var(--text-muted);
+}
+
+/*
+ * **What a region says instead, when its Post-its cannot be drawn legibly** (2026-09-01 amendment to
+ * S01's overflow decision). Sized like `__none` above rather than like a Post-it: it is a statement
+ * about the tile, in the register the tile's own "No post-its yet" is written in, and it has to be
+ * readable at the distance the Post-its it replaces could not be.
+ */
+.display-region__too-many {
+  margin: 0.25rem 0 0;
+  font-size: clamp(0.85rem, 0.95vw, 1.8rem);
+  line-height: 1.25;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/*
+ * **The type scale, published as computed lengths so one reader can compare them.**
+ *
+ * Each tier below declares the size it would use for a Post-it's text and for its author's line, as
+ * registered `<length>` properties rather than as `font-size` directly. Registering them is what
+ * makes them *computed* - `getComputedStyle` hands back `13.44px`, container units and all - so the
+ * component can ask the rendered element what size this tier is about to draw at and compare it with
+ * the floor, instead of re-deriving the tile's arithmetic in TypeScript where it would drift from
+ * this file the first time either changed.
+ */
+@property --display-post-it-size {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --display-post-it-by-size {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --display-post-it-floor {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+/*
+ * **The fit rule: the richest tier that lets ALL of a Category's Post-its fit its tile.**
+ *
+ * S01's decision states the invariant in a sentence and then gives a count-keyed *table* as its
+ * approximation, and taking the table alone is what let a skewed but in-ceiling Board push Post-its
+ * out of their tile with no scroll, no marker and no input available to reveal them
+ * (`design-decisions.md#the-projected-views-overflow-behaviour`; S07 review H1). At the near-uniform
+ * distribution S01 drew, the table and the sentence agree; at one Category holding forty, they do
+ * not, and the sentence is the one that is binding - a Post-it that cannot be reached is the one
+ * outcome the whole decision exists to prevent.
+ *
+ * So the tier still comes from the count (`board-layout.ts`), and the *type within it* is then
+ * capped by the height each row can actually have: the body's own height divided by the number of
+ * rows in it. `--display-rows` is written by the component from the server's `postItCount`.
+ *
+ * Nothing else changes. The Category name, its count and its boundary keep their size at every tier
+ * - they are what a reader at the back of the room is reading - and a Post-it never stops showing
+ * who wrote it. What gives way is Post-it type, which is exactly the ordering S01 settled.
+ */
+.display-post-its {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  align-content: start;
+  --display-rows: 1;
+  --display-gap-base: 0px;
+  /*
+   * **THE LEGIBILITY FLOOR - the smallest a projected Post-it is ever drawn.**
+   *
+   * The fit rule below caps the type at the height a row can actually have, and until the
+   * 2026-09-01 amendment to S01's decision it had no lower bound: 80 Post-its in one tile were
+   * drawn at about a fifth of a pixel - a grey band beside a count pill of 80, while every other
+   * tile on the wall read fine. Nothing was unreachable, and the room got nothing from the tile.
+   *
+   * `0.7rem` is not a new number. It is the **Condensed tier's own declared minimum**, the lower
+   * bound of the `clamp()` three rules down, which is the smallest size this design has ever named
+   * for a projected Post-it. It is also the size at which S01's own drawn ceiling still renders -
+   * 200 across 20, about eleven to a tile, which S01 looked at and signed off - so the floor
+   * refuses exactly what S01 never looked at, and nothing it did.
+   *
+   * And it is the size at which the decision's own honest claim is still true. S01 says individual
+   * Post-it wording at the ceiling is "legible from nearer the screen, not from the back row": on a
+   * 2.4 m-wide projection, 1920 px wide, 0.7rem is about 10 mm of character height, which reads
+   * from roughly two and a half metres. Below it the claim is simply false, so a region below it
+   * says what it holds instead of drawing something nobody in the room can read.
+   */
+  --display-post-it-floor: 0.7rem;
+  /*
+   * **The gap is capped against the tile, not just against the viewport.** Each tier's gap is a
+   * `clamp()` on viewport width, which says nothing about how many rows are sharing the tile: past
+   * about a hundred rows the gaps alone exceeded the body's height and the rows were pushed out of
+   * it again, with the type cap below powerless to help (S07, 2026-08-31, second-pass review F1).
+   * Capped at a quarter of the body, the gaps can never be what breaks the fit.
+   */
+  --display-gap: min(var(--display-gap-base), calc(100cqh / (var(--display-rows) * 4)));
+  /*
+   * How much vertical room one row actually has: the tile body's own height, less the gaps between
+   * the rows, divided by the number of rows. The gaps are subtracted rather than ignored - leaving
+   * them out is what left a forty-Post-it Category still overflowing after the type had been capped.
+   */
+  --display-row-height: calc(
+    (100cqh - (var(--display-rows) - 1) * var(--display-gap)) / var(--display-rows)
+  );
+  gap: var(--display-gap);
+  /*
+   * Every row gets exactly that height and clips inside it, so nothing a region holds can be
+   * pushed out of the tile whatever the type does. The type cap above is what keeps the clipping
+   * from being reached in the first place; this is the floor under it.
+   */
+  height: 100%;
+  grid-template-rows: repeat(var(--display-rows), minmax(0, 1fr));
+}
+
+/*
+ * The list is rendered whether or not its Post-its are drawn, and holds `--display-rows` either
+ * way, so the component can always ask it what size this tier would draw at. Drawing none of them
+ * costs the list its height and nothing else - the message below it takes the tile.
+ */
+.display-post-its--undrawn {
+  height: 0;
+}
+
+.display-post-it {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The two sizes the tiers publish above; the tier decides the value, the element only spends it. */
+.display-post-it__text {
+  font-size: var(--display-post-it-size);
+}
+
+.display-post-it__by {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: var(--display-post-it-by-size);
+}
+
+/*
+ * THE THREE DETAIL TIERS, chosen per Category by how many that Category holds (`board-layout.ts`).
+ * Post-it detail is the only thing that gives way; the Category name, count and boundary never do.
+ */
+
+.display-post-its--full {
+  --display-gap-base: clamp(0.2rem, 0.3vw, 0.6rem);
+  /* Four lines of text plus the author's line is the budget a `full` row is sized against. */
+  --display-post-it-size: min(clamp(0.8rem, 0.9vw, 1.7rem), calc(var(--display-row-height) / 6.5));
+  --display-post-it-by-size: min(
+    clamp(0.75rem, 0.8vw, 1.5rem),
+    calc(var(--display-row-height) / 7)
+  );
+}
+.display-post-its--full .display-post-it__text {
+  display: block;
+  margin: 0;
+  line-height: 1.25;
+}
+.display-post-its--full .display-post-it__by {
+  display: block;
+  margin: 0.1rem 0 0;
+  /*
+   * Set, never inherited. `styles.css` gives the body 1.5, which is a reading-at-arm's-length
+   * figure; at the design ceiling with the staleness band on screen those extra fractions add up to
+   * a clipped post-it in the bottom row - and a post-it that becomes unreachable is exactly what
+   * S01's overflow decision forbids.
+   */
+  line-height: 1.2;
+}
+
+.display-post-its--clamped {
+  --display-gap-base: clamp(0.15rem, 0.25vw, 0.5rem);
+  /* Two clamped lines plus the author's line: three lines of budget in a row's height. */
+  --display-post-it-size: min(clamp(0.75rem, 0.8vw, 1.5rem), calc(var(--display-row-height) / 4));
+  --display-post-it-by-size: min(
+    clamp(0.7rem, 0.75vw, 1.4rem),
+    calc(var(--display-row-height) / 4.3)
+  );
+}
+.display-post-its--clamped .display-post-it__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+  line-height: 1.2;
+}
+.display-post-its--clamped .display-post-it__by {
+  display: block;
+  margin: 0.05rem 0 0;
+  line-height: 1.2;
+}
+
+.display-post-its--condensed {
+  --display-gap-base: clamp(0.1rem, 0.15vw, 0.35rem);
+  /* One line, so the whole row's height is the budget - less the 1.35 line-height and the gap. */
+  --display-post-it-size: min(clamp(0.7rem, 0.7vw, 1.3rem), calc(var(--display-row-height) / 1.5));
+  --display-post-it-by-size: min(
+    clamp(0.7rem, 0.7vw, 1.3rem),
+    calc(var(--display-row-height) / 1.5)
+  );
+}
+.display-post-its--condensed .display-post-it {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(0.15rem, 0.25vw, 0.5rem);
+  line-height: 1.35;
+}
+.display-post-its--condensed .display-post-it__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/*
+ * The author's name is never the thing that gets clipped. A Post-it always displays its author's
+ * name - that is what a Post-it is - so the name keeps its width and the text gives up its tail.
+ */
+.display-post-its--condensed .display-post-it__by {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* ---------- the staleness indicator: a statement, never a control ---------- */
+
+.display-staleness {
+  flex: 0 0 auto;
+  border: 3px dashed var(--text-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+  padding: clamp(0.25rem, 0.3vw, 0.6rem) clamp(0.5rem, 0.6vw, 1.2rem);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: clamp(0.4rem, 0.7vw, 1.4rem);
+}
+
+/*
+ * The band is deliberately tight. It has to be able to appear at the design ceiling without costing
+ * a single post-it: the last row's tiles shrink by exactly its height, and a post-it pushed out of
+ * one would be unreachable on a surface that has no scroll and takes no input.
+ */
+.display-staleness__lead {
+  margin: 0;
+  font-size: clamp(1rem, 1.25vw, 2.4rem);
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.display-staleness__detail {
+  margin: 0;
+  font-size: clamp(0.9rem, 1.05vw, 2rem);
+  line-height: 1.2;
+  color: var(--text-muted);
+}
+
+/* ---------- the one neutral notice ---------- */
+
+.display-notice-screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 2.5vw, 4rem);
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.display-notice {
+  border: 3px solid var(--border);
+  border-radius: calc(var(--radius) * 2);
+  background: var(--surface);
+  padding: clamp(1.5rem, 3vw, 3.5rem) clamp(1.5rem, 3.75vw, 4.5rem);
+  max-width: min(60rem, 100%);
+  text-align: center;
+}
+
+.display-notice__lead {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.9vw, 5rem);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.display-notice__detail {
+  margin: clamp(0.75rem, 1.25vw, 2rem) 0 0;
+  font-size: clamp(1rem, 1.35vw, 2.6rem);
+  color: var(--text-muted);
+}
+
+/* ---------- the projection viewport class ---------- */
+
+/*
+ * **One screen, always.** `overflow: hidden` is deliberate and load-bearing: there is no scrollbar
+ * to reach for, because there is nobody at the machine to reach for it. Below this width the rules
+ * above apply instead - see the note at the top of this file.
+ *
+ * The class S01 recorded is 1920x1080; the query opens at 1200px so a large desktop window
+ * previewing the wall gets the same layout it will have there, rather than a different one that
+ * would make the preview worthless.
+ */
+@media (min-width: 1200px) {
+  /*
+   * Unqualified `html, body`, and safe to be: this sheet is imported by `main-display.tsx` alone,
+   * so it is only ever loaded by `display.html`. It reaches no document the signed-in app serves.
+   */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .display {
+    height: 100dvh;
+    min-height: 0;
+    padding: clamp(0.5rem, 0.65vw, 1.2rem);
+  }
+
+  .display-regions {
+    grid-template-columns: repeat(var(--display-regions-across, 1), minmax(0, 1fr));
+    grid-template-rows: repeat(var(--display-regions-down, 1), minmax(0, 1fr));
+  }
+}

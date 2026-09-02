@@ -294,7 +294,7 @@ describe('the registered route table', () => {
    * registers is either wrapped or one of the two written anonymous entries. This is what a
    * later story trips if it adds a route and forgets the wrapper.
    */
-  it('wraps every route the built app registers except the two written anonymous entries', async () => {
+  it('wraps every route the built app registers except the three written anonymous entries', async () => {
     const stub = stubGoogle([googleKey.publicJwk]);
     const discovery = createDiscovery({ discoveryUrl: DISCOVERY_URL, fetchImpl: stub.fetchImpl });
     const app = buildApp({
@@ -317,7 +317,18 @@ describe('the registered route table', () => {
       .map((route) => `${route.method} ${route.url}`)
       .sort();
 
-    expect(anonymous).toEqual(['GET /api/health', 'POST /api/auth/token']);
+    /*
+     * Three, and the third is the one that changed the character of this list: S04's
+     * `GET /api/display/:token` is confApp's first anonymous route over **domain content**. The
+     * other two are bounded by having nothing to give - `/api/health` is deliberately factless and
+     * `/api/auth/token` is how a credential is obtained. That one is bounded by the token and the
+     * scope instead, which is why its `because` says so at length.
+     */
+    expect(anonymous).toEqual([
+      'GET /api/display/:token',
+      'GET /api/health',
+      'POST /api/auth/token',
+    ]);
 
     // Every anonymous entry is declared with a written reason, not unwrapped by omission.
     expect(ANONYMOUS_ROUTES.map((route) => `${route.method} ${route.url}`).sort()).toEqual(

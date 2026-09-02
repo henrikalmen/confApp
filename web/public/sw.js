@@ -46,6 +46,38 @@ const SHELL_PATH = '/index.html';
 const API_PREFIX = '/api/';
 
 /**
+ * The projected Board (S04). Network-only, forever, and for **two** separate reasons.
+ *
+ * `/display/<token>` is its own entry document, not a route of this app – and every navigation
+ * here is otherwise stored under the one shell key *and* answered from it. Without this exclusion
+ * one omission causes two defects:
+ *
+ *   - the room machine's navigation would be answered from the cached shell, so a projector on a
+ *     browser that had ever visited the signed-in app would get **that** document instead of the
+ *     display one; and
+ *   - the visit would overwrite the cached shell with the display document, so the employee whose
+ *     browser it was would launch the app offline into a board page that cannot sign in. That half
+ *     only shows up offline, which is where nobody looks.
+ *
+ * There is nothing to trade away by excluding it. A projector is a wall-mounted screen on the
+ * venue's network; offline support in confApp is schedule reads and post-it queueing and is
+ * widened by nothing here. And the board is behind a bearer token whose revocation has to take
+ * effect at the next poll, which any cached copy anywhere would defeat.
+ */
+const DISPLAY_PREFIX = '/display/';
+
+/**
+ * The bare entry document, which the prefix above does **not** cover.
+ *
+ * nginx serves `/display.html` as a real file through `location /`, so a navigation straight to it
+ * would reach the navigation clause below, be filed under `SHELL_PATH`, and replace the signed-in
+ * app's cached shell - the exact second defect the prefix exclusion exists to prevent, reached
+ * through a different URL (review 2026-08-31, L1). Nothing in the product links here, but the
+ * failure is silent and only surfaces offline.
+ */
+const DISPLAY_DOCUMENT = '/display.html';
+
+/**
  * Paths that must be **fresh** whenever there is a connection, and are cached only as a fallback.
  *
  * The container rewrites `/config.js` at start and a deployment rewrites `index.html` to reference
@@ -72,6 +104,9 @@ function isCacheableAsset(request, origin) {
   // Same origin only. A cross-origin response is somebody else's to cache.
   if (url.origin !== origin) return false;
   if (url.pathname.startsWith(API_PREFIX)) return false;
+  // The projected board: never stored, and never answered from here. Checked *before* the
+  // navigation clause below, which would otherwise claim it like any other deep link.
+  if (url.pathname.startsWith(DISPLAY_PREFIX) || url.pathname === DISPLAY_DOCUMENT) return false;
 
   /*
    * **Every navigation, whatever path it names.** This is a SPA behind `try_files … /index.html`,

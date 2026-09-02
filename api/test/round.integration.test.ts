@@ -850,8 +850,24 @@ describe.skipIf(!reachable)('round authoring and lifecycle against a real Postgr
        * which is also where "no key names another member's vote" is pinned.
        */
       VotingRound: ['hasVoted', 'id', 'kind', 'options', 'prompt', 'purpose', 'state', 'tally'],
-      // A Post-it Round: its board, and the text cap the compose box renders from (S02 TI06).
-      PostItRound: ['id', 'kind', 'postIts', 'prompt', 'state', 'textMaxLength'],
+      /*
+       * A Post-it Round: its Board **grouped**, and the text cap the compose box renders from (S02
+       * TI06; facilitator-board S02 TI05).
+       *
+       * `categories` and `uncategorised` replaced the flat `postIts` array outright rather than
+       * joining it. A Post-it appears exactly once in the payload, and `uncategorised` is here
+       * whether or not any Category is - it is where every Post-it arrives and a Board archived with
+       * Post-its still in it is a valid terminal state the payload has to represent.
+       */
+      PostItRound: [
+        'categories',
+        'id',
+        'kind',
+        'prompt',
+        'state',
+        'textMaxLength',
+        'uncategorised',
+      ],
     };
 
     expect(payload.rounds.length).toBe(2);
@@ -863,8 +879,13 @@ describe.skipIf(!reachable)('round authoring and lifecycle against a real Postgr
       }
     }
 
+    /*
+     * `canRemovePermanently` is S06's second capability flag, beside `canRun` rather than folded
+     * into it: `canRun` is true for an assigned Facilitator and for an Admin alike, and Permanent
+     * Removal is the one act on this surface the two differ on (FR5).
+     */
     expect(Object.keys(payload).sort()).toEqual(
-      ['activityWatermark', 'canRun', 'rounds', 'session'].sort(),
+      ['activityWatermark', 'canRemovePermanently', 'canRun', 'rounds', 'session'].sort(),
     );
   });
 

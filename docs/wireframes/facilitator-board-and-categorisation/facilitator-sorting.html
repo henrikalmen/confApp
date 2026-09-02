@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframe — Facilitator sorting surface</title>
+    <style>
+      /*
+       * Grayscale structural wireframe. No colour, no external asset, no network request.
+       *
+       * The one control surface in this feature. Everything here is operable by keyboard alone and
+       * nothing is operable by drag: stories S02 and S03 both decline to build drag, so no drag
+       * handle, drop-target hint or "drag to sort" instruction appears at any width — including
+       * 1280px, where the PRD's constraint would permit drag as an *additional* affordance.
+       */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #f5f5f5;
+        color: #222;
+        font-family: system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.45;
+        overflow-wrap: break-word;
+      }
+
+      .box {
+        background: #fff;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .wf-banner {
+        border: 2px dashed #999;
+        background: #ebebeb;
+        color: #444;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.8rem;
+        margin: 0 0 12px;
+      }
+
+      h1 {
+        font-size: 1.15rem;
+        margin: 0 0 2px;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+      h3 {
+        font-size: 0.95rem;
+        margin: 0;
+      }
+
+      .muted {
+        color: #666;
+        font-size: 0.82rem;
+      }
+
+      /* ---------- page head ---------- */
+
+      .head {
+        margin: 0 0 12px;
+      }
+      .head__prompt {
+        margin: 6px 0 0;
+        font-weight: 600;
+      }
+      .badge {
+        display: inline-block;
+        border: 2px solid #999;
+        border-radius: 999px;
+        padding: 0 8px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #444;
+        background: #ebebeb;
+      }
+
+      /* ---------- buttons ---------- */
+
+      .btn {
+        font: inherit;
+        font-size: 0.82rem;
+        min-height: 44px;
+        padding: 0 12px;
+        border-radius: 6px;
+        border: 2px solid #999;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+      }
+      .btn--primary {
+        background: #666;
+        border-color: #666;
+        color: #fff;
+      }
+      /*
+       * Discard is the facilitator's sorting act; the author's own Remove sits beside it on the
+       * author's own post-it. S09 requires the two to be *visibly* distinct, so distinguishing them
+       * by label text alone is not enough: Discard carries a heavier, dashed edge that matches the
+       * dashed treatment of the discarded post-its surface it feeds, and Remove keeps the plain
+       * button shape every other author control uses.
+       */
+      .btn--discard {
+        border-style: dashed;
+        border-width: 3px;
+        border-color: #444;
+        font-weight: 700;
+      }
+
+      /*
+       * `aria-disabled`, never the `disabled` attribute. A disabled button leaves the tab order, so
+       * the control sequence a keyboard user has learned changes shape as a Category moves to the
+       * end of the order - which is the opposite of what this control set is for. `aria-disabled`
+       * keeps it focusable and announced as unavailable, and the handler refuses the press.
+       */
+      .btn[aria-disabled='true'] {
+        color: #999;
+        border-color: #ddd;
+        cursor: not-allowed;
+      }
+
+      /*
+       * Every control row wraps rather than shrinking. `min-width: min(Xrem, 100%)` throughout, per
+       * docs/LEARNINGS.md#css--responsive-layout: a rem floor with flex-shrink: 0 fits at a 16px
+       * root and runs off-screen at 24px, which Capacitor inherits from the OS font scale.
+       */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+        padding: 0;
+      }
+      .controls .btn {
+        flex: 0 1 auto;
+        min-width: min(6rem, 100%);
+      }
+
+      /* ---------- board toolbar ---------- */
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        justify-content: space-between;
+        border-bottom: 2px solid #ddd;
+        padding: 0 0 10px;
+        margin: 0 0 12px;
+      }
+      .toolbar__counts {
+        margin: 2px 0 0;
+      }
+      .toolbar__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .toolbar__actions .btn {
+        min-width: min(10rem, 100%);
+      }
+
+      /* ---------- regions ---------- */
+
+      /*
+       * One region per Category, plus Uncategorised. `auto-fill` with a `minmax` floor rather than a
+       * fixed track count: at 375px that resolves to a single region across the width, at 1280px to
+       * as many as fit. `min()` keeps the floor under the narrowest phone's content box, so a single
+       * region never overflows it. Same rule the shipped .board__list uses.
+       */
+      .regions {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr));
+        gap: 12px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .region {
+        min-width: 0;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background: #fafafa;
+        padding: 10px;
+      }
+      .region--uncategorised {
+        border-style: dashed;
+        border-color: #999;
+      }
+
+      .region__head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px;
+        justify-content: space-between;
+      }
+      .region__count {
+        white-space: nowrap;
+      }
+      .region__position {
+        display: block;
+        margin: 2px 0 0;
+      }
+      .region__note {
+        margin: 6px 0 0;
+      }
+
+      /* An inline state that stands in place: rename, and occupied-Category removal. */
+      .inline-form {
+        border: 2px solid #999;
+        border-radius: 6px;
+        background: #ebebeb;
+        padding: 8px;
+        margin: 8px 0 0;
+      }
+      .inline-form p {
+        margin: 0 0 6px;
+      }
+      .field {
+        display: block;
+        margin: 0 0 6px;
+      }
+      .field__label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin: 0 0 2px;
+      }
+      .input,
+      .select {
+        font: inherit;
+        font-size: 0.85rem;
+        width: 100%;
+        min-width: 0;
+        min-height: 44px;
+        padding: 0 8px;
+        border: 2px solid #999;
+        border-radius: 6px;
+        background: #fff;
+        color: #222;
+      }
+
+      /* ---------- post-its ---------- */
+
+      .postits {
+        list-style: none;
+        margin: 10px 0 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .postit {
+        min-width: 0;
+        background: #fff;
+        border: 2px solid #ddd;
+        border-left: 6px solid #999;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      .postit--mine {
+        border-left-color: #333;
+      }
+      .postit__text {
+        margin: 0;
+        font-size: 0.9rem;
+      }
+      .postit__by {
+        margin: 4px 0 0;
+      }
+
+      .move {
+        margin: 8px 0 0;
+        border-top: 2px dotted #ddd;
+        padding: 8px 0 0;
+      }
+      .move__row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: stretch;
+      }
+      .move__row .select {
+        flex: 1 1 min(12rem, 100%);
+        width: auto;
+      }
+      .move__row .btn {
+        flex: 0 0 auto;
+        min-width: min(5rem, 100%);
+      }
+
+      .postit__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+      }
+      .postit__actions .btn {
+        min-width: min(6rem, 100%);
+      }
+
+      .own-note {
+        margin: 6px 0 0;
+        border-left: 4px solid #999;
+        padding-left: 8px;
+      }
+
+      /* ---------- new category ---------- */
+
+      .new-category {
+        margin: 14px 0 0;
+        border-top: 2px solid #ddd;
+        padding: 12px 0 0;
+      }
+      .new-category__row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: stretch;
+      }
+      .new-category__row .input {
+        flex: 1 1 min(14rem, 100%);
+        width: auto;
+      }
+      .new-category__row .btn {
+        flex: 0 0 auto;
+        min-width: min(9rem, 100%);
+      }
+
+      /* ---------- annotation ---------- */
+
+      .annotations {
+        margin: 16px 0 0;
+        border: 2px dashed #999;
+        border-radius: 8px;
+        background: #ebebeb;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        color: #444;
+      }
+      .annotations h2 {
+        font-size: 0.85rem;
+        margin: 0 0 6px;
+      }
+      .annotations ul {
+        margin: 0;
+        padding-left: 1.1rem;
+      }
+      .annotations li {
+        margin: 0 0 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <p class="wf-banner">
+      WIREFRAME — Facilitator sorting surface. Validated at 375 / 768 / 1280 px. Grayscale and
+      structural; not a visual design.
+    </p>
+
+    <div class="head">
+      <h1>Ideas we should act on next quarter</h1>
+      <p class="muted">
+        Autumn conference 2026 · Workshop: What slows us down · Post-it round
+        <span class="badge">Closed</span>
+      </p>
+      <p class="head__prompt">Sorting this board</p>
+    </div>
+
+    <main class="box">
+      <div class="toolbar">
+        <div>
+          <h2>Board</h2>
+          <p class="muted toolbar__counts">
+            14 post-its · 5 uncategorised · 3 categories · 9 placed
+          </p>
+        </div>
+        <!--
+          The entry to the reversal surface: always here, on the toolbar, whether or not anything has
+          just been discarded. It is not the aftermath of a Discard and it is not a timed undo — the
+          window runs to archival (prd.md#fr4-discard-and-restore).
+        -->
+        <p class="toolbar__actions">
+          <a class="btn" href="discarded-postits.html">Discarded post-its (3)</a>
+        </p>
+      </div>
+
+      <ul class="regions">
+        <!-- ============ Uncategorised ============ -->
+        <li class="region region--uncategorised">
+          <div class="region__head">
+            <h3>Uncategorised</h3>
+            <span class="muted region__count">5 post-its</span>
+          </div>
+          <!--
+            Uncategorised carries no rename, no reorder and no remove control — it is not a Category
+            and cannot be one (docs/UBIQUITOUS_LANGUAGE.md#output). The sentence says so rather than
+            leaving its absence to be read as an oversight.
+          -->
+          <p class="muted region__note">
+            Where every post-it arrives. It can't be renamed, reordered or removed.
+          </p>
+
+          <ul class="postits">
+            <li class="postit postit--mine">
+              <p class="postit__text">
+                The coffee machine on floor 3 has been broken since the spring conference.
+              </p>
+              <p class="muted postit__by">Ana Ruiz</p>
+
+              <div class="move">
+                <label class="field__label" for="move-u1">
+                  Move “The coffee machine on floor 3…” to
+                </label>
+                <p class="move__row">
+                  <select class="select" id="move-u1">
+                    <option selected>Uncategorised — where it is now</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+                <button class="btn" type="button">Correct</button>
+                <button class="btn" type="button">Remove</button>
+              </p>
+              <p class="muted own-note">
+                This one is yours. <strong>Remove</strong> is your own deletion — it leaves no trace
+                and only works while the round is open. <strong>Discard</strong> is the sorting act:
+                it leaves a trace and you can put it back. Two different controls, never the same
+                one.
+              </p>
+            </li>
+
+            <li class="postit">
+              <p class="postit__text">
+                Standups run 40 minutes because we do them for four teams at once.
+              </p>
+              <p class="muted postit__by">Jonas Lind</p>
+              <div class="move">
+                <label class="field__label" for="move-u2">Move “Standups run 40 minutes…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-u2">
+                    <option selected>Uncategorised — where it is now</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+
+            <li class="postit">
+              <p class="postit__text">Code review sits for two days before anyone picks it up.</p>
+              <p class="muted postit__by">Priya Nair</p>
+              <div class="move">
+                <label class="field__label" for="move-u3">Move “Code review sits for two days…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-u3">
+                    <option selected>Uncategorised — where it is now</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+
+            <li class="postit">
+              <p class="postit__text">Thanks to the support rota for covering the release weekend.</p>
+              <p class="muted postit__by">Erik Sandberg</p>
+              <div class="move">
+                <label class="field__label" for="move-u4">Move “Thanks to the support rota…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-u4">
+                    <option selected>Uncategorised — where it is now</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+
+            <li class="postit">
+              <p class="postit__text">Too many tools all telling me the same thing at once.</p>
+              <p class="muted postit__by">Mia Holm</p>
+              <div class="move">
+                <label class="field__label" for="move-u5">Move “Too many tools all telling me…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-u5">
+                    <option selected>Uncategorised — where it is now</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+          </ul>
+        </li>
+
+        <!-- ============ Category 1 ============ -->
+        <li class="region">
+          <div class="region__head">
+            <h3>Recognition and thanks</h3>
+            <span class="muted region__count">3 post-its</span>
+          </div>
+          <!--
+            Reorder is an explicit non-drag control and the resulting position is stated in words, not
+            inferred from where the region sits on screen. At 375px the regions are one across, so
+            position read from layout alone would be unreadable and unspeakable.
+          -->
+          <span class="muted region__position">Position 1 of 3</span>
+          <p class="controls">
+            <button class="btn" type="button">Rename</button>
+            <button class="btn" type="button" aria-disabled="true">Move up</button>
+            <button class="btn" type="button">Move down — to position 2</button>
+            <button class="btn" type="button">Remove</button>
+          </p>
+
+          <ul class="postits">
+            <li class="postit">
+              <p class="postit__text">Thanks to Sara for the migration runbook — it saved us a day.</p>
+              <p class="muted postit__by">Jonas Lind</p>
+              <div class="move">
+                <label class="field__label" for="move-c1a">Move “Thanks to Sara for the migration runbook…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c1a">
+                    <option>Uncategorised</option>
+                    <option selected>Recognition and thanks — where it is now</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">The onboarding buddy scheme actually works. Keep it.</p>
+              <p class="muted postit__by">Priya Nair</p>
+              <div class="move">
+                <label class="field__label" for="move-c1b">Move “The onboarding buddy scheme…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c1b">
+                    <option>Uncategorised</option>
+                    <option selected>Recognition and thanks — where it is now</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Support rota covered the release weekend without being asked.</p>
+              <p class="muted postit__by">Ana Ruiz</p>
+              <div class="move">
+                <label class="field__label" for="move-c1c">Move “Support rota covered the release weekend…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c1c">
+                    <option>Uncategorised</option>
+                    <option selected>Recognition and thanks — where it is now</option>
+                    <option>Tooling gaps</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+          </ul>
+        </li>
+
+        <!-- ============ Category 2 — occupied, being removed ============ -->
+        <li class="region">
+          <div class="region__head">
+            <h3>Tooling gaps</h3>
+            <span class="muted region__count">4 post-its</span>
+          </div>
+          <span class="muted region__position">Position 2 of 3</span>
+          <p class="controls">
+            <button class="btn" type="button">Rename</button>
+            <button class="btn" type="button">Move up — to position 1</button>
+            <button class="btn" type="button">Move down — to position 3</button>
+            <button class="btn" type="button">Remove</button>
+          </p>
+
+          <!--
+            Removing an occupied Category asks where its post-its go, with Uncategorised offered as
+            the default. An empty Category is removed with no prompt at all.
+          -->
+          <div class="inline-form">
+            <p><strong>Remove “Tooling gaps”?</strong></p>
+            <p class="muted">It holds 4 post-its. Say where they go — they are not deleted.</p>
+            <label class="field">
+              <span class="field__label">Move its 4 post-its to</span>
+              <select class="select" id="removal-destination">
+                <option selected>Uncategorised</option>
+                <option>Recognition and thanks</option>
+                <option>Meeting overload</option>
+              </select>
+            </label>
+            <p class="controls">
+              <button class="btn btn--primary" type="button">Move them and remove</button>
+              <button class="btn" type="button">Cancel</button>
+            </p>
+          </div>
+
+          <ul class="postits">
+            <li class="postit">
+              <p class="postit__text">The build takes 22 minutes and fails about a third of the time.</p>
+              <p class="muted postit__by">Priya Nair</p>
+              <div class="move">
+                <label class="field__label" for="move-c2a">Move “The build takes 22 minutes…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c2a">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option selected>Tooling gaps — where it is now</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">
+                We have three ways to run the test suite and none of them is documented.
+              </p>
+              <p class="muted postit__by">Erik Sandberg</p>
+              <div class="move">
+                <label class="field__label" for="move-c2b">Move “We have three ways to run the test suite…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c2b">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option selected>Tooling gaps — where it is now</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Staging data is six months stale so nothing reproduces.</p>
+              <p class="muted postit__by">Mia Holm</p>
+              <div class="move">
+                <label class="field__label" for="move-c2c">Move “Staging data is six months stale…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c2c">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option selected>Tooling gaps — where it is now</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Nobody knows who owns the deployment scripts any more.</p>
+              <p class="muted postit__by">Jonas Lind</p>
+              <div class="move">
+                <label class="field__label" for="move-c2d">Move “Nobody knows who owns the deployment scripts…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c2d">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option selected>Tooling gaps — where it is now</option>
+                    <option>Meeting overload</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+          </ul>
+        </li>
+
+        <!-- ============ Category 3 — being renamed ============ -->
+        <li class="region">
+          <div class="region__head">
+            <h3>Meeting overload</h3>
+            <span class="muted region__count">2 post-its</span>
+          </div>
+          <span class="muted region__position">Position 3 of 3</span>
+          <p class="controls">
+            <button class="btn" type="button">Rename</button>
+            <button class="btn" type="button">Move up — to position 2</button>
+            <button class="btn" type="button" aria-disabled="true">Move down</button>
+            <button class="btn" type="button">Remove</button>
+          </p>
+
+          <!-- Renaming is cosmetic and moves nothing (prd.md#edge-cases). -->
+          <div class="inline-form">
+            <label class="field">
+              <span class="field__label">Rename this category</span>
+              <input class="input" id="rename-c3" type="text" value="Meeting overload" />
+            </label>
+            <p class="muted">Up to 60 characters. Renaming moves no post-its.</p>
+            <p class="controls">
+              <button class="btn btn--primary" type="button">Save name</button>
+              <button class="btn" type="button">Cancel</button>
+            </p>
+          </div>
+
+          <ul class="postits">
+            <li class="postit">
+              <p class="postit__text">Standups run 40 minutes because we do them for four teams at once.</p>
+              <p class="muted postit__by">Ana Ruiz</p>
+              <div class="move">
+                <label class="field__label" for="move-c3a">Move “Standups run 40 minutes…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c3a">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option selected>Meeting overload — where it is now</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">
+                Half my week is meetings I could have read the notes for in five minutes.
+              </p>
+              <p class="muted postit__by">Priya Nair</p>
+              <div class="move">
+                <label class="field__label" for="move-c3b">Move “Half my week is meetings…” to</label>
+                <p class="move__row">
+                  <select class="select" id="move-c3b">
+                    <option>Uncategorised</option>
+                    <option>Recognition and thanks</option>
+                    <option>Tooling gaps</option>
+                    <option selected>Meeting overload — where it is now</option>
+                  </select>
+                  <button class="btn btn--primary" type="button">Move</button>
+                </p>
+              </div>
+              <p class="postit__actions">
+                <button class="btn btn--discard" type="button">Discard</button>
+              </p>
+            </li>
+          </ul>
+        </li>
+      </ul>
+
+      <!-- Creating the next Category. Present at every width, in the same place. -->
+      <div class="new-category">
+        <label class="field__label" for="new-category-name">New category name</label>
+        <p class="new-category__row">
+          <input class="input" id="new-category-name" type="text" placeholder="Name it after what people wrote…" />
+          <button class="btn btn--primary" type="button">Add category</button>
+        </p>
+        <p class="muted">Up to 60 characters. 3 of 20 categories used on this board.</p>
+      </div>
+    </main>
+
+    <div class="annotations">
+      <h2>Interaction notes (annotation, not part of the surface)</h2>
+      <ul>
+        <li>
+          <strong>Placement needs no drag and no pointer.</strong> Every post-it carries a labelled
+          destination control listing Uncategorised and every category by name, plus a Move button.
+          Placing from Uncategorised, moving between categories and moving back to Uncategorised are
+          the same three keystrokes in all three directions. The destination is named in the label
+          and in the option text, never by where a region sits on screen.
+        </li>
+        <li>
+          <strong>No drag affordance appears at any width</strong>, 1280px included. Stories S02 and
+          S03 both decline to build drag, so drawing a handle or a drop hint would put an
+          unimplementable control into an artifact five stories treat as authoritative.
+        </li>
+        <li>
+          <strong>Reorder is explicit.</strong> Move up / Move down name the resulting position in
+          the button itself, and the region states its own position in words. The control at the end
+          of the order is disabled rather than absent, so the set of controls does not change shape
+          as a category moves.
+        </li>
+        <li>
+          <strong>Discard is per post-it and reversible.</strong> It sits on every post-it, in
+          Uncategorised and in every category alike. It is never worded as deletion or as permanent
+          removal — permanent removal is admin-only and is not on this surface at all.
+        </li>
+        <li>
+          <strong>Nothing here is queued.</strong> Sorting is online-only: a failed move states the
+          failure and the post-it stays visibly where it was. No control offers to retry later.
+        </li>
+      </ul>
+    </div>
+  </body>
+</html>

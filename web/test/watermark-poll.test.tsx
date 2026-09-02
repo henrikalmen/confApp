@@ -93,7 +93,10 @@ describe('the shared watermark poll', () => {
    * **Every call site, and only these.** The attendee Schedule view the loop came from; the Session
    * Activities view, whose own refresh S01 built and this story retired; and the organizer Schedule
    * view, added 2026-08-29 so a co-organizer's change reaches the person composing the schedule
-   * (`plan.json#sharedDecisions` → "Near-live propagation: one cursor").
+   * (`plan.json#sharedDecisions` → "Near-live propagation: one cursor"). And the projected Board
+   * View (S07), which is the one call site holding **no Membership and no cursor**: a room machine
+   * cannot read the Membership-gated activity watermark, so it re-reads its whole (cheap, one-Round)
+   * Board on this same cadence rather than growing a second, anonymously reachable change signal.
    *
    * **A call site is not a mechanism, and this list growing is not the thing to be afraid of.** What
    * must stay singular is the implementation, and that is asserted above and independently of this:
@@ -112,6 +115,7 @@ describe('the shared watermark poll', () => {
     expect(callSites).toEqual([
       '/activities/SessionActivitiesPanel.tsx',
       '/attendee/AttendeeSchedulePanel.tsx',
+      '/display/DisplayBoardView.tsx',
       '/schedule/SchedulePanel.tsx',
     ]);
   });

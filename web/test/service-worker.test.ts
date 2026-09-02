@@ -575,3 +575,105 @@ describe('a cold launch with no connection', () => {
     expect(worker.cache.stored.size).toBe(precached);
   });
 });
+
+// ---------- the projected board is outside this worker entirely (S04 TI12) ----------
+
+/**
+ * `/display/<token>` is a **second entry document**, not a route of this app, and the worker must
+ * neither store it nor answer from what it has stored.
+ *
+ * One omission would have caused two defects, so both halves are asserted separately: the room
+ * machine getting the signed-in app's document, and the employee's cached shell being replaced by
+ * the display document - the second visible only offline, which is where nobody looks.
+ *
+ * Every assertion here is on **cache contents** after the navigation, never on the requests issued.
+ */
+describe('a projected board navigation', () => {
+  const TOKEN = 'wJq3B7nVYt1sK0pLmXcZaR8dEfGhIjKlMnOpQrStUvW';
+
+  async function installed(instance: Worker = worker): Promise<string[]> {
+    const waited: Promise<unknown>[] = [];
+    instance.listeners.get('install')!({
+      waitUntil: (value: Promise<unknown>) => waited.push(value),
+    });
+    await Promise.all(waited);
+    return [...instance.cache.stored.keys()].sort();
+  }
+
+  it('is passed to the network, with the worker answering nothing', async () => {
+    await installed();
+
+    const answer = await dispatchFetch(worker, request(`/display/${TOKEN}`, { mode: 'navigate' }));
+
+    // `undefined` is the worker declining to handle it at all – the same branch `/api/` takes.
+    expect(answer).toBeUndefined();
+  });
+
+  it('leaves the cached application shell exactly as it was', async () => {
+    const precached = await installed();
+    const shellBefore = await worker.cache.match(`${ORIGIN}/index.html`);
+
+    await dispatchFetch(worker, request(`/display/${TOKEN}`, { mode: 'navigate' }));
+    await flushPendingWrites();
+
+    expect([...worker.cache.stored.keys()].sort()).toEqual(precached);
+    expect(await worker.cache.match(`${ORIGIN}/index.html`)).toBe(shellBefore);
+    // And nothing was filed under the display URL either.
+    expect([...worker.cache.stored.keys()].some((url) => url.includes('/display/'))).toBe(false);
+  });
+
+  /**
+   * The half that only shows up offline: after a projected-board visit, the signed-in app still
+   * launches from the shell it had - rather than into a board page that cannot sign in.
+   */
+  it('leaves the signed-in app launching offline afterwards', async () => {
+    const DISPLAY_HTML = '<!doctype html><html><body>projected board</body></html>';
+    let online = true;
+
+    const instance = loadWorker((url) => {
+      if (!online) return null;
+      return url.includes('/display/')
+        ? networkResponse(url, true, 'text/html; charset=utf-8', DISPLAY_HTML)
+        : networkResponse(url);
+    });
+
+    await installed(instance);
+    await dispatchFetch(instance, request(`/display/${TOKEN}`, { mode: 'navigate' }));
+    await flushPendingWrites();
+
+    online = false;
+    const launched = await dispatchFetch(
+      instance,
+      request('/conferences/kickoff-2026', { mode: 'navigate' }),
+    );
+
+    const html = await (launched as { text(): Promise<string> }).text();
+    expect(html).toContain('id="root"');
+    expect(html).not.toContain('projected board');
+  });
+
+  /** A fingerprinted asset under the prefix is left alone too, rather than cached as a shell. */
+  it('stores nothing for any request under the prefix, navigation or not', async () => {
+    const precached = await installed();
+
+    for (const path of [
+      `/display/${TOKEN}`,
+      '/display/anything.js',
+      '/display/assets/chunk-abc123.js',
+      /*
+       * The bare entry document, which the `/display/` prefix does **not** cover. nginx serves it
+       * as a real file through `location /`, so without its own exclusion a navigation here would
+       * be filed under the shell key and replace the signed-in app's cached document - the same
+       * second defect TI12 exists to prevent, reached through a different URL (review
+       * 2026-08-31, L1).
+       */
+      '/display.html',
+    ]) {
+      await dispatchFetch(worker, request(path));
+      await dispatchFetch(worker, request(path, { mode: 'navigate' }));
+    }
+    await flushPendingWrites();
+
+    expect([...worker.cache.stored.keys()].sort()).toEqual(precached);
+  });
+});

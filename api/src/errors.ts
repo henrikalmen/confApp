@@ -219,6 +219,79 @@ export const ERROR_CODES = {
   POST_IT_NOT_AUTHOR: 'POST_IT_NOT_AUTHOR',
   /** No post-it with that id on this Round, asked by someone entitled to know that. */
   POST_IT_NOT_FOUND: 'POST_IT_NOT_FOUND',
+  /**
+   * The post-it has been discarded, said to a Facilitator trying to move it (S05, FR3 -> Validation).
+   *
+   * Its own code, and neither of the two the placement path already had. It is not
+   * POST_IT_NOT_FOUND: the post-it is still stored, still carries its author's text, and is still
+   * restorable - "no longer on this round" would send a Facilitator looking for something that never
+   * left. And it is emphatically not CATEGORY_NOT_FOUND, which is what a discarded post-it *used* to
+   * be refused with before this code existed, naming a destination that was perfectly valid.
+   *
+   * The next action is the reason it earns a code: restore it first, from the discarded post-its
+   * surface. Nobody else's refusal has that next move.
+   *
+   * `409`, because it is a state conflict rather than a malformed request: nothing about what was
+   * sent is wrong. Reachable only to a holder of sorting authority, who can already read the
+   * discarded list.
+   */
+  POST_IT_DISCARDED: 'POST_IT_DISCARDED',
+  /**
+   * Permanent Removal was attempted by somebody who is not a conference-wide Admin (S06, FR5).
+   *
+   * Its own code rather than CONFERENCE_ROLE_REQUIRED, because the next action is different and
+   * that is this block's whole rule. CONFERENCE_ROLE_REQUIRED is the *non-disclosing* refusal - it
+   * says nothing about the conference, the session or what the caller holds, deliberately, so a
+   * stranger cannot enumerate anything with it. The caller here is not a stranger: they hold
+   * sorting authority on this very Board and are looking at the Post-it. Telling them "only an
+   * admin, and Discard is the act you already have" discloses nothing they cannot already see and
+   * is the only useful sentence - "you do not have permission to do this" would leave a Facilitator
+   * with an abusive Post-it on a projected wall and no next move.
+   *
+   * `403`. It is an authority refusal, and the request itself is perfectly well formed.
+   *
+   * Reached only *after* the sorting-authority gate has passed, which is what keeps the disclosure
+   * that narrow: someone with no standing in the Conference never sees this code
+   * (`api/src/routes/rounds.ts` -> the permanent-removal route).
+   */
+  POST_IT_ADMIN_REQUIRED: 'POST_IT_ADMIN_REQUIRED',
+
+  // ---------- facilitator board: categories (S02) ----------
+  // Four reasons, four codes, one per distinct next action: fix the name you typed, remove or
+  // merge a category before adding another, say where this category's post-its go, or accept that
+  // the category is not there any more. None is a synonym for a code above - a Board write refused
+  // for authority is still CONFERENCE_ROLE_REQUIRED and one refused on an archived Conference is
+  // still CONFERENCE_NOT_EDITABLE, because those are one rule with one sentence each and this
+  // feature does not get a second copy of either.
+  /** The category name is blank after trimming, or longer than CATEGORY_NAME_MAX_LENGTH. */
+  CATEGORY_NAME_INVALID: 'CATEGORY_NAME_INVALID',
+  /**
+   * The board already holds as many categories as it may.
+   *
+   * The message names the limit **and the current count**, because that is what tells the
+   * Facilitator the create failed on a full board rather than on something they typed. The count is
+   * read fresh at the moment of refusal, so a create that lost a race for the last slot reports the
+   * board as it actually is rather than as this request last saw it.
+   */
+  CATEGORY_LIMIT_REACHED: 'CATEGORY_LIMIT_REACHED',
+  /**
+   * A category holding post-its was asked to go with no destination for them.
+   *
+   * Its own code rather than a validation failure: nothing about the request is malformed, and the
+   * next action is a choice the Facilitator has to make - move them to Uncategorised, or to another
+   * category. The message carries the count because the choice depends on it.
+   */
+  CATEGORY_HOLDS_POST_ITS: 'CATEGORY_HOLDS_POST_ITS',
+  /**
+   * No category with that id on this round, asked by someone entitled to know that.
+   *
+   * This is also the answer to a request that tries to rename, reorder or remove **Uncategorised**.
+   * Uncategorised is not stored as a category row and no identifier addresses it
+   * (prd.md#fr2-the-uncategorised-holding-area), so any id sent to a category endpoint either names
+   * a real category on this round or names nothing at all - and there is deliberately no sentinel
+   * value, and so no special case, for the holding area.
+   */
+  CATEGORY_NOT_FOUND: 'CATEGORY_NOT_FOUND',
 
   // ---------- session activities: votes (S03) ----------
   // Four reasons, four codes, for four different next actions: your vote is already in and there
@@ -252,6 +325,32 @@ export const ERROR_CODES = {
    * carry information. This says only that results appear when voting ends.
    */
   POLL_RESULTS_NOT_YET_AVAILABLE: 'POLL_RESULTS_NOT_YET_AVAILABLE',
+
+  // ---------- the projected board: display links (S04) ----------
+  /**
+   * A Display Link did not resolve. **The deliberate exception to the one-code-per-reason
+   * convention every code above follows**, and the exception is the point.
+   *
+   * Five distinguishable situations answer with this one code, this one status and this one
+   * message: the link was revoked, its Round's Session day has passed, its Conference is still
+   * Draft, its Round has been deleted, and it was never issued at all. A sixth - a value whose
+   * shape could not be a token - answers identically too, which is why the route carries no shape
+   * schema on the token parameter (`api/src/routes/display.ts`).
+   *
+   * Everywhere else in this file a second reason earns a second code, because a caller's next move
+   * differs per reason and a person deserves to be told which wall they hit. Here there is no
+   * caller to help: the holder is an anonymous browser on a room machine that nobody signed in on,
+   * and telling the reasons apart would hand whoever holds a dead value an oracle over confApp's
+   * data - which Conferences exist, which have been published, which Rounds were deleted, and
+   * whether a guess was "not even a token" or "a token that has died". Every one of those is a fact
+   * about named Post-its behind a bearer credential.
+   *
+   * `404`: the thing named is not there. There is deliberately no `403`, no `410` and no `401` -
+   * each of those would say *why*, and "gone" and "never existed" would stop being the same answer.
+   * The single sentence lives in `displayLinkUnavailable()` in `api/src/rounds/display-link.ts`,
+   * built from a resolution result that carries no reason for it to read.
+   */
+  DISPLAY_LINK_UNAVAILABLE: 'DISPLAY_LINK_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -328,8 +427,45 @@ export function validationFailed(details: ErrorDetail[]): AppError {
   );
 }
 
-export function routeNotFound(method: string, path: string): AppError {
-  return new AppError(ERROR_CODES.ROUTE_NOT_FOUND, 404, `No endpoint exists at ${method} ${path}.`);
+/**
+ * No route matched.
+ *
+ * **The path is deliberately not echoed.** It is attacker-controlled, and on this server it can
+ * *be* a credential: a Display Link token rides in the path, and any spelling that misses the
+ * display route - a percent-escape, a duplicate slash, a `.` or `..` segment - lands here. Echoing
+ * it put a live bearer token into a response body, the shape most likely to be captured by
+ * client-side error reporting and by proxies that log bodies but not paths (gap re-review
+ * 2026-09-02, G29). Naming the address was worth something to a caller debugging a typo; it is not
+ * worth handing back a credential to anyone who can guess a URL shape nobody normalised.
+ *
+ * The method is kept: it comes from a fixed set, carries no secret, and is the half that actually
+ * tells a caller they used the wrong verb.
+ */
+export function routeNotFound(method: string): AppError {
+  return new AppError(
+    ERROR_CODES.ROUTE_NOT_FOUND,
+    404,
+    `No ${method} endpoint exists at that address.`,
+  );
+}
+
+/**
+ * The request line could not be parsed at all - a percent-malformed path, say.
+ *
+ * Raised by the router *before* any route is dispatched, so it is the one refusal that used to
+ * leave the server in Fastify's own shape rather than this envelope (`buildApp`'s
+ * `frameworkErrors`). It is here so that the claim this module makes about itself - one envelope,
+ * one exit - is true of every response, including the ones no handler produced.
+ *
+ * **The offending URL is not echoed.** It is attacker-controlled, of no use to a caller who
+ * already sent it, and under the Display Link prefix it would be a bearer credential.
+ */
+export function malformedRequestUrl(): AppError {
+  return new AppError(
+    ERROR_CODES.VALIDATION_FAILED,
+    400,
+    'That request could not be read. Check the address and try again.',
+  );
 }
 
 /**

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframe — Projected board view (link no longer available)</title>
+    <!--
+      WIREFRAME - the projected surface when its Display Link no longer resolves. Revoked, past its
+      Session's day, still Draft, its Round deleted, or never having existed at all: one message for
+      all of them, saying nothing about which. Projection viewport class: 1920x1080.
+
+      There is no control here, and deliberately not even a retry: nobody is at this machine, and a
+      retry the room could press would be the one pressable thing on a class that has none. The
+      surface keeps polling on its own, so a newly issued link starts working without anyone
+      touching anything.
+    -->
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        background: #f5f5f5;
+        color: #1a1a1a;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 48px;
+        overflow-wrap: break-word;
+      }
+
+      .notice {
+        border: 3px solid #999;
+        border-radius: 12px;
+        background: #fff;
+        padding: 56px 72px;
+        max-width: min(60rem, 100%);
+        text-align: center;
+      }
+      .notice__lead {
+        margin: 0;
+        font-size: 56px;
+        line-height: 1.15;
+        font-weight: 700;
+      }
+      .notice__detail {
+        margin: 24px 0 0;
+        font-size: 26px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="notice">
+      <p class="notice__lead">This board is no longer available.</p>
+      <p class="notice__detail">Ask the facilitator for a new link.</p>
+    </div>
+  </body>
+</html>

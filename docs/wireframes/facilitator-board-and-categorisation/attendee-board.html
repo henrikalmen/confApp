@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframe — The Attendee's live board</title>
+    <style>
+      /*
+       * Grayscale structural wireframe. No colour, no external asset, no network request.
+       *
+       * The same board, re-rendered for someone who cannot sort it. Read-only with respect to
+       * placement: no post-it on this surface — the Attendee's own included — carries a place, move
+       * or discard control (prd.md#fr9-the-attendees-live-board). Contribution continues alongside
+       * while the round is open, and lands in Uncategorised.
+       */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #f5f5f5;
+        color: #222;
+        font-family: system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.45;
+        overflow-wrap: break-word;
+      }
+
+      .box {
+        background: #fff;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .wf-banner {
+        border: 2px dashed #999;
+        background: #ebebeb;
+        color: #444;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.8rem;
+        margin: 0 0 12px;
+      }
+
+      h1 {
+        font-size: 1.15rem;
+        margin: 0 0 2px;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+      h3 {
+        font-size: 0.95rem;
+        margin: 0;
+      }
+
+      .muted {
+        color: #666;
+        font-size: 0.82rem;
+      }
+
+      .badge {
+        display: inline-block;
+        border: 2px solid #999;
+        border-radius: 999px;
+        padding: 0 8px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #444;
+        background: #ebebeb;
+      }
+
+      .head {
+        margin: 0 0 12px;
+      }
+      .head__prompt {
+        margin: 6px 0 0;
+        font-weight: 600;
+      }
+
+      .toolbar {
+        border-bottom: 2px solid #ddd;
+        padding: 0 0 10px;
+        margin: 0 0 12px;
+      }
+
+      /*
+       * Same responsive rule as the Facilitator's surface and the shipped .board__list: `auto-fill`
+       * with a `min()` floor, so 375px resolves to one region across and 1280px to as many as fit,
+       * without a fixed track count and without a breakpoint.
+       */
+      .regions {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr));
+        gap: 12px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .region {
+        min-width: 0;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background: #fafafa;
+        padding: 10px;
+      }
+      .region--uncategorised {
+        border-style: dashed;
+        border-color: #999;
+      }
+      .region__head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px;
+        justify-content: space-between;
+      }
+      .region__count {
+        white-space: nowrap;
+      }
+      .region__note {
+        margin: 6px 0 0;
+      }
+
+      .postits {
+        list-style: none;
+        margin: 10px 0 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .postit {
+        min-width: 0;
+        background: #fff;
+        border: 2px solid #ddd;
+        border-left: 6px solid #999;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      .postit--mine {
+        border-left-color: #333;
+      }
+      .postit__text {
+        margin: 0;
+        font-size: 0.9rem;
+      }
+      .postit__by {
+        margin: 4px 0 0;
+      }
+
+      /*
+       * Still on this device, not yet on the board. It sits **inside** the Uncategorised region
+       * because that is where it will land — not in a separate list below the board, which is where
+       * the shipped flat surface puts held items and which would read as a fourth place a post-it
+       * can be. The dashed edge is a second signal; the sentence inside is what says it.
+       */
+      .postit--pending {
+        border-style: dashed;
+        /* The thick author edge stays solid: a 6px dashed edge renders as broken blocks. */
+        border-left-style: solid;
+        background: #f0f0f0;
+      }
+      .postit__pending {
+        margin: 4px 0 0;
+        font-weight: 700;
+      }
+
+      /*
+       * The author's own controls on their own post-it, offered only while the round is open. These
+       * are the shipped author-deletion path, not sorting: no place, move or discard control appears
+       * on this surface for anyone.
+       */
+      .postit__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+      }
+      .postit__actions .btn {
+        min-width: min(6rem, 100%);
+      }
+
+      .compose {
+        margin: 14px 0 0;
+        border-top: 2px solid #ddd;
+        padding: 12px 0 0;
+      }
+      .field__label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin: 0 0 2px;
+      }
+      .textarea {
+        font: inherit;
+        font-size: 0.9rem;
+        width: 100%;
+        min-width: 0;
+        padding: 8px;
+        border: 2px solid #999;
+        border-radius: 6px;
+        background: #fff;
+        color: #222;
+      }
+      .compose__foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin: 6px 0 0;
+      }
+      .btn {
+        font: inherit;
+        font-size: 0.82rem;
+        min-height: 44px;
+        padding: 0 12px;
+        border-radius: 6px;
+        border: 2px solid #999;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+      }
+      .btn--primary {
+        background: #666;
+        border-color: #666;
+        color: #fff;
+        min-width: min(9rem, 100%);
+      }
+
+      .annotations {
+        margin: 16px 0 0;
+        border: 2px dashed #999;
+        border-radius: 8px;
+        background: #ebebeb;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        color: #444;
+      }
+      .annotations h2 {
+        font-size: 0.85rem;
+        margin: 0 0 6px;
+      }
+      .annotations ul {
+        margin: 0;
+        padding-left: 1.1rem;
+      }
+      .annotations li {
+        margin: 0 0 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <p class="wf-banner">
+      WIREFRAME — The Attendee's live board. Validated at 375 / 768 / 1280 px. Grayscale and
+      structural; not a visual design.
+    </p>
+
+    <div class="head">
+      <h1>Ideas we should act on next quarter</h1>
+      <p class="muted">
+        Autumn conference 2026 · Workshop: What slows us down · Post-it round
+        <span class="badge">Open</span>
+      </p>
+      <p class="head__prompt">What slows you down most in a normal week?</p>
+    </div>
+
+    <main class="box">
+      <div class="toolbar">
+        <h2>Board</h2>
+        <p class="muted">
+          15 post-its · 6 uncategorised · 3 categories. Updating as the facilitator sorts.
+        </p>
+      </div>
+
+      <ul class="regions">
+        <!-- ============ Uncategorised — holds the pending post-it ============ -->
+        <li class="region region--uncategorised" data-region="uncategorised" data-server-count="6">
+          <div class="region__head">
+            <h3>Uncategorised</h3>
+            <span class="muted region__count" data-count-label>6 post-its</span>
+          </div>
+          <p class="muted region__note">Where every post-it arrives before it is sorted.</p>
+
+          <ul class="postits">
+            <li class="postit postit--mine postit--pending" data-pending="true">
+              <p class="postit__text">Handovers between the two support teams lose things.</p>
+              <p class="muted postit__by">You — Mia Holm</p>
+              <!--
+                Counted by nobody yet. The number on the region above is the server's, and this item
+                has not reached the server: no count on this surface is a client-side derivation, so
+                the badge does not tick up to 7 when this appears.
+              -->
+              <p class="muted postit__pending">
+                Waiting to send — on this device only. It isn't in the count above yet.
+              </p>
+            </li>
+
+            <li class="postit">
+              <p class="postit__text">
+                The coffee machine on floor 3 has been broken since the spring conference.
+              </p>
+              <p class="muted postit__by">Ana Ruiz</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Staging data is six months stale so nothing reproduces.</p>
+              <p class="muted postit__by">Mia Holm</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Too many tools all telling me the same thing at once.</p>
+              <p class="muted postit__by">Erik Sandberg</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">
+                Nobody knows who owns the deployment scripts any more, so nobody touches them.
+              </p>
+              <p class="muted postit__by">Jonas Lind</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Recruiting takes so long the team plans around not hiring.</p>
+              <p class="muted postit__by">Priya Nair</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">We rewrite the same integration every second project.</p>
+              <p class="muted postit__by">Tomas Berg</p>
+            </li>
+          </ul>
+        </li>
+
+        <!-- ============ Categories, in the facilitator's order ============ -->
+        <li class="region" data-region="category" data-server-count="3">
+          <div class="region__head">
+            <h3>Recognition and thanks</h3>
+            <span class="muted region__count" data-count-label>3 post-its</span>
+          </div>
+          <ul class="postits">
+            <li class="postit">
+              <p class="postit__text">Thanks to Sara for the migration runbook — it saved us a day.</p>
+              <p class="muted postit__by">Jonas Lind</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">The onboarding buddy scheme actually works. Keep it.</p>
+              <p class="muted postit__by">Priya Nair</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Support rota covered the release weekend without being asked.</p>
+              <p class="muted postit__by">Ana Ruiz</p>
+            </li>
+          </ul>
+        </li>
+
+        <li class="region" data-region="category" data-server-count="4">
+          <div class="region__head">
+            <h3>Tooling gaps</h3>
+            <span class="muted region__count" data-count-label>4 post-its</span>
+          </div>
+          <ul class="postits">
+            <li class="postit">
+              <p class="postit__text">The build takes 22 minutes and fails about a third of the time.</p>
+              <p class="muted postit__by">Priya Nair</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">
+                We have three ways to run the test suite and none of them is documented.
+              </p>
+              <p class="muted postit__by">Erik Sandberg</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Local setup takes a new starter most of their first week.</p>
+              <p class="muted postit__by">Mia Holm</p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">Two issue trackers, and the one people use isn't the official one.</p>
+              <p class="muted postit__by">Tomas Berg</p>
+            </li>
+          </ul>
+        </li>
+
+        <li class="region" data-region="category" data-server-count="2">
+          <div class="region__head">
+            <h3>Meeting overload</h3>
+            <span class="muted region__count" data-count-label>2 post-its</span>
+          </div>
+          <ul class="postits">
+            <li class="postit postit--mine">
+              <p class="postit__text">Standups run 40 minutes because we do them for four teams at once.</p>
+              <p class="muted postit__by">You — Mia Holm</p>
+              <!--
+                Your own post-it, already placed by the facilitator into a category.
+
+                It carries **no move control and no discard control** — this surface is read-only with
+                respect to placement for everyone, the author included.
+
+                It does still carry the author's own Correct and Remove, because the round is open and
+                those are the shipped author-deletion path, not sorting: "an author deletes their own
+                post-it while it sits in a category" is permitted while the round is open
+                (prd.md#edge-cases), and it leaves no trace, unlike a discard. Drawing this post-it
+                without them would tell S08 to withdraw a capability the board already ships
+                (web/src/activities/SessionActivitiesPanel.tsx - `postIt.mine && open`).
+              -->
+              <p class="postit__actions">
+                <button class="btn" type="button">Correct</button>
+                <button class="btn" type="button">Remove</button>
+              </p>
+            </li>
+            <li class="postit">
+              <p class="postit__text">
+                Half my week is meetings I could have read the notes for in five minutes.
+              </p>
+              <p class="muted postit__by">Priya Nair</p>
+            </li>
+          </ul>
+        </li>
+      </ul>
+
+      <!-- The round is open, so contributing still works. New post-its land in Uncategorised. -->
+      <div class="compose">
+        <label class="field__label" for="compose">Your post-it</label>
+        <textarea class="textarea" id="compose" rows="2" placeholder="Add an idea…"></textarea>
+        <p class="compose__foot">
+          <span class="muted">0 / 280 · it'll arrive in Uncategorised</span>
+          <button class="btn btn--primary" type="button">Add post-it</button>
+        </p>
+      </div>
+    </main>
+
+    <div class="annotations">
+      <h2>Interaction notes (annotation, not part of the surface)</h2>
+      <ul>
+        <li>
+          <strong>No post-it here carries a place, move or discard control</strong> — not somebody
+          else's, and not your own. Sorting happens on one surface only, and it is not this one.
+        </li>
+        <li>
+          <strong>Your own post-it still carries Correct and Remove while the round is open</strong>,
+          wherever the facilitator has put it. That is the author-deletion path the board already
+          ships — it leaves no trace and it is yours alone to do — and it is a different act from a
+          discard, which only a facilitator makes and which can be undone. Read-only here means
+          read-only about <em>placement</em>, not about your own words.
+        </li>
+        <li>
+          <strong>A pending post-it sits inside Uncategorised</strong>, marked and named, because
+          that is where it lands when it sends. It is not in a separate list below the board: that
+          would read as a fourth place a post-it can be, and there are only three — Uncategorised, a
+          category, or discarded.
+        </li>
+        <li>
+          <strong>The count beside Uncategorised is the server's number.</strong> A pending item is
+          excluded from it, so no count on this surface is derived on the device and no two devices
+          can disagree about how many post-its a region holds.
+        </li>
+        <li>
+          <strong>A discarded post-it is simply gone from here</strong> — including your own. No
+          marker, no "set aside" note, no notification. Someone who wants the idea back writes a new
+          post-it while the round is open.
+        </li>
+        <li>
+          <strong>Categories appear in the facilitator's order</strong>, the same order the projected
+          screen shows, so someone at the back comparing the two sees one board.
+        </li>
+      </ul>
+    </div>
+  </body>
+</html>

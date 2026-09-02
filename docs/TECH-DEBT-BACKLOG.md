@@ -18,6 +18,17 @@ _No tech debt recorded yet._
   - Impact: any CI or scheduled run landing in the 07:00 UTC minute breaks on a test that is not actually failing. Silent today, deterministic tomorrow.
   - Suggested fix: narrow the assertion to the field under test – `expect(read.rawBody).not.toContain('"startTime":"07:00"')` – so a timestamp elsewhere in the body cannot satisfy the substring.
 
+### Run: 2026-08-31 09:32 UTC – tech-debt
+
+#### DEFERRED FINDINGS
+
+- **`npx vitest run --project api` fails 17 files on migration lock contention; the full `npx vitest run` is green** – `fileParallelism: false` is not taking effect for the project-filtered invocation, so the API integration files race each other for the migration lock against the shared `confapp_test` database and 17 of them fall over. The same files pass when the whole suite is run unfiltered.
+  - Severity: Medium
+  - Discovered: S04 (Display Link issuance and revocation) orchestrator verification run, 2026-08-31. **Pre-existing and not caused by S04**, which merely adds an 18th migrate-up/down file to that suite and so widens the window a little. Related pre-existing observation from the S02 run: the API integration suites are order- and load-sensitive against a shared `confapp_test`.
+  - Impact: the natural way to run just the API tests during development is the way that fails, which trains a developer to read a real regression as the known flake. It also means the fast feedback loop is the unreliable one while the slow full run is the trustworthy one.
+  - Suggested fix: establish why `fileParallelism: false` is honoured for the unfiltered run and dropped under `--project api` (workspace-level versus project-level config resolution is the first place to look), rather than serializing by hand. A per-worker database, or a migration step run once outside the test files, would remove the contention at the root instead of relying on the setting.
+
+
 ## Low
 <!-- Severity: cosmetic, minor consistency, or opportunistic cleanup. Address when convenient. -->
 
@@ -29,3 +40,14 @@ _No tech debt recorded yet._
   - Severity: Low
   - Discovered: S10 orchestrator verification run, 2026-08-20. Pre-existing on all three; deliberately left unformatted so S10's diff stayed limited to the offline slice. `api/test/join-code.test.ts` was missing from the first version of this entry, found by the S10 gap review (F09); `git log` shows it last touched in `782015c "checkin files for S05"`, so its drift is pre-existing too. The list is exactly what `npm run format:check` reports.
   - Suggested fix: run the project's format command over the three files as standalone housekeeping, separate from any feature branch, so the reformat noise does not obscure a story diff.
+
+### Run: 2026-08-31 11:35 UTC – tech-debt
+
+#### DEFERRED FINDINGS
+
+- **`docs/specs/session-activities/plan.json#sharedDecisions` still describes near-live propagation in terms of `round.activity_watermark_at`** – the timestamp cursor that ADR-007 and the 2026-08-29 opaque-counter migration replaced. The shared decision is titled *"Near-live propagation: one cursor, round.activity_watermark_at"* and the string occurs twice, both in that plan; `docs/specs/facilitator-board-and-categorisation/plan.json` and `docs/specs/conference-setup-and-schedule/plan.json` contain zero occurrences. All five stories of the session-activities plan are `done`, so nothing executes against the stale text – it is wrong only as a record.
+  - Severity: Low
+  - Discovered: S05 (Discard and restore) bookkeeping, 2026-08-31. Carried over from a `docs/STATE.local.md` focus bullet, which implied active work that does not exist; a completed artifact's inaccuracy is debt, not current state.
+  - Impact: a reader of the completed plan is told the cursor is a timestamp when it is an opaque counter. No live hazard on any active plan – the two plans currently being executed against do not contain the string.
+  - Decision (the load-bearing part): **deliberately not swept, not an oversight.** Only the `andthen:plan` skill may rewrite plan content, and a full regeneration risks the preservation predicate resetting completed stories to `pending` if any regenerated scope string differs. The cost of correcting the record is disproportionate to the cost of the record being wrong.
+  - Suggested fix: if it is ever corrected, do it as a targeted edit of that one decision's text, with the story statuses verified unchanged afterwards – **not** as a plan regeneration.

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SessionActivitiesPanel } from '../src/activities/SessionActivitiesPanel.tsx';
-import type { PostIt, Round, SessionWithRounds } from '../src/api/client.ts';
+import type { Category, PostIt, Round, SessionWithRounds } from '../src/api/client.ts';
 
 /**
  * S02 on the client: the named board, the compose box, the author's own controls, and the
@@ -45,6 +45,13 @@ function postIt(overrides: Partial<PostIt> & { id: string; text: string }): Post
 const ADAS = postIt({ id: 'p-ada', text: 'Waiting three days for test data' });
 const MINE = postIt({ id: 'p-mine', text: 'Handover gaps', authorName: 'Bo Nilsson', mine: true });
 
+/**
+ * A Round whose Board holds no Category, which is what every Board starts as.
+ *
+ * The Post-its are in **Uncategorised**, and its count comes from the payload rather than from the
+ * list beside it - the surface consumes the server's count and never re-derives one
+ * (facilitator-board S02, TI05).
+ */
 function round(
   state: 'open' | 'closed',
   postIts: PostIt[],
@@ -55,7 +62,8 @@ function round(
     kind: 'PostItRound',
     prompt: 'What slowed us down this quarter?',
     state,
-    postIts,
+    categories: [],
+    uncategorised: { postIts, postItCount: postIts.length },
     textMaxLength,
   };
 }
@@ -76,6 +84,7 @@ function payload(rounds: Round[], activityWatermark = FIRST_WATERMARK): SessionW
     },
     rounds,
     canRun: false,
+    canRemovePermanently: false,
     activityWatermark,
   };
 }
@@ -112,6 +121,11 @@ function routeFetch(routes: Record<string, Route | Route[]>): typeof fetch {
       : entry;
 
     answered.push({ method, path });
+    // The shape of a request that never reached the server: `fetch` rejects, and the client turns
+    // that into its own NETWORK_UNREACHABLE sentence rather than into a server refusal. It is the
+    // only honest way to write "the venue wifi died" - a stubbed flag would pass while the real
+    // path still hung (`docs/LEARNINGS.md#offline`).
+    if (route.status === 0) throw new TypeError('Failed to fetch');
     return new Response(JSON.stringify(route.body), {
       status: route.status,
       headers: { 'content-type': 'application/json' },
@@ -149,6 +163,55 @@ function textOnBoard(): string[] {
 
 function authorsOnBoard(): string[] {
   return [...document.querySelectorAll('[data-testid^="post-it-by-"]')].map(
+    (node) => node.textContent ?? '',
+  );
+}
+
+/**
+ * A Category on a Board, with the Post-its it holds and the **server's** count of them.
+ *
+ * `postItCount` defaults to the length of the list but is a separate argument on purpose: the two
+ * are allowed to disagree in a fixture precisely so a surface that re-derived the count from
+ * `postIts.length` would be caught by a test that states a different number
+ * (facilitator-board S02, "Board read projection contract").
+ */
+function category(
+  id: string,
+  name: string,
+  postIts: PostIt[],
+  postItCount: number = postIts.length,
+): Category {
+  return { id, name, postIts, postItCount };
+}
+
+/** A Post-it Round whose Board has been sorted: Categories in the Facilitator's order. */
+function sortedRound(
+  categories: Category[],
+  uncategorised: PostIt[],
+  state: 'open' | 'closed' = 'open',
+  uncategorisedCount: number = uncategorised.length,
+): Round {
+  return {
+    id: ROUND_ID,
+    kind: 'PostItRound',
+    prompt: 'What slowed us down this quarter?',
+    state,
+    categories,
+    uncategorised: { postIts: uncategorised, postItCount: uncategorisedCount },
+    textMaxLength: SERVER_CAP,
+  };
+}
+
+/** The Category names on the Board, in the order they are rendered in. */
+function categoryNames(): string[] {
+  return [...document.querySelectorAll('[data-testid^="category-name-"]')].map(
+    (node) => node.textContent ?? '',
+  );
+}
+
+/** The Post-it texts inside one region, in render order. */
+function textsIn(testId: string): string[] {
+  return [...screen.getByTestId(testId).querySelectorAll('[data-testid^="post-it-text-"]')].map(
     (node) => node.textContent ?? '',
   );
 }
@@ -711,5 +774,344 @@ describe('the post-it board', () => {
     // The person whose delete succeeded is not told it did not.
     expect(screen.queryByTestId(`board-error-${ROUND_ID}`)).toBeNull();
     expect(textOnBoard()).toEqual([]);
+  });
+
+  // ---------- S08: the Attendee's live Board ----------
+
+  /*
+   * The three Categories the room's screen shows, and the six Post-its nobody has placed yet.
+   *
+   * Bo is a Member with no Session Assignment and no Admin - `payload()` answers `canRun: false`,
+   * which is the server's answer and the only thing this surface reads about authority.
+   */
+  const BUILD = postIt({ id: 'p-build', text: 'The build takes 22 minutes' });
+  const SIGNOFF = postIt({ id: 'p-signoff', text: 'Sign-off takes a week' });
+  const INDUCTION = postIt({ id: 'p-induction', text: 'Nobody ran my induction' });
+  const LAPTOP = postIt({ id: 'p-laptop', text: 'My laptop arrived on day four' });
+  const UNPLACED = ['coffee', 'staging', 'tools', 'scripts', 'hiring', 'wifi'].map((slug, index) =>
+    postIt({ id: `p-${slug}`, text: `Unplaced idea ${index + 1}: ${slug}` }),
+  );
+
+  /**
+   * **Bo's phone shows the same Categories, in the same order, and follows the sorting**
+   * (Acceptance Scenario S01, OC01).
+   *
+   * Bo touches nothing. The Facilitator places two Post-its into "Handovers" and moves "Onboarding"
+   * above it, and the only thing that happens on this device is that the shared loop's cursor moved.
+   * The wait is on the second answer - which a panel ignoring the moved cursor could not produce -
+   * and every reading is taken afterwards, on the rendered Board.
+   *
+   * The counts asserted are the **server's**, off `postItCount`, and the request assertion at the
+   * end is what a second shape could not survive: one shared tick, one Board read, and nothing
+   * per-Category, per-Post-it or Attendee-specific.
+   */
+  it('shows the facilitator’s categories in their order and follows a re-sort, with no second request', async () => {
+    const before = sortedRound(
+      [
+        category('cat-tooling', 'Tooling', [BUILD]),
+        category('cat-handovers', 'Handovers', [SIGNOFF]),
+        category('cat-onboarding', 'Onboarding', [INDUCTION, LAPTOP]),
+      ],
+      UNPLACED,
+    );
+    const after = sortedRound(
+      [
+        category('cat-tooling', 'Tooling', [BUILD]),
+        category('cat-onboarding', 'Onboarding', [INDUCTION, LAPTOP]),
+        /*
+         * **Nine, against three cards.** The count and the list are allowed to disagree in a
+         * fixture precisely so that a surface re-deriving the count from `postIts.length` fails
+         * here - which is the whole of TI01's "server-supplied counts" clause. No payload the API
+         * produces looks like this; that is what makes it discriminating.
+         */
+        category('cat-handovers', 'Handovers', [SIGNOFF, UNPLACED[0]!, UNPLACED[1]!], 9),
+      ],
+      UNPLACED.slice(2),
+    );
+
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(SECOND_WATERMARK),
+      [`GET ${BASE}`]: [
+        { status: 200, body: payload([before]) },
+        { status: 200, body: payload([after], SECOND_WATERMARK) },
+      ],
+    });
+
+    expect(categoryNames()).toEqual(['Tooling', 'Handovers', 'Onboarding']);
+    expect(screen.getByTestId(`uncategorised-count-${ROUND_ID}`).textContent).toBe('6 post-its');
+    const boardBefore = screen.getByTestId(`board-${ROUND_ID}`);
+
+    await tick();
+    await waitFor(() => expect(answersFor('GET', BASE)).toBe(2));
+    await settle();
+
+    // The Facilitator's new order, on Bo's phone, with no reload and no remount.
+    expect(categoryNames()).toEqual(['Tooling', 'Onboarding', 'Handovers']);
+    expect(screen.getByTestId(`board-${ROUND_ID}`)).toBe(boardBefore);
+    // The payload's number, not the three cards beside it.
+    expect(screen.getByTestId('category-count-cat-handovers').textContent).toBe('9 post-its');
+    expect(screen.getByTestId(`uncategorised-count-${ROUND_ID}`).textContent).toBe('4 post-its');
+    expect(textsIn('category-cat-handovers')).toEqual([
+      SIGNOFF.text,
+      UNPLACED[0]!.text,
+      UNPLACED[1]!.text,
+    ]);
+    // Every Post-it under its author's name, wherever the Facilitator put it.
+    expect(screen.getByTestId(`post-it-by-${SIGNOFF.id}`).textContent).toBe('Ada Lovelace');
+
+    /*
+     * **One read per Board, and no request this surface invented.** The whole exchange is the
+     * shared loop's two-scalar poll and the one Session read a moved cursor prompted - no
+     * per-Category request, no per-Post-it request, and no Attendee-specific endpoint.
+     */
+    expect(new Set(calls.map((call) => `${call.method} ${call.path}`))).toEqual(
+      new Set([`GET ${WATERMARK}`, `GET ${BASE}`]),
+    );
+    /*
+     * And the **volume**, which a Set discards: the load at mount, the tick's two-scalar poll, and
+     * the one Board read that poll prompted. Three requests, and the Set above cannot tell three
+     * from thirty - a per-Category read issued against the same path would hide inside it.
+     */
+    expect(answersFor('GET', BASE)).toBe(2);
+    expect(answersFor('GET', WATERMARK)).toBe(1);
+    expect(calls).toHaveLength(3);
+  });
+
+  /**
+   * **Bo is offered no lever on the Board at all - on Bo's own Post-it as much as on anyone's**
+   * (Acceptance Scenario S02, OC02).
+   *
+   * Gated on `canRun` off the payload, which is the server's answer; the API refuses every one of
+   * these writes regardless, and that half is proved against real PostgreSQL in
+   * `api/test/post-it.integration.test.ts`. What this proves is that the surface offers nothing to
+   * try it with.
+   *
+   * And the two controls that must **survive**: Correct and Remove on Bo's own Post-it while the
+   * Round is open. They are an author's edit of their own words and their own deletion, not
+   * placement - read-only here means read-only about *where a Post-it sits*.
+   */
+  it('offers an attendee no placement, move, discard or restore control – their own post-it included', async () => {
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+      [`GET ${BASE}`]: {
+        status: 200,
+        body: payload([sortedRound([category('cat-tooling', 'Tooling', [MINE, ADAS])], UNPLACED)]),
+      },
+    });
+
+    // The Board itself reads in full - authority decides the controls, never the reading.
+    expect(textsIn('category-cat-tooling')).toEqual([MINE.text, ADAS.text]);
+    expect(screen.getByTestId(`uncategorised-${ROUND_ID}`)).not.toBeNull();
+
+    /*
+     * Swept by prefix rather than named one Post-it at a time: a sorting control added to this
+     * surface later would have to be on a list to be missed, and this is not such a list.
+     */
+    for (const prefix of [
+      'move-',
+      'post-it-discard-',
+      'post-it-permanent-removal-',
+      'permanent-removal-',
+      'discarded-',
+      'category-controls-',
+      'category-rename-',
+      'category-up-',
+      'category-down-',
+      'category-remove-',
+      'new-category-',
+    ]) {
+      expect(
+        document.querySelectorAll(`[data-testid^="${prefix}"]`).length,
+        `no ${prefix} control should be rendered for a member without sorting authority`,
+      ).toBe(0);
+    }
+    // Not even worded: nothing on this surface names a sorting act.
+    expect(screen.queryByText(/discard|restore|set aside/i)).toBeNull();
+
+    // But the author's own two controls are exactly where they were, on Bo's post-it and no other.
+    expect(screen.queryByTestId(`post-it-correct-${MINE.id}`)).not.toBeNull();
+    expect(screen.queryByTestId(`post-it-remove-${MINE.id}`)).not.toBeNull();
+    expect(screen.queryByTestId(`post-it-correct-${ADAS.id}`)).toBeNull();
+    expect(screen.queryByTestId(`post-it-remove-${ADAS.id}`)).toBeNull();
+  });
+
+  /**
+   * **The connection dies mid-sort: the Board stays, ages honestly, and resumes**
+   * (Acceptance Scenario S05, OC04).
+   *
+   * The clock is the device's own and is moved by hand, because what is under test is a difference
+   * of two readings of it. `Date.now` alone is faked - the poll's real interval, the real `focus`
+   * registration and the real tick all stay as they ship, so the re-render that makes the age
+   * advance has to come from the shipped seam rather than from a timer this test installed.
+   *
+   * Nothing is waited *on* that the defect could produce: the reading is taken after ticks that
+   * answered nothing at all, which is precisely the state in which a label anchored on arriving
+   * data rather than on a clock would freeze at "Updated just now".
+   */
+  it('keeps the board and ages it while nothing arrives, and resets it on the next successful read', async () => {
+    const start = Date.parse('2026-09-15T13:20:00.000Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      await renderPanel({
+        /*
+         * The link is gone entirely: neither the poll nor the read reaches the host. Three entries
+         * against the three ticks this test dispatches, so the reconnect is delivered by a tick it
+         * provokes - never left to the shipped five-second interval to deliver in real time, which
+         * would make the shared cadence constant part of the assertion and cost the suite a
+         * five-second sleep.
+         */
+        [`GET ${WATERMARK}`]: [
+          { status: 0, body: null },
+          { status: 0, body: null },
+          watermarkAnswer(SECOND_WATERMARK),
+        ],
+        [`GET ${BASE}`]: [
+          {
+            status: 200,
+            body: payload([sortedRound([category('cat-tooling', 'Tooling', [ADAS])], UNPLACED)]),
+          },
+          {
+            status: 200,
+            body: payload(
+              [
+                sortedRound(
+                  [category('cat-tooling', 'Tooling', [ADAS, UNPLACED[0]!])],
+                  UNPLACED.slice(1),
+                ),
+              ],
+              SECOND_WATERMARK,
+            ),
+          },
+        ],
+      });
+
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated just now');
+
+      // Four minutes with nothing arriving. The ticks are real; the answers are not coming.
+      now.mockReturnValue(start + 4 * 60_000);
+      await tick();
+      await settle();
+      await tick();
+      await settle();
+
+      // The Board Bo was reading is still on screen - never replaced by an error box.
+      expect(textsIn('category-cat-tooling')).toEqual([ADAS.text]);
+      expect(screen.queryByTestId('activities-error')).toBeNull();
+      // And the age is honest about how long ago that was.
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated 4 minutes ago');
+
+      // The link returns: the next poll replaces the Board and the age starts again.
+      now.mockReturnValue(start + 5 * 60_000);
+      await tick();
+      await waitFor(() => expect(answersFor('GET', BASE)).toBe(2));
+      await settle();
+
+      expect(textsIn('category-cat-tooling')).toEqual([ADAS.text, UNPLACED[0]!.text]);
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated just now');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  /**
+   * **A healthy connection with nobody sorting stays "Updated just now"** (OC04, owner decision
+   * 2026-09-02).
+   *
+   * The age answers "are we still in touch with the server", which is what a reader takes it to
+   * mean - so it is anchored on the **watermark exchange**, the thing that happens every cadence,
+   * and not on the last Board replacement, which for an Attendee happens only when somebody sorts.
+   * Anchored on the read, a quiet room and a dead connection produce exactly the same sentence, and
+   * an indicator that cries outage during normal operation is one people learn to ignore.
+   *
+   * The cursor never moves here, so the Board is never re-read - the assertion at the end is that
+   * it was read exactly once. Every tick is answered; nothing is failing. Four minutes pass on the
+   * device's own clock, which is more than enough for the 45-second "just now" threshold.
+   */
+  it('holds the age at “just now” while the watermark keeps answering and the cursor never moves', async () => {
+    const start = Date.parse('2026-09-15T13:20:00.000Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      await renderPanel({
+        // One entry, answered on every tick: the server is reachable and the Board has not changed.
+        [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+        [`GET ${BASE}`]: {
+          status: 200,
+          body: payload([sortedRound([category('cat-tooling', 'Tooling', [ADAS])], UNPLACED)]),
+        },
+      });
+
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated just now');
+
+      // Ninety seconds of a quiet room: past the "just now" threshold, and nothing has gone wrong.
+      now.mockReturnValue(start + 90_000);
+      await tick();
+      await waitFor(() => expect(answersFor('GET', WATERMARK)).toBe(1));
+      await settle();
+
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated just now');
+
+      // Four minutes, still quiet, still reachable - the outage wording must not appear.
+      now.mockReturnValue(start + 4 * 60_000);
+      await tick();
+      await waitFor(() => expect(answersFor('GET', WATERMARK)).toBe(2));
+      await settle();
+
+      expect(textsIn('category-cat-tooling')).toEqual([ADAS.text]);
+      expect(screen.getByTestId('activities-age').textContent).toBe('Updated just now');
+      // And none of that cost a second Board read: the cursor never moved.
+      expect(answersFor('GET', BASE)).toBe(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  /**
+   * **Membership ending replaces the Board; a dead connection does not** (Acceptance Scenario S06,
+   * OC02, OC04).
+   *
+   * Both failures are run through one panel in one test, because the defect this guards against is
+   * the *blurring* of them: a refusal about this caller's access has to take the Board away, and a
+   * request that never left the device must not. The age goes with the Board, because there is no
+   * longer anything on screen for it to be the age of.
+   */
+  it('replaces the board when membership ends, and keeps board and age through a dead connection', async () => {
+    await renderPanel({
+      [`GET ${WATERMARK}`]: [
+        // The dead connection first, then the cursor that moves and brings the refusal with it.
+        { status: 0, body: null },
+        watermarkAnswer(SECOND_WATERMARK),
+      ],
+      [`GET ${BASE}`]: [
+        {
+          status: 200,
+          body: payload([sortedRound([category('cat-tooling', 'Tooling', [ADAS])], [])]),
+        },
+        {
+          status: 403,
+          body: {
+            error: {
+              code: 'CONFERENCE_MEMBERSHIP_REQUIRED',
+              message: 'You have not joined this conference.',
+            },
+          },
+        },
+      ],
+    });
+
+    // A dead connection first: the Board and its age both survive it.
+    await tick();
+    await settle();
+    expect(textsIn('category-cat-tooling')).toEqual([ADAS.text]);
+    expect(screen.getByTestId('activities-age')).not.toBeNull();
+
+    // Then the revocation, which is the server answering about this caller.
+    await tick();
+    await waitFor(() => expect(answersFor('GET', BASE)).toBe(2));
+    await settle();
+
+    expect(screen.queryByTestId(`board-${ROUND_ID}`)).toBeNull();
+    expect(screen.getByTestId('activities-error').textContent).toContain('not joined');
+    // No age beside a refusal: there is nothing on screen for it to be the age of.
+    expect(screen.queryByTestId('activities-age')).toBeNull();
   });
 });

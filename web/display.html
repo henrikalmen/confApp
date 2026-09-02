@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      The token is a path segment, so this page's own URL *is* a bearer credential. A Referer
+      header would carry it to any other origin this document ever caused a request to - so the
+      browser is told never to send one from here. The page has no outbound link and loads nothing
+      cross-origin today; this is what keeps that from silently becoming a leak the day it does.
+    -->
+    <meta name="referrer" content="no-referrer" />
+    <title>confApp board</title>
+    <!--
+      The projected Board (S04, FR7): a **second entry document**, not a route of the app.
+
+      A room machine has no Workspace session and must not acquire one on shared hardware, so this
+      document mounts no AuthProvider, registers no service worker, and pulls no sign-in, offline or
+      queueing machinery into the bundle it downloads. The SPA has no client-side router, so a route
+      of index.html would have had to be one - and every one of those subsystems would have come
+      with it.
+
+      Runtime configuration, exactly as index.html loads it: the static container rewrites
+      /config.js at start from its environment, so the same built image runs against any API base
+      URL without a rebuild. Loaded before the bundle so window config is in place first. It carries
+      public values only, and this page uses just the API base URL - it never signs anybody in.
+    -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="display-root"></div>
+    <script type="module" src="/src/display/main-display.tsx"></script>
+  </body>
+</html>

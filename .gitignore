@@ -14,6 +14,12 @@ screenshots/
 test-results/
 playwright-report/
 
+# Wireframe viewport captures are evidence, not regenerated build output: they are what a wireframe
+# set was signed off against, and they are cited by the validation report beside them. `screenshots/`
+# above is a bare directory pattern and so matches at every depth, which would otherwise swallow them.
+!docs/wireframes/**/screenshots/
+!docs/wireframes/**/screenshots/**
+
 # Environment
 .env
 .env.*

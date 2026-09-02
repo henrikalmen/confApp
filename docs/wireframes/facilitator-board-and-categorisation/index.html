@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframes — Facilitator board view and post-it categorisation</title>
+    <style>
+      /* Navigation hub for the wireframe set. Grayscale, self-contained, no network request. */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #f5f5f5;
+        color: #222;
+        font-family: system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+        overflow-wrap: break-word;
+      }
+
+      header {
+        max-width: min(60rem, 100%);
+        margin: 0 0 20px;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin: 0 0 6px;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+      p {
+        margin: 6px 0 0;
+      }
+      .muted {
+        color: #666;
+        font-size: 0.85rem;
+      }
+
+      .docs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .docs a {
+        display: inline-block;
+        border: 2px solid #999;
+        border-radius: 6px;
+        background: #fff;
+        color: #333;
+        padding: 8px 12px;
+        text-decoration: none;
+        font-size: 0.85rem;
+        font-weight: 600;
+        min-height: 44px;
+      }
+
+      .grid {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        min-width: 0;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background: #fff;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+      }
+      .card__class {
+        display: inline-block;
+        border: 2px solid #999;
+        border-radius: 999px;
+        padding: 0 8px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #444;
+        background: #ebebeb;
+        margin: 6px 0 0;
+      }
+      .card__desc {
+        flex: 1 1 auto;
+        font-size: 0.85rem;
+        color: #444;
+      }
+
+      /*
+       * A preview, scaled down so a whole surface reads at a glance. `loading="lazy"` keeps the hub
+       * responsive with seven frames on it; every frame is a local file, so nothing leaves the disk.
+       */
+      .card__preview {
+        margin: 10px 0 0;
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        background: #fff;
+        overflow: hidden;
+        height: 220px;
+        position: relative;
+      }
+      .card__preview iframe {
+        border: 0;
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: 0 0;
+      }
+      /*
+       * The member-facing previews render at the card's own width, which is around a phone's, so the
+       * thumbnail is a real narrow-viewport rendering rather than a shrunken wide one.
+       */
+      .card__preview--narrow iframe {
+        width: 100%;
+        height: 900px;
+      }
+      /*
+       * The projection previews are a fixed 1920px wide, so their scale has to come down with the
+       * card or the scaled frame runs past it. 0.19 fits a card at the widest layout; the narrow
+       * steps keep it inside the card on a phone, where the grid is one card across.
+       */
+      .card__preview--wide iframe {
+        width: 1920px;
+        height: 1080px;
+        transform: scale(0.19);
+      }
+      @media (max-width: 60rem) {
+        .card__preview--wide iframe {
+          transform: scale(0.155);
+        }
+      }
+      @media (max-width: 30rem) {
+        .card__preview--wide iframe {
+          transform: scale(0.135);
+        }
+      }
+
+      .card__open {
+        display: inline-block;
+        margin: 10px 0 0;
+        border: 2px solid #666;
+        border-radius: 6px;
+        background: #666;
+        color: #fff;
+        padding: 8px 12px;
+        text-decoration: none;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-align: center;
+        min-height: 44px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Wireframes — Facilitator board view and post-it categorisation</h1>
+      <p class="muted">
+        Story S01 · Four surfaces across two viewport classes. The facilitator's and the attendee's
+        surfaces are validated at 375 / 768 / 1280 px; the projected board view is a fourth viewport
+        class, validated at 1920×1080 and never signed off as the 1280 px capture with a larger font.
+      </p>
+      <p class="muted">
+        Grayscale and structural throughout. No colour, no external asset, no network request, and no
+        drag affordance at any width.
+      </p>
+      <ul class="docs">
+        <li><a href="page-inventory.md">Page inventory</a></li>
+        <li><a href="design-decisions.md">Settled design decisions</a></li>
+        <li><a href="validation-report.md">Validation report</a></li>
+        <li><a href="screenshots/">Viewport captures</a></li>
+      </ul>
+    </header>
+
+    <ul class="grid">
+      <li class="card">
+        <h2>Facilitator sorting surface</h2>
+        <span class="card__class">375 / 768 / 1280 px</span>
+        <p class="card__desc">
+          The one control surface. Placement without drag or pointer, category management (create,
+          rename, non-drag reorder, remove), a discard control on every post-it, and the permanent
+          entry to the discarded post-its. Shows the occupied-category removal and rename states.
+        </p>
+        <div class="card__preview card__preview--narrow">
+          <iframe src="facilitator-sorting.html" title="Facilitator sorting surface" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="facilitator-sorting.html">Open facilitator-sorting.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Discarded post-its</h2>
+        <span class="card__class">375 / 768 / 1280 px</span>
+        <p class="card__desc">
+          The only place a discard is reversed. A page with an address, not a toast or a timed undo:
+          who discarded each post-it and when, a restore per post-it that names Uncategorised as its
+          destination, and the statement that the window runs to archival.
+        </p>
+        <div class="card__preview card__preview--narrow">
+          <iframe src="discarded-postits.html" title="Discarded post-its" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="discarded-postits.html">Open discarded-postits.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Attendee's live board</h2>
+        <span class="card__class">375 / 768 / 1280 px</span>
+        <p class="card__desc">
+          The same board on a phone, read-only with respect to placement — no place, move or discard
+          control on any post-it, the attendee's own included. Shows where a pending post-it sits:
+          inside the Uncategorised region, excluded from its count.
+        </p>
+        <div class="card__preview card__preview--narrow">
+          <iframe src="attendee-board.html" title="Attendee's live board" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="attendee-board.html">Open attendee-board.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Projected board view — design ceiling</h2>
+        <span class="card__class">Projection · 1920×1080</span>
+        <p class="card__desc">
+          20 categories plus Uncategorised and 200 post-its on one screen. Every category and count
+          visible, nothing hidden behind an interaction, and no control of any kind. Post-it detail
+          degrades per category through three tiers; names, counts and boundaries never do.
+        </p>
+        <div class="card__preview card__preview--wide">
+          <iframe src="projected-board-view.html" title="Projected board view at the design ceiling" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="projected-board-view.html">Open projected-board-view.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Projected board view — empty board</h2>
+        <span class="card__class">Projection · 1920×1080</span>
+        <p class="card__desc">
+          Zero post-its. The categories render with counts of 0 and the grid sizes itself to them — a
+          legitimate pre-round state on the big screen, not an error.
+        </p>
+        <div class="card__preview card__preview--wide">
+          <iframe src="projected-board-empty.html" title="Projected board view with an empty board" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="projected-board-empty.html">Open projected-board-empty.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Projected board view — link no longer available</h2>
+        <span class="card__class">Projection · 1920×1080</span>
+        <p class="card__desc">
+          One neutral message for revoked, expired, still-draft, deleted-round and never-existed
+          alike, saying nothing about which. No control, and deliberately not even a retry.
+        </p>
+        <div class="card__preview card__preview--wide">
+          <iframe src="projected-board-unavailable.html" title="Projected board view when the link no longer resolves" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="projected-board-unavailable.html">Open projected-board-unavailable.html</a>
+      </li>
+
+      <li class="card">
+        <h2>Projected board view — connection lost</h2>
+        <span class="card__class">Projection · 1920×1080</span>
+        <p class="card__desc">
+          The last-rendered board stays on screen behind a staleness indicator naming when it was last
+          true, and resumes on its own. An indicator, never a retry button.
+        </p>
+        <div class="card__preview card__preview--wide">
+          <iframe src="projected-board-stale.html" title="Projected board view with connectivity lost" loading="lazy"></iframe>
+        </div>
+        <a class="card__open" href="projected-board-stale.html">Open projected-board-stale.html</a>
+      </li>
+    </ul>
+  </body>
+</html>

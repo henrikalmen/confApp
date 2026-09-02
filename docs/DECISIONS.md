@@ -21,6 +21,7 @@
 | [ADR-005](adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md) | Bound ended access by time, not by a refusal code | Accepted | Identity and access – how an employee's access ends |
 | [ADR-006](adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md) | Vote anonymity holds against application paths, not against database credentials | Accepted | Vote storage – the reach of the anonymity guarantee. **Amended 2026-08-29**: Decision 1 now covers correlation *across successive responses* and against out-of-band observation, not just what one response says |
 | [ADR-007](adrs/ADR-007-vote-arrivals-do-not-advance-the-member-visible-cursor.md) | Vote arrivals do not advance the Member-visible activity cursor | Accepted | Near-live propagation – what the Session activity watermark may carry, and how a Facilitator's live tally reaches them instead |
+| [ADR-008](adrs/ADR-008-facilitator-discard-is-stored-outside-the-post-it-row.md) | Facilitator Discard is stored outside the `post_it` row | Accepted | Post-it removal – how a restorable Discard trace coexists with author deletion's no-trace guarantee |
 
 ## Superseded
 

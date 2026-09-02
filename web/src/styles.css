@@ -249,6 +249,15 @@ body {
 }
 
 /*
+ * How current the Activities on screen are (S08). A single line of muted text under the heading:
+ * it is a statement, never a control, so there is nothing here to size for a thumb and nothing that
+ * needs to survive being read at a glance from a projector. It wraps like any other sentence.
+ */
+.activities__age {
+  margin: -0.25rem 0 0.75rem;
+}
+
+/*
  * auto-fit + minmax is what makes this reflow instead of clipping: one column on a phone,
  * several on a desktop, with no width-specific rules.
  */
@@ -1030,7 +1039,11 @@ body {
   margin: 0;
 }
 
-/* The confirming act itself, and the only control in the app that is styled as destructive. */
+/*
+ * The confirming act itself - the destructive register, used by the two acts that cannot be taken
+ * back: a conference or session deletion, and an Admin's permanent removal of a post-it (S06 FR5).
+ * Deliberately not worn by Discard, which is reversible and carries a dashed border instead.
+ */
 .button--danger {
   border-color: var(--danger-border);
   color: var(--danger-text);
@@ -1355,9 +1368,10 @@ body {
 }
 
 /*
- * Held items sit in their own list below the board, because they are not on the board yet - nobody
- * else's device has them. The dashed border is what that reads as at a glance; the sentence inside
- * is what says it.
+ * Held items keep their own list, in the two places one can appear: **inside Uncategorised**, which
+ * is where a pending post-it lands when it sends (S08), and at panel level for one whose Round is
+ * no longer on the payload and which has nowhere on a board to go. The dashed border is what "not
+ * on the board yet" reads as at a glance; the sentence inside the card is what says it.
  */
 .board__list--held {
   margin-top: 0.5rem;
@@ -1379,6 +1393,62 @@ body {
   margin: 0.4rem 0 0;
 }
 
+/*
+ * The placement control on one post-it (facilitator-board S03).
+ *
+ * Separated from the post-it's own text by a rule, because it is the Facilitator's control rather
+ * than part of what somebody wrote - the same distinction the wireframe draws.
+ */
+.move {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0 0;
+  border-top: 1px dotted var(--border);
+}
+
+/*
+ * The destination and the control that commits it on one line, wrapping to two when there is no
+ * room - the same arrangement as the compose box and the create-category row, so the three controls
+ * a facilitator reaches for one-handed on a 375px phone behave alike.
+ */
+.move__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.2rem 0 0;
+}
+
+/*
+ * The select takes the space that is left rather than a width it could overflow, and the control
+ * keeps a floor so it does not collapse into a sliver when the row wraps.
+ *
+ * `min(…, 100%)` on both, never a bare `rem` floor: a bare one goes off-screen on a 375px phone
+ * under OS font scaling, which Capacitor inherits (`docs/LEARNINGS.md#css--responsive-layout`).
+ */
+.move__row .input {
+  flex: 1 1 min(10rem, 100%);
+  min-width: 0;
+  /*
+   * The same 2.75rem floor `.button` and `.field__input` carry, stated here rather than on a bare
+   * `.input` rule: no such rule exists yet, and introducing one would restyle four shipped controls
+   * on surfaces this story is not about. This half of the placement control is one of the two
+   * things a Facilitator taps most on a 375px phone, so it gets the floor now and the wider
+   * tidy-up stays somebody else's change.
+   */
+  min-height: 2.75rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.move__row .button {
+  flex: 0 1 auto;
+  min-width: min(5rem, 100%);
+}
+
 .board__compose {
   display: grid;
   gap: 0.2rem;
@@ -1397,6 +1467,187 @@ body {
   justify-content: space-between;
   gap: 0.4rem;
   margin: 0.3rem 0 0;
+}
+
+/* ---------- categories and the Uncategorised holding area (facilitator-board S02) ---------- */
+
+/*
+ * The regions of one Board: Uncategorised, then every Category in the Facilitator's order.
+ *
+ * `auto-fill` with a `minmax` floor rather than a fixed column count, exactly as `.board__list`
+ * does: at 375px that resolves to one region across - which is the width that decides the
+ * interaction model - and at 1280px to as many as fit. `min()` keeps the floor below the narrowest
+ * phone's content box, so a single region never overflows it.
+ *
+ * Order is never carried by where a region sits on screen. At one across it could not be, and to
+ * somebody hearing the page it never is: each region states its position in words.
+ */
+.regions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: 0.6rem;
+}
+
+/*
+ * `min-width: 0` for the same reason `.post-it` carries it: a grid item's automatic minimum size is
+ * its content, so one unbroken token in a category name or a post-it pushes the whole grid - and
+ * the page - sideways rather than wrapping.
+ */
+.region {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+/* Where every post-it arrives. Marked by the accent so it reads as the working area it is. */
+.region--uncategorised {
+  border-left: 3px solid var(--accent);
+}
+
+.region__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+  /* A flex container is a grid item here, and its own automatic minimum size is its content. */
+  min-width: 0;
+}
+
+/*
+ * A category name is free text somebody typed in a hurry, so it is where a pasted identifier
+ * arrives.
+ *
+ * `min-width: 0` is load-bearing on a flex item exactly as it is on a grid item: without it the
+ * heading refuses to shrink below its longest word and pushes the region, the grid and the page
+ * sideways. `overflow-wrap: anywhere` is what then breaks the word itself - `break-word`, which
+ * `body` sets, does not count toward a box's intrinsic minimum size, so the flex/grid minimum is
+ * still computed from the unbroken token.
+ */
+.region__name {
+  margin: 0;
+  min-width: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+/* The server's count, rendered as the sentence it is. Never derived from the list beneath it. */
+.region__count {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.region__note,
+.region__position {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/*
+ * The category controls, and the two inline forms they open.
+ *
+ * Wrapping rather than scrolling: four controls do not fit one 375px line, and a control an
+ * organizer has to scroll sideways to reach is a control that is not there when the room is
+ * waiting.
+ */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+}
+
+/*
+ * Full-size controls, not the `button--small` the correct-and-remove pair beside a post-it uses.
+ *
+ * Those two are conveniences with an obvious alternative; these are the **only** way to rename,
+ * reorder or remove a Category, offered to somebody working a room from a phone - the same
+ * reasoning that keeps the returned-post-it Discard control full size. A minimum width stops four
+ * of them collapsing into unreadable slivers when they wrap at 375px.
+ */
+.controls .button {
+  flex: 0 1 auto;
+  min-width: min(6rem, 100%);
+}
+
+/*
+ * A control at the end of the order.
+ *
+ * `aria-disabled`, never the `disabled` attribute: a disabled button leaves the tab order, so the
+ * control sequence a keyboard user has learned would change shape exactly when a category reaches
+ * the end of the order. It stays focusable and is announced as unavailable, and it looks the way
+ * `:disabled` looks so the two read alike.
+ */
+.button[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.button[aria-disabled='true']:hover {
+  border-color: var(--border);
+}
+
+/* Renaming, and the occupied-category removal question. Both stand in place, in their region. */
+.inline-form {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.inline-form p {
+  margin: 0;
+}
+
+/*
+ * The duplicate-name warning. Its own hue rather than the danger palette, for the same reason the
+ * overlap notice has one: the write landed, and reading as an error would tell a Facilitator to
+ * undo something the product deliberately allows.
+ */
+.board__warning {
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius);
+  background: var(--notice-bg);
+  color: var(--notice-text);
+  font-size: 0.9rem;
+}
+
+/* Creating the next category: present at every width, in the same place. */
+.new-category {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.6rem 0 0;
+}
+
+/*
+ * The box and the control on one line, wrapping to two when there is no room - the same
+ * arrangement as the compose box, so the two controls a facilitator reaches for one-handed on a
+ * 375px phone behave alike. The input takes the space that is left rather than a width it could
+ * overflow.
+ */
+.new-category__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.new-category__row .input {
+  flex: 1 1 10rem;
+  min-width: 0;
 }
 
 /*
@@ -1477,4 +1728,145 @@ body {
 .poll__result-count {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The Display Link controls on a Post-it Round (S04, FR7).
+ *
+ * A block on the surface the facilitator is already on, not a screen of its own. Everything sizes
+ * in `rem` and percentages so it rescales with the viewport and with the reader's own font size
+ * rather than snapping between breakpoints.
+ *
+ * The URL field is the one thing here that could push a 375px phone sideways: it holds a
+ * 43-character token on the end of an origin, which is one unbroken string with nowhere to wrap.
+ * `flex: 1 1 100%` plus `min-width: 0` is what keeps it inside its column - a flex item's default
+ * `min-width: auto` is its content's width, which for an untruncatable string is the whole problem.
+ * The same arrangement the compose box and the create-category row already use.
+ */
+.display-link {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.display-link__head {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.display-link__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.display-link__value {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.display-link__label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.display-link__value .input {
+  /* The whole width at every viewport; `min-width: 0` so the token cannot set the column's floor. */
+  flex: 1 1 100%;
+  min-width: 0;
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+/*
+ * Discard, and the surface a Discard is reversed from (facilitator-board S05).
+ *
+ * The control sits beside the placement controls on every post-it, and it is **visibly distinct from
+ * the author's own Remove** where both are offered on the same one: a dashed edge that matches the
+ * dashed treatment of the discarded list it feeds, against Remove's plain one
+ * (`docs/wireframes/facilitator-board-and-categorisation/facilitator-sorting.html`). The difference
+ * is never carried by the border alone - the two controls read "Discard" and "Remove", and the
+ * sentence beneath them says which is which for anybody the shape says nothing to.
+ */
+.button--discard {
+  border-style: dashed;
+}
+
+/*
+ * The sentence that tells the two removals apart, on a post-it that offers both.
+ *
+ * Same register as `.post-it__late`: it is a fact about the controls above it, wrapping with the
+ * card at every viewport and setting no width of its own.
+ */
+.post-it__note {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/*
+ * The discarded post-its of one board.
+ *
+ * A place, not an undo: the entry point is always drawn, whether or not anything has just been
+ * discarded and whether or not anything is discarded at all, because the reversal window runs to
+ * archival. It sits above the regions, outside the subtree a board refresh replaces.
+ */
+.discarded {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.discarded__rules {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.discarded__rules li + li {
+  margin-top: 0.25rem;
+}
+
+/*
+ * One column at every viewport, deliberately - unlike the board's grid. These are read one at a
+ * time and each carries three lines of trace, so a multi-column arrangement would only make the
+ * lines shorter. `min-width: 0` on the items keeps an unbroken run of text inside the column rather
+ * than letting it set the floor.
+ */
+.discarded__list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.discarded__item {
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.discarded__text {
+  margin: 0;
+}
+
+.discarded__by,
+.discarded__trace {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }

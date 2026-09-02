@@ -1,0 +1,436 @@
+{
+  "schemaVersion": "1",
+  "prd": "docs/specs/facilitator-board-and-categorisation/prd.md",
+  "references": [
+    "docs/specs/facilitator-board-and-categorisation/requirements-clarification.md",
+    "docs/UBIQUITOUS_LANGUAGE.md",
+    "docs/OUT-OF-SCOPE.md",
+    "docs/PRODUCT.md",
+    "docs/ROADMAP.md",
+    "docs/LEARNINGS.md",
+    "docs/adrs/ADR-003-postgresql-containerized-development.md",
+    "docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md",
+    "docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md",
+    "docs/adrs/ADR-007-vote-arrivals-do-not-advance-the-member-visible-cursor.md",
+    "docs/specs/session-activities/prd.md"
+  ],
+  "overview": {
+    "summary": "Turns the shipped Post-it Board from a flat chronological list into a sorted, attributed structure. A Facilitator creates Categories on one Post-it Round's Board after seeing the ideas, places every Post-it from their own device without drag-and-drop, discards noise recoverably, and projects the whole thing to the room through a revocable, day-bounded Display Link. Attendees follow the same Board re-rendering on their phones.\n\nEight stories across three phases. Wireframes come first because the PRD routes three genuinely different surfaces - plus a fourth viewport class for the projected screen - through design before implementation, and because wireframing the projected view at the design ceiling is what settles its overflow behaviour. The Category model, the Uncategorised holding area and server-side sorting authority land next as the foundation every later story reads and writes through. Sorting, the Display Link, Discard-with-restore and Admin permanent removal follow, and the two read-only surfaces - projected and Attendee - close the feature.\n\nThe riskiest stories are S04, S05 and S07. S05 must store a restorable Discard trace without relaxing the shipped post_it migration's deliberate refusal of any tombstone, and needs an ADR to record why the two removal paths stay apart. S04 and S07 introduce confApp's first unauthenticated route over attributed domain content, so unguessability, revocation, day-bounded expiry, neutral failure messages and the absolute exclusion of Vote data are acceptance properties, not polish.",
+    "phases": [
+      {
+        "id": "P1",
+        "name": "Design and Board foundation",
+        "waves": [
+          "W1",
+          "W2"
+        ]
+      },
+      {
+        "id": "P2",
+        "name": "Sorting, the Display Link and removal",
+        "waves": [
+          "W3",
+          "W4",
+          "W5"
+        ]
+      },
+      {
+        "id": "P3",
+        "name": "Live and projected surfaces",
+        "waves": [
+          "W6"
+        ]
+      }
+    ]
+  },
+  "sharedDecisions": [
+    {
+      "title": "Board read projection contract; Uncategorised is the absence of a placement",
+      "description": "S02 defines the single Board read that returns Categories in their Facilitator-chosen order with their Post-its, the Uncategorised holding area, and per-Category and Uncategorised counts, in one request rather than one per Category. Uncategorised is not stored as a Category row - it is the state of a Post-it having no placement - and every surface renders it whether or not any Category exists. S03, S05, S06, S07 and S08 all read through this contract rather than inventing a second shape.",
+      "stories": [
+        "S02",
+        "S03",
+        "S05",
+        "S06",
+        "S07",
+        "S08"
+      ]
+    },
+    {
+      "title": "Sorting authority is Session Assignment or conference-wide Admin, resolved per request",
+      "description": "S02 establishes the server-side authority gate for every Board write - a Session Assignment on the Round's Session, or conference-wide Admin, resolved per request against the shipped helper in api/src/conferences/authorization.ts with no in-process state carried between requests, and with actor identity always taken from the credential. S03, S04 and S05 reuse that gate unchanged; S06 layers an Admin-only check on top of it rather than replacing it.",
+      "stories": [
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06"
+      ]
+    },
+    {
+      "title": "Discard state is stored outside the post_it row",
+      "description": "S05 owns the storage shape for a restorable Discard trace, kept out of post_it so the shipped migration's deliberate refusal of any tombstone, soft-delete flag or deleted_at stands for author deletion, and cascading with the post_it row so an author delete that wins the race takes the trace with it. S06 removes a Post-it and its trace together; S07 and S08 exclude discarded Post-its from every read through this shape.",
+      "stories": [
+        "S05",
+        "S06",
+        "S07",
+        "S08"
+      ]
+    },
+    {
+      "title": "The Display Link is an anonymous surface with its own SPA entry point",
+      "description": "S04 defines the Display Link token, its persisted issued/revoked state, its Session-day bound, and the unauthenticated API route that resolves it - confApp's third anonymous route - api/src/auth/with-auth.ts already exempts GET /api/health and POST /api/auth/token - and the first over domain content. The SPA has no client-side router today, so S04 also settles how the projected URL reaches a distinct entry point without a Workspace session. S07 consumes both and adds no second resolution path.",
+      "stories": [
+        "S04",
+        "S07"
+      ]
+    },
+    {
+      "title": "Board writes advance the activity watermark; the projected view uses none of it",
+      "description": "S02 confirms and extends the shipped activity_watermark counter so Category, placement, Discard, restore and permanent-removal writes advance it for Member-gated surfaces, leaving ADR-007's rule that Vote arrivals advance no cursor untouched. S03, S05, S06 and S08 rely on that advance for near-live propagation. S07 deliberately does not: the cursor is Session-scoped and Membership-gated, so the projected surface polls the whole Board instead.",
+      "stories": [
+        "S02",
+        "S03",
+        "S05",
+        "S06",
+        "S07",
+        "S08"
+      ]
+    },
+    {
+      "title": "Wireframes are the source of the interaction model, not the implementing story",
+      "description": "S01 produces the wireframes the PRD routes through design before implementation, and settles three things later stories must not re-decide: the non-drag placement interaction at 375px, the shape of the Facilitator's discarded-Post-its surface, and the projected view's overflow behaviour at the design ceiling of ~200 Post-its across ~20 Categories. S02, S03, S05, S07 and S08 reference those wireframes as required context rather than inventing a layout.",
+      "stories": [
+        "S01",
+        "S02",
+        "S03",
+        "S05",
+        "S07",
+        "S08"
+      ]
+    }
+  ],
+  "bindingConstraints": [
+    {
+      "featureId": "FR4",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Facilitator-initiated Discard must not reuse the author-deletion path. The shipped `post_it` migration deliberately carries no tombstone, soft-delete flag or `deleted_at`, because author deletion must leave no trace. Discard is a different concept with the opposite requirement; the two must stay apart in storage."
+    },
+    {
+      "featureId": "FR7",
+      "anchor": "prd.md#fr7-display-link-issuance-and-revocation",
+      "verbatim": "The link reaches no Vote data of any kind, in any response it can produce."
+    },
+    {
+      "featureId": "FR7",
+      "anchor": "prd.md#non-functional-requirements",
+      "verbatim": "A Display Link is time-bounded | Stops resolving once the server's date is past its Round's Session `day` - no link outlives its conference day (ADR-005)"
+    },
+    {
+      "featureId": "FR3",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Sorting must not require drag-and-drop. A pointer-only interaction excludes keyboard and assistive-technology users and does not survive the 375px case. Drag may be offered as an additional affordance on wide viewports; it can never be the only way."
+    },
+    {
+      "featureId": "FR8",
+      "anchor": "prd.md#constraints",
+      "verbatim": "The projected screen takes no pointer input. It is a mirror of Board state, never a control surface. Nothing on it may change what the Board holds."
+    },
+    {
+      "featureId": "FR3",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Offline support is not widened. Sorting, discarding and the projected view all require connectivity. Offline stays schedule reads plus Post-it queueing (`docs/PRODUCT.md` -> Anti-Goals)."
+    },
+    {
+      "featureId": "FR6",
+      "anchor": "prd.md#fr6-sorting-authority",
+      "verbatim": "Actor identity is always taken from the credential and never accepted from a request body."
+    },
+    {
+      "featureId": "FR1",
+      "anchor": "prd.md#constraints",
+      "verbatim": "Plain PostgreSQL only (ADR-003), and no in-process state between requests - both standing project rules apply to Category, placement, Discard and Display Link state."
+    },
+    {
+      "featureId": "FR5",
+      "anchor": "prd.md#fr5-admin-permanent-removal",
+      "verbatim": "A Presenter/Facilitator without Admin cannot remove permanently, enforced server-side and not merely hidden in the UI."
+    },
+    {
+      "featureId": "FR8",
+      "anchor": "prd.md#non-functional-requirements",
+      "verbatim": "Vote anonymity is untouched | No surface added here reads, joins to, or exposes Vote data; the ADR-006 guarantee is unaffected because this feature handles only Post-its"
+    }
+  ],
+  "stories": [
+    {
+      "id": "S01",
+      "name": "Board surface wireframes",
+      "phase": "P1",
+      "wave": "W1",
+      "dependsOn": [],
+      "parallel": false,
+      "risk": "low",
+      "status": "done",
+      "fis": "s01-board-surface-wireframes.md",
+      "owner": null,
+      "scope": "Produce the wireframes the PRD routes through design before any Board implementation, covering four surfaces: the Facilitator's sorting surface at 375, 768 and 1280px; the projected Board View as its own fourth viewport class rendered at the design ceiling of ~200 Post-its across ~20 Categories; the Attendee's Board at 375px showing Categories forming live; and the Facilitator's discarded-Post-its surface from which a Discard is reversed. The outcome is a settled non-drag placement interaction model that survives 375px and keyboard-only use, a settled projected-view overflow behaviour that keeps every Category and count visible and requires no input to reveal content, and a settled shape for the discard-reversal surface. Excludes any production code, any schema, and any decision the PRD already fixed - Category attributes, limits, authority and the read-only nature of the projected screen are inputs here, not open questions.",
+      "sourceRefs": [
+        "prd.md#ui-wireframes",
+        "prd.md#open-questions",
+        "FR3",
+        "FR4",
+        "FR8",
+        "FR9",
+        "prd.md#constraints"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/UBIQUITOUS_LANGUAGE.md",
+        "docs/specs/facilitator-board-and-categorisation/requirements-clarification.md"
+      ],
+      "notes": "The PRD names this as a prerequisite in its own section and hangs one of its two Open Questions on it. Enabler story: verified by the wireframe artifacts and the three settled decisions, not by a running demo. Route through the andthen:ui-ux-design skill in --mode wireframes."
+    },
+    {
+      "id": "S02",
+      "name": "Categories, Uncategorised and sorting authority",
+      "phase": "P1",
+      "wave": "W2",
+      "dependsOn": [
+        "S01"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s02-categories-uncategorised-and-sorting-authority.md",
+      "owner": null,
+      "scope": "A Facilitator holding authority on a Post-it Round's Session can create, rename, reorder and remove named Categories on that Round's Board from their own device at 375, 768 and 1280px, at any Round state and whether or not the Board already holds Post-its, and sees the Uncategorised holding area with a live count of what remains unsorted. Delivers the Category storage, the placement field whose absence is Uncategorised, the single Board read that returns Categories in order with their Post-its and every count together, the server-side sorting-authority gate (Session Assignment on the Round's Session, or conference-wide Admin) applied to every Board write, the 60-code-point name limit and 20-Category-per-Board cap that concurrent creates cannot race past, the duplicate-name warning that does not refuse, position clamping and contiguous reordering, the occupied-Category removal flow that requires a destination with Uncategorised offered as the default, refusal of every write against an Archived Conference, and the activity watermark advance that carries Category changes to Member-gated surfaces. Excludes placing Post-its, Discard, permanent removal, the Display Link, and both read-only surfaces.",
+      "sourceRefs": [
+        "FR1",
+        "FR2",
+        "FR6",
+        "US02",
+        "US04",
+        "US06",
+        "US09",
+        "US10",
+        "US11",
+        "prd.md#data-requirements",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-003-postgresql-containerized-development.md",
+        "docs/adrs/ADR-007-vote-arrivals-do-not-advance-the-member-visible-cursor.md",
+        "docs/UBIQUITOUS_LANGUAGE.md"
+      ],
+      "notes": "Foundation for every later story - its read contract, authority gate and watermark behaviour are three of the plan's six shared decisions. Builds on the shipped session-activities slice: db/migrations/20260828120000000_post-it.sql, api/src/rounds/post-it-repository.ts, api/src/routes/rounds.ts, api/src/conferences/authorization.ts, web/src/activities/SessionActivitiesPanel.tsx."
+    },
+    {
+      "id": "S03",
+      "name": "Placing Post-its into Categories",
+      "phase": "P2",
+      "wave": "W3",
+      "dependsOn": [
+        "S02"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s03-placing-post-its-into-categories.md",
+      "owner": null,
+      "scope": "A Facilitator sorts the Board: placing a Post-it from Uncategorised into a Category, moving it between Categories, and moving it back to Uncategorised, fully operable without drag-and-drop, by keyboard and with assistive technology, at 375, 768 and 1280px with the 375px case deciding the interaction model. Placement is permitted while the Round is open and after it closes, survives a reopen, and each placement advances the activity watermark so Member-gated surfaces re-read within the near-live window. Includes the same-Board destination check, idempotent no-op placement, refusal of placement against an Archived Conference or a discarded Post-it, last-write-wins under two or three concurrent sorters with no conflict UI, and the online-only failure path where the Post-it visibly returns to where it was and nothing is queued. Excludes Discard and restore, permanent removal, the Display Link, and any change to the projected or Attendee surfaces.",
+      "sourceRefs": [
+        "FR3",
+        "US03",
+        "US06",
+        "US10",
+        "prd.md#user-flows",
+        "prd.md#edge-cases",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/LEARNINGS.md"
+      ],
+      "notes": "The non-drag, keyboard-operable interaction at 375px comes from S01's wireframes and is an accessibility requirement, not a styling choice. Placement must never enter the shipped offline queue in web/src/offline/post-it-queue.ts."
+    },
+    {
+      "id": "S04",
+      "name": "Display Link issuance and revocation",
+      "phase": "P2",
+      "wave": "W3",
+      "dependsOn": [
+        "S02"
+      ],
+      "parallel": false,
+      "risk": "high",
+      "status": "done",
+      "fis": "s04-display-link-issuance-and-revocation.md",
+      "owner": null,
+      "scope": "A holder of sorting authority issues an unguessable, read-only Display Link scoped to one Post-it Round's Board, presented for copying or opening, and revokes it at any time; a Round holds at most one live link, so issuing a new one revokes the current one and revocation never needs to name which link it means. Delivers the persisted link value and its issued/revoked state in PostgreSQL with no in-process state, the derivation rule that makes a value unguessable from any Conference, Session, Round or Post-it identifier, the guarantee that a revoked value is never reissued, the Session-day time bound that stops the link resolving once the server's date is past the Round's Session day, the unauthenticated resolution route that grants read access to that one Board and nothing else and can reach no Vote data in any response it produces, the Draft-Conference gate that renders nothing until the Conference is Published, the single neutral unavailable message that makes revoked, expired, Draft, deleted-Round and never-existed indistinguishable, and the Facilitator's issue and revoke controls. Excludes the projection-scale rendering of the Board itself.",
+      "sourceRefs": [
+        "FR7",
+        "US01",
+        "US07",
+        "prd.md#data-requirements",
+        "prd.md#non-functional-requirements",
+        "prd.md#edge-cases",
+        "prd.md#constraints"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-005-bound-access-by-time-not-by-refusal-code.md",
+        "docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md"
+      ],
+      "notes": "confApp's first unauthenticated route over domain content. api/src/auth/with-auth.ts already exempts two routes - GET /api/health, which is deliberately factless, and POST /api/auth/token - so this is the third anonymous route and the first carrying domain data. sessions.day is a wall-clock date with no timezone stored; the PRD accepts a boundary drift of up to a day rather than widening the schedule's design. The SPA has no client-side router, so how the projected URL reaches its own entry point is settled here. W3 runs S03 then S04 rather than concurrently: both stories modify web/src/activities/SessionActivitiesPanel.tsx and web/src/api/client.ts, and only worktree isolation would make them safely concurrent."
+    },
+    {
+      "id": "S05",
+      "name": "Discard and restore",
+      "phase": "P2",
+      "wave": "W4",
+      "dependsOn": [
+        "S03"
+      ],
+      "parallel": false,
+      "risk": "high",
+      "status": "done",
+      "fis": "s05-discard-and-restore.md",
+      "owner": null,
+      "scope": "A Facilitator discards a Post-it from Uncategorised or from any Category and restores it until the Conference is archived. A discarded Post-it leaves the Facilitator's Board and stops counting toward any Category or toward Uncategorised, is hidden from its own author so the author-delete control is never offered against one, and is excluded from the categorised output while the fact of its Discard stays available to the Report slice. Delivers the Discard trace - who discarded it and when - stored apart from the post_it row so the shipped migration's deliberate refusal of any tombstone stands for author deletion, with a defined outcome for the in-flight race where an author's delete reaches a Discarded Post-it (the delete wins and takes the trace with it), a decision on whether a discarded Post-it still counts as a contribution blocking Session deletion, the Facilitator's discarded-Post-its surface from which a restore is made, restore always returning the Post-it to Uncategorised rather than its former Category, idempotent discard and restore, refusal of both against an Archived Conference, the online-only failure path, and an ADR recording why the two removal paths stay apart in storage. Excludes Admin permanent removal and the projected and Attendee surfaces.",
+      "sourceRefs": [
+        "FR4",
+        "US05",
+        "US10",
+        "prd.md#data-requirements",
+        "prd.md#dependencies",
+        "prd.md#edge-cases",
+        "prd.md#constraints",
+        "prd.md#decisions-log"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/DECISIONS.md",
+        "docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md"
+      ],
+      "notes": "Highest-risk storage story: it must satisfy a requirement the shipped db/migrations/20260828120000000_post-it.sql explicitly refuses, and the PRD says so and calls for an ADR. db/migrations/20260901090000000_post-it-delivery-record.sql is the accepted precedent for keeping a fact about a Post-it outside its row. api/src/rounds/post-it-repository.ts:537 is the author-delete path; countPostItsForSession in the same file is the Session-deletion count the PRD requires a decision on."
+    },
+    {
+      "id": "S06",
+      "name": "Admin permanent removal",
+      "phase": "P2",
+      "wave": "W5",
+      "dependsOn": [
+        "S05"
+      ],
+      "parallel": false,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s06-admin-permanent-removal.md",
+      "owner": null,
+      "scope": "An Admin of the Conference permanently removes any Post-it in it - on the Board, in a Category, or already Discarded - after a confirmation that names the author and states that it cannot be undone. The Post-it leaves every surface, the restore list and the categorised output with no trace, takes any Discard trace with it so a pending restore is no longer offered, and cannot be restored by anyone. Delivers the Admin-role check enforced server-side so a Session Assignment alone is refused with the message offering Discard instead, idempotent removal of a Post-it that is already gone, refusal against an Archived Conference, the updated Category and Uncategorised counts, and the activity watermark advance that propagates the removal within the near-live window. Excludes changing author deletion or Facilitator Discard, and excludes the projected and Attendee surfaces.",
+      "sourceRefs": [
+        "FR5",
+        "prd.md#edge-cases",
+        "prd.md#non-functional-requirements",
+        "prd.md#decisions-log"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "The third and last removal concept on a Post-it, alongside author deletion (no trace, Round open only) and Facilitator Discard (trace, restorable). Reuses the shipped role_assignment / ROLE_RANK.Admin check; the requirement is that a Session Assignment does not confer it."
+    },
+    {
+      "id": "S07",
+      "name": "The projected Board View",
+      "phase": "P3",
+      "wave": "W6",
+      "dependsOn": [
+        "S04",
+        "S06"
+      ],
+      "parallel": true,
+      "risk": "high",
+      "status": "done",
+      "fis": "s07-the-projected-board-view.md",
+      "owner": null,
+      "scope": "A room machine opens a Display Link and gets the Board read-only on the big screen with no sign-in and no Workspace session created there: Categories in the Facilitator's chosen order each with their Post-its and their authors' names, Uncategorised alongside, updating within the near-live window as the Facilitator sorts, without anyone touching the machine. The surface reaches the Board by polling it on an interval, holding no Membership and using no activity cursor, so a revoked or expired link simply stops resolving and the Board is replaced by the neutral unavailable message at the next poll. Delivers the projection-scale rendering validated as a distinct fourth viewport class rather than the 1280px layout enlarged, legible type, contrast and Category boundaries at several metres, the overflow behaviour settled at wireframing where every Category and count stays visible and Post-it detail degrades before any Post-it becomes unreachable, an empty Board rendering as a legitimate pre-Round state, the absence of every discarded and permanently removed Post-it, the guarantee that no reachable response carries Vote data or Member data beyond author names or anything from another Round, the total absence of input including any pointer target that changes Board state, and the connectivity-loss behaviour where the last-rendered Board stays with a staleness indicator and resumes on reconnect. Covers a Post-it Round in a Presentation as well as in a Workshop. Excludes issuing or revoking the link.",
+      "sourceRefs": [
+        "FR8",
+        "US01",
+        "prd.md#non-functional-requirements",
+        "prd.md#edge-cases",
+        "prd.md#constraints",
+        "prd.md#open-questions"
+      ],
+      "provenance": null,
+      "assetRefs": [
+        "docs/adrs/ADR-006-vote-anonymity-holds-against-application-paths-not-database-credentials.md"
+      ],
+      "notes": "Validated at projection scale separately from the standing 375/768/1280 bar - responsiveness is a four-class problem in this feature. Consumes S04's link resolution and adds no second resolution path; consumes S05's and S06's exclusion rules so a discarded or removed Post-it is absent from every projected response."
+    },
+    {
+      "id": "S08",
+      "name": "The Attendee's live Board",
+      "phase": "P3",
+      "wave": "W6",
+      "dependsOn": [
+        "S06"
+      ],
+      "parallel": true,
+      "risk": "medium",
+      "status": "done",
+      "fis": "s08-the-attendees-live-board.md",
+      "owner": null,
+      "scope": "A Member of the Conference sees the Board on their own phone organised into the same Categories, in the same order, as the projected view, re-rendering within the near-live window as placements, Category changes, Discards, restores and permanent removals happen. Discarded and removed Post-its disappear from the Attendee's Board including their own, with no set-aside marker and no notification. The Attendee's Board is read-only with respect to placement - no Attendee can place, move or discard any Post-it, their own included - while contribution continues to work alongside where the Round is still open, with new and late-syncing Post-its landing in Uncategorised and never auto-placed. Delivers the response carrying no Vote data and no Discard controls, the Membership requirement with a non-Member refused, the connectivity-loss behaviour where the last-read Board stays readable with a staleness indicator and resumes on reconnect with nothing queued or reconciled from this surface, the retention of an Attendee's Post-its and their attribution when Membership is revoked mid-Session, and validation at 375, 768 and 1280px with no horizontal body scroll. Excludes the projected surface and every sorting control.",
+      "sourceRefs": [
+        "FR9",
+        "US08",
+        "US09",
+        "prd.md#edge-cases",
+        "prd.md#non-functional-requirements"
+      ],
+      "provenance": null,
+      "assetRefs": [],
+      "notes": "Extends the shipped Attendee-facing Board in web/src/activities/SessionActivitiesPanel.tsx and rides the existing web/src/poll/use-watermark-poll.ts cursor rather than adding a second polling mechanism."
+    }
+  ],
+  "riskSummary": [
+    {
+      "story": "S02",
+      "risk": "medium",
+      "mitigation": "The Category and placement shape is what five later stories read and write through, so pin the single Board read contract and the Uncategorised-as-absence rule in the FIS before any UI work, and prove the 20-Category cap against concurrent creates with a real-PostgreSQL integration test rather than an application-level check."
+    },
+    {
+      "story": "S03",
+      "risk": "medium",
+      "mitigation": "The non-drag interaction model is an accessibility requirement that the 375px case decides; take it from S01's wireframes and prove it with a keyboard-only test plus the visual suite at all three widths. Prove last-write-wins under two concurrent sorters, and prove by test that a failed placement is surfaced and never enters the shipped offline queue."
+    },
+    {
+      "story": "S04",
+      "risk": "high",
+      "mitigation": "First unauthenticated route over domain content. Treat unguessability, the never-reissued rule, the Session-day bound, the Draft gate and the single neutral message as acceptance properties with their own tests, and assert by test that no response reachable from a link contains Vote data of any kind. Follow ADR-005 rather than re-deriving the time bound."
+    },
+    {
+      "story": "S05",
+      "risk": "high",
+      "mitigation": "The restorable Discard contradicts a deliberate shipped decision, so write the ADR before the migration and follow the post_it_delivery precedent for keeping a fact about a Post-it outside its row. Prove by test that author deletion still leaves no trace, that the trace cascades rather than orphans when an author's delete wins the race, and record the Session-deletion counting decision explicitly rather than inheriting it by accident."
+    },
+    {
+      "story": "S06",
+      "risk": "medium",
+      "mitigation": "Irreversible and destructive. Enforce the Admin check server-side and prove a Session-Assignment holder is refused at the API, not merely denied the control; prove the confirmation is required and that removing an already-Discarded Post-it takes its trace and its pending restore with it."
+    },
+    {
+      "story": "S07",
+      "risk": "high",
+      "mitigation": "Validate at projection scale as a fourth viewport class against the design ceiling of ~200 Post-its across ~20 Categories, not by enlarging the 1280px layout. Prove the surface offers no input that changes Board state, that revocation lands at the next poll without touching the machine, and that no reachable response carries Vote data, Member data beyond author names, or anything from another Round."
+    },
+    {
+      "story": "S08",
+      "risk": "medium",
+      "mitigation": "Prove the Attendee surface is read-only with respect to placement at the API and not only in the UI, that a Discarded Post-it is absent from its own author's view, and that contribution into Uncategorised still works alongside while the Round is open."
+    }
+  ],
+  "executionNotes": "Run S01 first and to completion: the PRD routes four surfaces through andthen:ui-ux-design --mode wireframes before implementation, and S01 settles three things later stories must not re-decide - the non-drag placement interaction at 375px, the shape of the Facilitator's discarded-Post-its surface, and the projected view's overflow behaviour at the design ceiling. S02 follows alone; its Board read contract, sorting-authority gate and watermark behaviour are what every later story builds on, so nothing parallelises against it.\n\nP2 opens with S03 and S04, both in W3 but sequenced S03 then S04 rather than run concurrently: they touch different domain surfaces but share two files, web/src/activities/SessionActivitiesPanel.tsx and web/src/api/client.ts. Six of the eight stories modify that panel, so any story pair run concurrently needs worktree isolation and an explicit integration step. S05 then serialises behind S03 because it changes the same Board read projection, and S06 behind S05 because permanent removal must handle an already-Discarded Post-it. P3 runs S07 and S08 in parallel; both are read-only surfaces over state that is complete by then.\n\nS05 needs an ADR written before its migration: a restorable Discard trace contradicts the shipped post_it migration's deliberate refusal of any tombstone, and the PRD calls for the decision to be recorded rather than assumed. S04 and S07 together introduce confApp's first unauthenticated route over attributed domain content; their security properties are acceptance criteria, not hardening to be added later.\n\nResponsiveness is a four-class problem in this feature. The standing 375/768/1280 bar covers S02, S03, S05, S06 and S08; S07's projected surface is validated separately at projection scale and must not be signed off as the 1280px layout with a larger font."
+}

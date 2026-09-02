@@ -11,6 +11,10 @@
 set -eu
 
 : "${API_BASE_URL:=/api}"
+# Where a *room machine* reaches this SPA. Empty is correct for a browser served by this
+# container - it is already at that origin. The Capacitor shells (S11) must set it, because
+# their WebView origin is capacitor://localhost and no other machine can open that.
+: "${WEB_BASE_URL:=}"
 : "${GOOGLE_WEB_CLIENT_ID:=}"
 : "${GOOGLE_HOSTED_DOMAIN:=}"
 : "${GOOGLE_REDIRECT_URI:=}"
@@ -18,6 +22,7 @@ set -eu
 cat > /usr/share/nginx/html/config.js <<EOF
 window.__CONFAPP_CONFIG__ = {
   apiBaseUrl: "${API_BASE_URL}",
+  webBaseUrl: "${WEB_BASE_URL}",
   auth: {
     clientId: "${GOOGLE_WEB_CLIENT_ID}",
     hostedDomain: "${GOOGLE_HOSTED_DOMAIN}",

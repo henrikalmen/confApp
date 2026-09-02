@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthenticatedCaller, WithAuth } from '../auth/with-auth.ts';
 import { AppError, ERROR_CODES } from '../errors.ts';
 import type { ConferenceAuthorization } from '../conferences/authorization.ts';
@@ -13,12 +13,35 @@ import {
   validateRoundDetails,
   type RoundDetailsInput,
 } from '../rounds/round-validation.ts';
-import type { PostIt, PostItRepository, PostItWriteOutcome } from '../rounds/post-it-repository.ts';
+import type {
+  PlacementOutcome,
+  PostItRepository,
+  PostItWriteOutcome,
+} from '../rounds/post-it-repository.ts';
+import type {
+  DiscardedPostIt,
+  PostItDiscardRepository,
+} from '../rounds/post-it-discard-repository.ts';
+import type { PermanentRemovalRepository } from '../rounds/permanent-removal-repository.ts';
 import {
   POST_IT_MAX_LENGTH,
   validatePostItText,
   type PostItTextInput,
 } from '../rounds/post-it-validation.ts';
+import type {
+  Category,
+  CategoryRepository,
+  CategoryWriteOutcome,
+  RemovalDestination,
+} from '../rounds/category-repository.ts';
+import {
+  CATEGORY_LIMIT_PER_BOARD,
+  validateCategoryName,
+  type CategoryNameInput,
+} from '../rounds/category-validation.ts';
+import { toBoardWire, toPostItWire, type BoardView } from '../rounds/board-wire.ts';
+import { mintDisplayToken, type DisplayTokenMinter } from '../rounds/display-link.ts';
+import type { DisplayLinkRepository } from '../rounds/display-link-repository.ts';
 import type { CastOutcome, OptionTally, VoteRepository } from '../votes/vote-repository.ts';
 
 /**
@@ -74,10 +97,36 @@ export interface RoundRouteDependencies {
   sessions: SessionRepository;
   rounds: RoundRepository;
   postIts: PostItRepository;
+  /** The `category` table's one write seam, and the Board read's Category half. */
+  categories: CategoryRepository;
   votes: VoteRepository;
   authorization: ConferenceAuthorization;
   /** "Does this Round have a Vote yet" – the Poll freeze's only question. See `ballot-gate.ts`. */
   ballotGate: BallotGate;
+  /**
+   * The `post_it_discard` table's one seam - discard, restore and the Facilitator's reversal list
+   * (S05 FR4, ADR-008).
+   *
+   * A seam of its own rather than four more methods on `postIts`, because the two removal paths on a
+   * Post-it have opposite guarantees and are kept apart in storage, in source and in test.
+   */
+  discards: PostItDiscardRepository;
+  /**
+   * Permanent Removal's one statement (S06 FR5) - the Admin act that takes a Post-it off every
+   * surface for good.
+   *
+   * A third seam rather than a method on either of the two above, because the three removal
+   * concepts on a Post-it have three different gates, three different idempotency answers and
+   * three different things left behind. See `permanent-removal-repository.ts`.
+   */
+  permanentRemovals: PermanentRemovalRepository;
+  /** The `display_link` table's write seam (S04 FR7). */
+  displayLinks: DisplayLinkRepository;
+  /**
+   * How a Display Link's value is produced. Production draws 32 bytes from the CSPRNG; a test
+   * may pin the value so a scenario can name the token it then opens (S04 TI02).
+   */
+  mintDisplayLinkToken?: DisplayTokenMinter;
 }
 
 /** Shape only. The business rules live in round-validation.ts. */
@@ -177,6 +226,42 @@ interface ContributionBody extends PostItTextInput {
 }
 
 /**
+ * Where a Post-it goes: a Category on its own Board, or **Uncategorised** (S03, FR3).
+ *
+ * `null` is admitted by the schema **so that it stays `null`**, which is the only reason it is
+ * named - the same trap `categoryChangeBodySchema` documents. Ajv coerces to a schema's type, so a
+ * `categoryId` typed as string alone would turn `null` into `''` and the destination that means
+ * "Uncategorised" would arrive as an id that names nothing. Uncategorised is the *absence* of a
+ * placement (`prd.md#fr2-the-uncategorised-holding-area`), so it travels as an absence and there is
+ * no sentinel id anywhere on this path.
+ *
+ * `required`, and deliberately so: this route sets a placement rather than patching a Post-it, and a
+ * body that named no destination would be a request with nothing in it. `format: 'uuid'` refuses a
+ * malformed id here rather than letting it reach PostgreSQL as a `22P02` the caller reads as an
+ * internal error.
+ *
+ * Deliberately **not** `additionalProperties: false`, exactly like the three body schemas above and
+ * for the same reason. A request carrying an `actorSub`, a `facilitatorSub` or an `email` is
+ * accepted and those fields are never read - the write is decided and attributed by the caller's own
+ * credential, which is the observable thing Binding Constraint FR6 demands. Refusing such a request
+ * instead would prove nothing: a route that refuses an actor field and a route that trusts one both
+ * pass "does not accept a body with an actor in it", and only one of them is correct.
+ */
+const placementBodySchema = {
+  type: 'object',
+  required: ['categoryId'],
+  properties: {
+    categoryId: {
+      anyOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }],
+    },
+  },
+} as const;
+
+interface PlacementBody {
+  categoryId: string | null;
+}
+
+/**
  * A ballot: which option, and nothing else.
  *
  * Deliberately **not** `additionalProperties: false`, for the same reason the post-it body is not.
@@ -198,6 +283,96 @@ interface VoteBody {
   optionId: string;
 }
 
+const categoryParamsSchema = {
+  type: 'object',
+  required: ['conferenceId', 'sessionId', 'roundId', 'categoryId'],
+  properties: {
+    conferenceId: { type: 'string', format: 'uuid' },
+    sessionId: { type: 'string', format: 'uuid' },
+    roundId: { type: 'string', format: 'uuid' },
+    categoryId: { type: 'string', format: 'uuid' },
+  },
+} as const;
+
+/**
+ * Naming a Category. Shape only; the business rule lives in `category-validation.ts`.
+ *
+ * Deliberately **not** `additionalProperties: false`, exactly like `postItBodySchema` and
+ * `voteBodySchema` and for the same reason. A request carrying an `authorSub`, an `actorSub` or a
+ * `userSub` is accepted and those fields are never read - the write is attributed to the caller's
+ * own credential, which is the observable thing Binding Constraint FR6 demands. Refusing such a
+ * request instead would prove nothing: a route that refuses an actor field and a route that trusts
+ * one both pass "does not accept a body with an actor in it", and only one of them is correct.
+ * Ignored is the stronger statement, and it is asserted behaviourally in
+ * `category.integration.test.ts`.
+ */
+const categoryBodySchema = {
+  type: 'object',
+  required: ['name'],
+  properties: {
+    name: { type: 'string' },
+  },
+} as const;
+
+/**
+ * Changing a Category: its name, its position, or both.
+ *
+ * Neither is required on its own - a rename and a reorder are two different things a Facilitator
+ * does to the same row, and one endpoint that takes either keeps the surface's controls pointed at
+ * one address. A request naming neither is refused rather than silently doing nothing.
+ *
+ * `position` is an integer and is **clamped at the top**, not validated against the current range:
+ * asking for position 99 on a Board of three means "put it last"
+ * (`prd.md#fr1-categories-on-a-board`).
+ *
+ * `null` is admitted by the schema **so that it stays `null`**, which is the only reason it is
+ * named. Ajv coerces to a schema's type, so a `position` typed as integer alone turns `null` into
+ * `0`: the natural "leave the position alone" idiom would then pass the presence check and move the
+ * Category to the front - the opposite of what the sender meant. Listing `null` as a permitted type
+ * leaves it uncoerced, and `typeof body.position === 'number'` reads it as "not moving".
+ *
+ * A `minimum` here would close the same hole and break a different rule: FR1 says a position
+ * outside the current range is **clamped rather than refused**, and that is one rule about both
+ * ends. The clamp lives in `category-repository.ts`, where it can see the range.
+ */
+const categoryChangeBodySchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    position: { type: ['integer', 'null'] },
+  },
+} as const;
+
+/**
+ * Removing a Category, and where its Post-its go if it holds any.
+ *
+ * The **presence** of `destinationCategoryId` is what says a destination was chosen; its value
+ * `null` is Uncategorised. That is not a sentinel: Uncategorised is the absence of a placement, so
+ * the destination that means "no Category" is written as the absence it is
+ * (`prd.md#fr2-the-uncategorised-holding-area`). A body naming no destination at all is what makes
+ * an occupied Category's removal a refusal that states the count.
+ *
+ * `type: ['object', 'null']` so a removal sent with no body at all - which is what an empty
+ * Category needs - is not refused for having omitted a field it does not need.
+ */
+const categoryRemovalBodySchema = {
+  type: ['object', 'null'],
+  properties: {
+    destinationCategoryId: {
+      anyOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }],
+    },
+  },
+} as const;
+
+interface CategoryChangeBody {
+  name?: string;
+  position?: number | null;
+}
+
+interface CategoryRemovalBody {
+  destinationCategoryId?: string | null;
+}
+
 interface SessionParams {
   conferenceId: string;
   sessionId: string;
@@ -209,6 +384,10 @@ interface RoundParams extends SessionParams {
 
 interface PostItParams extends RoundParams {
   postItId: string;
+}
+
+interface CategoryParams extends RoundParams {
+  categoryId: string;
 }
 
 /**
@@ -237,7 +416,7 @@ interface PollView {
 function toRoundWire(
   round: Round,
   viewerSub: string,
-  board?: readonly PostIt[],
+  board?: BoardView,
   poll?: PollView,
 ): Record<string, unknown> {
   return {
@@ -277,59 +456,28 @@ function toRoundWire(
       : board === undefined
         ? /*
            * No board was loaded, so none is claimed. The authoring and run-control responses answer
-           * about the Round itself and never read its Post-its; saying `postIts: []` there would
-           * assert an empty board the caller has no reason to believe, and a Round with a board would
-           * be described as having none. Both properties are optional on the wire shape, and a
-           * client that needs the board re-reads the Session - which is what the panel already does.
+           * about the Round itself and never read its Post-its; saying `uncategorised: { … }` there
+           * would assert an empty board the caller has no reason to believe, and a Round with a
+           * board would be described as having none. Both properties are optional on the wire
+           * shape, and a client that needs the board re-reads the Session - which is what the panel
+           * already does.
            */
           {}
         : {
             /*
-             * The whole board, in the same response as the Round it belongs to - one request for a
-             * Session and everything in it (prd.md#non-functional-requirements). A closed Round's
-             * board comes back in full: closing stops contribution, it does not hide what the room
-             * produced.
+             * The whole board, grouped, in the same response as the Round it belongs to - one
+             * request for a Session and everything on its Boards
+             * (prd.md#non-functional-requirements). A closed Round's board comes back in full:
+             * closing stops contribution, it does not hide what the room produced - and archival
+             * stops writes rather than emptying the Board.
              *
              * `textMaxLength` rides along so the compose box can state the limit without carrying
              * a number of its own. It is `POST_IT_MAX_LENGTH`, interpolated - the client renders
              * what the payload hands it, which is why no cap literal exists under `web/` anywhere.
              */
-            postIts: board.map((postIt) => toPostItWire(postIt, viewerSub)),
+            ...toBoardWire(board, viewerSub),
             textMaxLength: POST_IT_MAX_LENGTH,
           }),
-  };
-}
-
-/**
- * One Post-it as the board reads it.
- *
- * The author's **name** is here and their `sub` is not. The name is what the room reads and is
- * joined from `app_user.display_name` on this read, so a rename reaches every Post-it its owner
- * ever wrote. The `sub` is an identity confApp has no reason to publish to every Member in the
- * room, and `mine` answers the only question a client has of it - the same discipline as `canRun`:
- * the server's answer, consumed rather than re-derived, so no second client-side opinion about who
- * may correct a Post-it can drift out of step with the predicate that actually enforces it.
- *
- * `edited` is a boolean and `edited_at` deliberately stays in the database. The instant is the
- * stored fact and the flag is what the board shows; putting the instant on the wire would hand a
- * client a timestamp it could only render by converting a timezone the product does not carry
- * (S09's `AttendeeScheduleRefresh` guard), and a board of "13:42" readings would contradict every
- * Session time beside it on a device set away from the venue. Order is the payload's order.
- */
-function toPostItWire(postIt: PostIt, viewerSub: string): Record<string, unknown> {
-  return {
-    id: postIt.id,
-    text: postIt.text,
-    authorName: postIt.authorName,
-    mine: postIt.authorSub === viewerSub,
-    edited: postIt.editedAt !== null,
-    /*
-     * Rides the Post-it in the read model everything already uses, so every surface that shows a
-     * Post-it shows this too - there is no separate late-arrivals list and no second read path
-     * (FR6). It is the server's answer, computed from the Round's state at the instant the row was
-     * written; no client re-derives it and none could.
-     */
-    arrivedAfterClose: postIt.arrivedAfterClose,
   };
 }
 
@@ -378,6 +526,23 @@ function notTheAuthor(): AppError {
 }
 
 /**
+ * Permanent Removal, refused to a holder of sorting authority who is not a conference-wide Admin
+ * (S06, FR5 -> Error Handling).
+ *
+ * **It names the act they do have.** A Facilitator looking at something abusive on a projected wall
+ * needs a next move, and Discard is it - so this is the one refusal on the Post-it path that offers
+ * an alternative rather than only stating a rule. See `errors.ts#POST_IT_ADMIN_REQUIRED` for why it
+ * is not the neutral CONFERENCE_ROLE_REQUIRED sentence, and why saying this much discloses nothing.
+ */
+function onlyAnAdminMayRemovePermanently(): AppError {
+  return new AppError(
+    ERROR_CODES.POST_IT_ADMIN_REQUIRED,
+    403,
+    'Only an admin can permanently remove a post-it. You can discard it instead.',
+  );
+}
+
+/**
  * The one place a guarded write's outcome becomes a refusal.
  *
  * Shared by the edit and the delete so the two cannot drift into naming the same situation
@@ -392,12 +557,162 @@ function refuseWrite(outcome: PostItWriteOutcome): never {
   throw postItNotFound();
 }
 
+/**
+ * The one place a placement's outcome becomes a refusal (S03, FR3).
+ *
+ * **Two reasons, two codes, and neither is new.** A placement is refused because the Post-it is not
+ * on this Board or because the destination Category is not - and both of those already have exactly
+ * one sentence in this API. A `POST_IT_PLACEMENT_NOT_FOUND` beside `POST_IT_NOT_FOUND` would be a
+ * synonym, which is the thing `errors.ts` says this feature does not get a second copy of. The two
+ * refusals that are *about the caller* rather than about the Board - no sorting authority, and an
+ * Archived Conference - are produced by `authorizeWrite` before this is ever reached, under
+ * `CONFERENCE_ROLE_REQUIRED` and `CONFERENCE_NOT_EDITABLE`.
+ *
+ * Both sentences say the **Board changed**, which is FR3's error-handling rule: the surface re-reads
+ * and states what it found rather than reporting a bare failure. Neither carries a count, and
+ * neither discloses anything about a Board the caller has no authority over.
+ */
+function refusePlacement(outcome: PlacementOutcome): never {
+  /*
+   * Discarded, and it is neither of the other two sentences. The Post-it is still stored and still
+   * restorable, so "no longer on this round" would be false; and the destination the Facilitator
+   * chose was fine, so naming the category would send them to fix something that is not broken. The
+   * next move is the reason this exists: put it back first (FR3 -> Validation).
+   */
+  if (outcome.outcome === 'discarded') {
+    throw new AppError(
+      ERROR_CODES.POST_IT_DISCARDED,
+      409,
+      'That post-it has been discarded, so it was not moved. Restore it from the discarded ' +
+        'post-its first if you want it back on the board.',
+    );
+  }
+  if (outcome.outcome === 'destination-missing') {
+    throw new AppError(
+      ERROR_CODES.CATEGORY_NOT_FOUND,
+      404,
+      'That category is not on this board, so the post-it was not moved. The board has changed ' +
+        'since you last read it.',
+    );
+  }
+  // 'missing', and the success outcome a caller only reaches here by mistake.
+  throw postItNotFound();
+}
+
+/**
+ * One discarded Post-it on the wire.
+ *
+ * Both names and no `sub`, exactly as `toPostItWire` does: the room reads names, and the identities
+ * behind them are not published to a client that has no use for them.
+ *
+ * `discardedAt` is the display string the seam produced, sent as-is. No client formats it and none
+ * could - see `DiscardedPostIt` for why the instant does not reach the wire.
+ *
+ * There is no `mine`, no `edited` and no `arrivedAfterClose`: this is not a Board, and every control
+ * those fields exist to gate is absent from this surface. There is no permanent-removal field either
+ * - that act is Admin-only and belongs to S06, and nothing on this surface may read as a removal that
+ * cannot be undone (`design-decisions.md` -> "The discarded Post-its surface").
+ */
+function toDiscardedWire(discarded: DiscardedPostIt): Record<string, unknown> {
+  return {
+    id: discarded.postItId,
+    text: discarded.text,
+    authorName: discarded.authorName,
+    discardedByName: discarded.discardedByName,
+    discardedAt: discarded.discardedAt,
+  };
+}
+
 function roundNotFound(): AppError {
   return new AppError(
     ERROR_CODES.ROUND_NOT_FOUND,
     404,
     'That round no longer exists on this session.',
   );
+}
+
+/**
+ * No Category of that id on this Round.
+ *
+ * **This is also the whole of the API's backstop against addressing Uncategorised.** Uncategorised
+ * is not stored as a Category row and no identifier names it, so a rename, reorder or remove aimed
+ * at it carries an id that matches nothing and is answered here - there is no sentinel to
+ * special-case and no branch anywhere that tests for one
+ * (`prd.md#fr2-the-uncategorised-holding-area`).
+ */
+function categoryNotFound(): AppError {
+  /*
+   * "There is no such category", not "it is no longer here". The same sentence answers an id that
+   * named a Category somebody removed, an id that never named one, and any attempt to address
+   * Uncategorised - and only the first of those is a *removal*. Telling a Facilitator something
+   * vanished sends them looking for who took it.
+   */
+  return new AppError(
+    ERROR_CODES.CATEGORY_NOT_FOUND,
+    404,
+    'There is no such category on this round.',
+  );
+}
+
+/**
+ * The one place a guarded Category write's outcome becomes a refusal.
+ *
+ * Shared by the create, the change and the removal so the three cannot drift into naming the same
+ * situation differently, exactly as `refuseWrite` does for the Post-it paths.
+ *
+ * Both counted sentences take their number from the outcome, which the repository read **at the
+ * moment of refusal** rather than before the write - so a create that lost the race for the last
+ * free slot names the Board as it actually is.
+ */
+function refuseCategoryWrite(outcome: CategoryWriteOutcome): never {
+  if (outcome.outcome === 'limit-reached') {
+    throw new AppError(
+      ERROR_CODES.CATEGORY_LIMIT_REACHED,
+      409,
+      `A board can hold at most ${CATEGORY_LIMIT_PER_BOARD} categories, and this one already ` +
+        `holds ${outcome.count}. Remove or merge one before adding another.`,
+    );
+  }
+  if (outcome.outcome === 'holds-post-its') {
+    const noun = outcome.count === 1 ? 'post-it' : 'post-its';
+    throw new AppError(
+      ERROR_CODES.CATEGORY_HOLDS_POST_ITS,
+      409,
+      `This category holds ${outcome.count} ${noun}. Move them to Uncategorised, or choose ` +
+        'another category.',
+    );
+  }
+  if (outcome.outcome === 'destination-missing') {
+    throw new AppError(
+      ERROR_CODES.CATEGORY_NOT_FOUND,
+      404,
+      'The category chosen for these post-its is not on this board, so nothing was moved or ' +
+        'removed.',
+    );
+  }
+  // 'missing', and the two success outcomes a caller only reaches here by mistake.
+  throw categoryNotFound();
+}
+
+/**
+ * A written Category, and the warning that rides a **successful** write.
+ *
+ * Two Categories on one Board may share a name: names are labels, not identifiers, and the Report
+ * groups by identity (`prd.md#fr1-categories-on-a-board`). So the duplicate is stored and the
+ * Facilitator is told, in a `warning` beside the row rather than in an error envelope - a refusal
+ * here would take a decision the product deliberately leaves to the room.
+ */
+function categoryResponse(category: Category, duplicateName: boolean): Record<string, unknown> {
+  return {
+    category: { id: category.id, name: category.name, position: category.position },
+    ...(duplicateName
+      ? {
+          warning:
+            'Another category on this board already has that name. Both are kept - names are ' +
+            'labels, not identifiers.',
+        }
+      : {}),
+  };
 }
 
 /**
@@ -509,9 +824,14 @@ export function registerRoundRoutes(
     sessions,
     rounds,
     postIts,
+    categories,
     votes,
     authorization,
     ballotGate,
+    discards,
+    permanentRemovals,
+    displayLinks,
+    mintDisplayLinkToken = mintDisplayToken,
   }: RoundRouteDependencies,
 ): void {
   /** The Conference named in the route, or the refusal that it is gone. */
@@ -646,6 +966,37 @@ export function registerRoundRoutes(
     }
   }
 
+  /**
+   * Does this caller hold **conference-wide Admin** – the authority Permanent Removal needs
+   * (S06 FR5)?
+   *
+   * The same primitive `holdsAssignment` uses, asked a second question rather than a second
+   * authority path. `ROLE_RANK` is why a Session Assignment cannot satisfy it: an assignment
+   * *narrows* a `PresenterFacilitator` requirement to one Session and never raises rank
+   * (`conferences/authorization.ts`). Resolved from the rows on every call with nothing cached, so
+   * an Admin role revoked a moment ago takes effect on the next request (ADR-004).
+   *
+   * Asked as a question rather than as a refusal, for the same reason `holdsAssignment` is: the
+   * Session read has to *report* it, and the removal route has its own sentence for it. Neither
+   * re-derives authority; both ask this.
+   */
+  async function holdsConferenceAdmin(
+    caller: AuthenticatedCaller,
+    conferenceId: string,
+  ): Promise<boolean> {
+    try {
+      await authorization.requireConferenceRole(caller, conferenceId, 'Admin');
+      return true;
+    } catch (error) {
+      // Only the authority refusal means "no". Anything else – the database being unreachable, for
+      // instance – is a real failure and must not be reported as "you are not allowed".
+      if (error instanceof AppError && error.code === ERROR_CODES.CONFERENCE_ROLE_REQUIRED) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   function mayRun(conference: Conference, assigned: boolean): boolean {
     /*
      * Editability first, and it is not a detail. Every write and every transition runs
@@ -660,6 +1011,27 @@ export function registerRoundRoutes(
      * the tally gate below asks `holdsAssignment` directly.
      */
     return isEditable(conference) && assigned;
+  }
+
+  /**
+   * May *this* caller permanently remove a Post-it on this Board (S06 FR5, TI04)?
+   *
+   * **A second flag beside `canRun`, because `canRun` cannot carry this.** `canRun` is true for an
+   * assigned Facilitator and for an Admin alike - that is the whole point of it - so rendering the
+   * irreversible control from it would offer the act to exactly the people FR5 refuses.
+   *
+   * Derived from the same `requireConferenceRole(..., 'Admin')` question the removal route enforces
+   * with, and folding editability in the same way `mayRun` does, so the flag means "this control
+   * will work" rather than "you would be allowed if anything here were writable". On an archived
+   * Conference every write is refused, and a live-looking Remove permanently that answers 409 is
+   * worse than no control at all.
+   *
+   * Binding Constraint FR5 is still enforced server-side; this only decides what is *offered*. The
+   * client consumes it and holds no second opinion - there is no role name, rank or Admin test
+   * anywhere under `web/`.
+   */
+  function mayRemovePermanently(conference: Conference, admin: boolean): boolean {
+    return isEditable(conference) && admin;
   }
 
   /**
@@ -709,18 +1081,22 @@ export function registerRoundRoutes(
       const activityWatermark = await rounds.activityWatermark(conferenceId, sessionId);
 
       /*
-       * Four statements for the whole Session, never one per Round: the Rounds, every board, every
-       * Poll's counts, and which Polls *this* caller has voted in. One read answers a Session and
-       * everything in it (prd.md#non-functional-requirements), and a handler looping per Round is
-       * the N+1 this project has already been bitten by.
+       * Five statements for the whole Session, never one per Round and never one per Category: the
+       * Rounds, every board's Post-its, every board's Categories, every Poll's counts, and which
+       * Polls *this* caller has voted in. One read answers a Session and everything on its Boards
+       * (prd.md#non-functional-requirements), and a handler looping per Round - or per Category -
+       * is the N+1 this project has already been bitten by. The count does not grow with the number
+       * of Categories or of Post-its, which is what
+       * `api/test/category-structure.test.ts` counts across a whole request.
        *
        * `votedRoundsFor` is asked about `caller.sub` and nobody else. It is the only question this
        * API ever puts to the has-voted table, and the payload turns it into a single boolean per
        * Round – so there is no path here, and no response shape, that says who else voted.
        */
-      const [authored, boards, tallies, voted] = await Promise.all([
+      const [authored, boards, boardCategories, tallies, voted] = await Promise.all([
         rounds.listForSession(conferenceId, sessionId),
         postIts.listForSession(conferenceId, sessionId),
+        categories.listForSession(conferenceId, sessionId),
         votes.tallyForSession(conferenceId, sessionId),
         votes.votedRoundsFor(conferenceId, sessionId, caller.sub),
       ]);
@@ -734,7 +1110,16 @@ export function registerRoundRoutes(
        * has-voted flag and no `tally` key at all, which is an absent field rather than a zeroed
        * result: the refusal on the dedicated tally endpoint is what states the reason.
        */
-      const assigned = await holdsAssignment(caller, conferenceId, sessionId);
+      /*
+       * Two authority questions, asked together rather than one after the other: who runs this
+       * Session, and who holds conference-wide Admin (S06 TI04). Both are the one canonical check
+       * asked for different purposes, and neither is cached - so the payload adds a round trip's
+       * worth of work and not a round trip's worth of latency.
+       */
+      const [assigned, admin] = await Promise.all([
+        holdsAssignment(caller, conferenceId, sessionId),
+        holdsConferenceAdmin(caller, conferenceId),
+      ]);
       const pollView = (round: Round): PollView => ({
         hasVoted: voted.has(round.id),
         tally: round.state === 'closed' || assigned ? (tallies.get(round.id) ?? []) : null,
@@ -746,11 +1131,20 @@ export function registerRoundRoutes(
           toRoundWire(
             round,
             caller.sub,
-            boards.get(round.id) ?? [],
+            {
+              categories: boardCategories.get(round.id) ?? [],
+              postIts: boards.get(round.id) ?? [],
+            },
             round.kind === 'VotingRound' ? pollView(round) : undefined,
           ),
         ),
         canRun: mayRun(conference, assigned),
+        /**
+         * Whether the irreversible control is offered at all – see `mayRemovePermanently`. A second
+         * flag rather than a widening of `canRun`, because the two answer different questions and
+         * an Admin and an assigned Facilitator differ on exactly this one.
+         */
+        canRemovePermanently: mayRemovePermanently(conference, admin),
         /*
          * The Session's cursor, beside the payload it describes - the same arrangement as S06's
          * schedule envelope, which carries `conference.lastUpdatedAt` beside the Sessions it lists.
@@ -918,6 +1312,174 @@ export function registerRoundRoutes(
       };
     }),
   });
+
+  /**
+   * Naming a Category on a Board (FR1, TI06).
+   *
+   * **Every Category write on this Round runs through `authorizeWrite` and nothing else** - the
+   * sorting-authority gate (`prd.md#fr6-sorting-authority`), which is a Session Assignment on this
+   * Round's Session or conference-wide Admin, resolved per request from the database with nothing
+   * carried between requests, and then `assertEditable` so an Archived Conference refuses every one
+   * of them with the one archived sentence this API has. It is deliberately the same gate the
+   * authoring and run controls already use rather than an authority of its own: sorting a Board *is*
+   * running the Session.
+   *
+   * **The acting identity is `caller.sub` from the verified credential and nothing else** (Binding
+   * Constraint FR6). No body field here names or influences who is acting; a request carrying an
+   * `actorSub`, an `authorSub` or a `userSub` is accepted by the schema and then never read, so a
+   * request claiming to be somebody else writes under the caller's own authority rather than being
+   * refused for a reason that would leave the actual rule untested.
+   *
+   * A Category is creatable at **any** Round state - open, closed or reopened - and whether or not
+   * the Board already holds Post-its. Nothing is auto-placed: creating a Category moves no Post-it,
+   * and Uncategorised keeps everything it had.
+   *
+   * The 20-per-Board cap is not checked here, deliberately. It is a storage constraint, so two
+   * replicas cannot both pass it; this route's job is to turn what the database refused into the
+   * sentence that names the limit and the count.
+   */
+  app.post('/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/categories', {
+    schema: { params: roundParamsSchema, body: categoryBodySchema },
+    handler: withAuth(async (request, caller) => {
+      const { session } = await authorizeWrite(request, caller);
+      const { roundId } = request.params as RoundParams;
+
+      // Validation before any write, so a refused name persists nothing.
+      const name = validateCategoryName(request.body as CategoryNameInput);
+
+      const result = await categories.create(session.conferenceId, session.id, roundId, name);
+      /*
+       * A create names no Category, so "nothing matched" can only mean the Round is not a Post-it
+       * Round of this Session - the same sentence a contribution to a Poll reads, and not "that
+       * category is gone", which would send the Facilitator looking for a row they never named.
+       */
+      if (result.outcome === 'missing') throw roundNotFound();
+      if (result.outcome !== 'written') refuseCategoryWrite(result);
+
+      return categoryResponse(result.category, result.duplicateName);
+    }),
+  });
+
+  /**
+   * Renaming a Category, moving one in the order, or both (FR1, TI06).
+   *
+   * One endpoint for two changes because they are two things done to the same row from the same
+   * control set, and splitting them would give the surface two addresses for one Category. A request
+   * naming neither is refused rather than quietly doing nothing.
+   *
+   * **Renaming moves nothing** - not a Post-it, and not the Category's own position
+   * (`prd.md#edge-cases`); that is a property of the repository's UPDATE, which touches one column.
+   * **A position outside the current range is clamped, not refused**, and the whole ordering is left
+   * contiguous afterwards: asking for position 99 on a Board of three means "put it last".
+   *
+   * Concurrent reorders are **last write wins for the ordering as a whole** - no version token, no
+   * per-Category merge and no conflict prompt (`prd.md#edge-cases`). Both Facilitators converge
+   * through the one activity cursor, which every Category write advances.
+   */
+  app.patch(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/categories/:categoryId',
+    {
+      schema: { params: categoryParamsSchema, body: categoryChangeBodySchema },
+      handler: withAuth(async (request, caller) => {
+        const { session } = await authorizeWrite(request, caller);
+        const { roundId, categoryId } = request.params as CategoryParams;
+        const body = request.body as CategoryChangeBody;
+
+        /*
+         * `typeof` rather than `!== undefined`, on both. The schema refuses a coerced `0` already;
+         * this is the second half of the same rule, and it is what keeps the two branches below
+         * reading a value of the type they think they have rather than whatever survived coercion.
+         */
+        const renaming = typeof body.name === 'string';
+        const moving = typeof body.position === 'number';
+
+        if (!renaming && !moving) {
+          const message = 'A category change needs a new name, a new position, or both.';
+          throw new AppError(ERROR_CODES.VALIDATION_FAILED, 400, message);
+        }
+
+        let category: Category | null = null;
+        let duplicateName = false;
+
+        if (renaming) {
+          // Validation before any write, so a refused name persists nothing.
+          const name = validateCategoryName(body as CategoryNameInput);
+          const renamed = await categories.rename(
+            session.conferenceId,
+            session.id,
+            roundId,
+            categoryId,
+            name,
+          );
+          if (renamed.outcome !== 'written') refuseCategoryWrite(renamed);
+          category = renamed.category;
+          duplicateName = renamed.duplicateName;
+        }
+
+        if (moving) {
+          const moved = await categories.reorder(
+            session.conferenceId,
+            session.id,
+            roundId,
+            categoryId,
+            body.position!,
+          );
+          if (moved.outcome !== 'written') refuseCategoryWrite(moved);
+          // The name is the one just written where both were sent; the position is the settled one.
+          category = { ...moved.category, ...(category === null ? {} : { name: category.name }) };
+        }
+
+        return categoryResponse(category!, duplicateName);
+      }),
+    },
+  );
+
+  /**
+   * Removing a Category, and saying where its Post-its go (FR1, TI06).
+   *
+   * **An empty Category goes with no prompt; an occupied one cannot go until a destination is
+   * chosen**, and the refusal names the count because that is what the choice turns on. The
+   * destination is `null` for Uncategorised - the absence of a placement, sent as an absence - or
+   * the id of another Category on this same Board. Nothing is deleted: the Post-its move, and the
+   * message says so.
+   *
+   * The database says the same thing from the other side. `post_it_placed_on_its_own_round` is
+   * `NO ACTION`, so a delete that skipped the move is refused by the foreign key rather than
+   * orphaning a placement - the sentence is here, the guarantee is in the schema.
+   */
+  app.delete(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/categories/:categoryId',
+    {
+      schema: { params: categoryParamsSchema, body: categoryRemovalBodySchema },
+      handler: withAuth(async (request, caller) => {
+        const { session } = await authorizeWrite(request, caller);
+        const { roundId, categoryId } = request.params as CategoryParams;
+
+        /*
+         * The **presence** of the key is the choice, not its value: `null` is Uncategorised and is
+         * a destination like any other, while an absent key is a removal that has not said where
+         * anything goes. A body omitted entirely is the empty-Category case and needs to say
+         * nothing at all.
+         */
+        const body = (request.body ?? {}) as CategoryRemovalBody;
+        const destination: RemovalDestination =
+          body !== null && 'destinationCategoryId' in body
+            ? { chosen: true, categoryId: body.destinationCategoryId ?? null }
+            : { chosen: false };
+
+        const result = await categories.remove(
+          session.conferenceId,
+          session.id,
+          roundId,
+          categoryId,
+          destination,
+        );
+        if (result.outcome !== 'removed') refuseCategoryWrite(result);
+
+        return { removed: true };
+      }),
+    },
+  );
 
   /**
    * Putting a named idea on the board (US03, TI04).
@@ -1154,4 +1716,384 @@ export function registerRoundRoutes(
       }),
     },
   );
+
+  /**
+   * Sorting: putting a Post-it into a Category, or back into Uncategorised (US03, S03 FR3).
+   *
+   * **Its own route, and not an overload of the correction above.** The two writes to one Post-it
+   * belong to two different people under two different gates: correcting the words is the
+   * *author's* write under Membership, and placing it is the Facilitator's under the
+   * sorting-authority gate. One address carrying both authorities is how a Facilitator ends up able
+   * to edit somebody's words, or an author ends up able to sort.
+   *
+   * **The gate is `authorizeWrite` - S02's, consumed unchanged.** A Session Assignment on this
+   * Round's Session or conference-wide Admin, resolved per request from the database with nothing
+   * carried between requests, authority **first** so a caller without it learns nothing further, and
+   * then `assertEditable` so an Archived Conference refuses with the one archived sentence this API
+   * has. Sorting a Board *is* running the Session, so it is deliberately the same gate the run
+   * controls use rather than an authority of its own (`prd.md#fr6-sorting-authority`).
+   *
+   * **The acting identity is the credential and nothing else** (Binding Constraint FR6). Nothing
+   * about the actor is passed to the repository - `place` has no parameter for one - so no body
+   * field could reach a column even if the schema admitted it, and one carrying an `actorSub` or an
+   * `email` changes neither the decision nor what is written.
+   *
+   * Every remaining guard is the write statement's own predicate: the Post-it is on this Board, and
+   * the destination is a Category of this same Board. A cross-Board destination is refused there
+   * rather than by a read taken first, and a placement into the Category a Post-it already occupies
+   * simply succeeds - the requested end state is the one that holds (FR3 -> Validation).
+   *
+   * **The Round's state is not consulted anywhere on this path.** Sorting is what happens after the
+   * room has written: it is permitted while the Round is open, after it has closed, and after a
+   * reopen, and a Post-it contributed after a reopen arrives in Uncategorised like any other.
+   */
+  app.patch(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/post-its/:postItId/placement',
+    {
+      schema: { params: postItParamsSchema, body: placementBodySchema },
+      handler: withAuth(async (request, caller) => {
+        const { session } = await authorizeWrite(request, caller);
+        const { roundId, postItId } = request.params as PostItParams;
+        const { categoryId } = request.body as PlacementBody;
+
+        const result = await postIts.place(
+          session.conferenceId,
+          session.id,
+          roundId,
+          postItId,
+          categoryId ?? null,
+        );
+
+        if (result.outcome !== 'written') refusePlacement(result);
+
+        return { postIt: toPostItWire(result.postIt, caller.sub) };
+      }),
+    },
+  );
+
+  /**
+   * Discard, restore, and the surface a restore is made from (US05, S05 FR4, ADR-008).
+   *
+   * **Three routes, one authority, and it is S02's gate consumed unchanged** - a Session Assignment
+   * on this Round's Session, or conference-wide Admin, resolved from the database per request with
+   * nothing carried between them, authority **first** so a caller without it learns nothing further,
+   * and then `assertEditable` so an Archived Conference refuses with the one archived sentence this
+   * API has. Taking a named colleague's idea off the Board is running the Session, so it is
+   * deliberately the same authority as the run controls rather than an authority of its own
+   * (`prd.md#fr6-sorting-authority`).
+   *
+   * **The list is gated identically to the writes, and that is deliberate.** It is the only surface
+   * in the system on which a discarded Post-it appears at all - it is absent from every Board,
+   * including its own author's - so reading it is exactly as much of a Facilitator's act as reversing
+   * from it.
+   *
+   * **The discarder is the credential and nothing else** (Binding Constraint FR6). `caller.sub` is
+   * the only value that reaches `discarded_by_sub`; neither route below reads a body at all, so
+   * there is no field a request could name an actor through even by accident.
+   *
+   * **`assertWritePreconditions` is deliberately not used.** Sorting is last-write-wins with no base
+   * version (`prd.md#edge-cases`), so there is nothing for a precondition to compare, and both of
+   * these writes are idempotent besides.
+   *
+   * **No Round open/closed condition, on any of the three.** Sorting begins before a Round closes and
+   * continues after it, unlike author deletion - see `post-it-discard-repository.ts`.
+   *
+   * **The two writes have exactly one refusal between them, and the absence of the others is the
+   * specification.** Discarding an already-discarded Post-it and restoring one that was never
+   * discarded are both *successes* - the seam reports the requested end state rather than whether a
+   * row moved - so there is no "already discarded" sentence to write and none for a Facilitator to
+   * read (FR4 -> Error Handling: silent success, no message needed). The two refusals that are
+   * *about the caller* rather than about the Board are produced by `authorizeWrite` before either
+   * handler is entered. What remains is a Post-it that is not on the Board the caller named, which
+   * already has exactly one sentence in this API - `postItNotFound()`, shared with the author's own
+   * write paths so the two cannot drift into naming the same situation differently.
+   */
+  app.post(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/post-its/:postItId/discard',
+    {
+      schema: { params: postItParamsSchema },
+      handler: withAuth(async (request, caller) => {
+        const { session } = await authorizeWrite(request, caller);
+        const { roundId, postItId } = request.params as PostItParams;
+
+        const result = await discards.discard(
+          session.conferenceId,
+          session.id,
+          roundId,
+          postItId,
+          caller.sub,
+        );
+
+        if (result.outcome !== 'discarded') throw postItNotFound();
+
+        /*
+         * `true` on a first Discard and on a repeat alike: FR4 says the requested end state is the
+         * one that holds, and a second Discard is a success with no message. The response says what
+         * is true of the Post-it now, not whether this particular request was the one that moved it.
+         */
+        return { discarded: true };
+      }),
+    },
+  );
+
+  app.post(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/post-its/:postItId/restore',
+    {
+      schema: { params: postItParamsSchema },
+      handler: withAuth(async (request, caller) => {
+        const { session } = await authorizeWrite(request, caller);
+        const { roundId, postItId } = request.params as PostItParams;
+
+        /*
+         * **No destination is read, because there is none to read.** A restore always returns the
+         * Post-it to Uncategorised (FR4 -> Validation), and the seam it calls has no parameter for a
+         * Category - so this route carries no body schema, and a request naming a destination is
+         * ignored rather than refused, exactly as an actor field is.
+         */
+        const result = await discards.restore(session.conferenceId, session.id, roundId, postItId);
+
+        if (result.outcome !== 'restored') throw postItNotFound();
+
+        return { restored: true };
+      }),
+    },
+  );
+
+  app.get('/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/discarded-post-its', {
+    schema: { params: roundParamsSchema },
+    handler: withAuth(async (request, caller) => {
+      const { session } = await authorizeWrite(request, caller);
+      const { roundId } = request.params as RoundParams;
+
+      const discarded = await discards.listForRound(session.conferenceId, session.id, roundId);
+      return { discarded: discarded.map(toDiscardedWire) };
+    }),
+  });
+
+  /**
+   * **Permanent Removal**: an Admin taking a Post-it off every surface for good (S06, FR5, US06).
+   *
+   * **Its own sub-resource, following `/open`, `/close` and `/discard`** - and deliberately not an
+   * overload of the author's `DELETE …/post-its/:postItId` above. One address carrying two removals
+   * is how an author's delete and an Admin's moderation come to share a gate, and they must not:
+   * the author's needs an open Round and refuses a non-author, this one needs neither and refuses
+   * everyone who is not an Admin.
+   *
+   * **The gate is S02's, with an Admin layer inserted - not a second authority path.** The order is
+   * the whole design, because it is what decides which sentence each caller reads:
+   *
+   *   1. `requireConferenceRole(..., 'PresenterFacilitator', { sessionId })` - the shipped
+   *      sorting-authority check. Someone with no standing in this Conference gets
+   *      `authorization.ts#refusal()`'s neutral answer and learns nothing: not that the Session
+   *      exists, not that the Post-it does, not that this endpoint means anything here.
+   *   2. `requireConferenceRole(..., 'Admin')`, through `holdsConferenceAdmin` - the same primitive
+   *      asked a second question. A Session Assignment cannot satisfy it: an assignment *narrows* a
+   *      `PresenterFacilitator` requirement and never raises rank (`ROLE_RANK`). A
+   *      Presenter/Facilitator therefore reaches exactly one refusal, and it is the one that offers
+   *      Discard instead.
+   *   3. `assertEditable` - only an Admin gets this far, so an archived Conference's state is
+   *      disclosed to nobody who was not already entitled to change it.
+   *
+   * `assertWritePreconditions` is deliberately not used: there is no base version to compare and
+   * nothing to conflict with, exactly as on the Discard routes.
+   *
+   * **The acting identity is the credential and nothing else** (Binding Constraint FR6). The seam
+   * below has no parameter for an actor, so a body naming an `actorSub`, a `userSub` or an
+   * `adminSub` is accepted and never read - inert rather than refused, which is the stronger
+   * statement and the one the integration suite proves. Nothing about the act is recorded anywhere
+   * in any case: FR5's "no trace" means there is no "removed by" record to write.
+   *
+   * **No Round open/closed condition and no author condition.** Permanent Removal reaches any
+   * Post-it in the Conference whoever wrote it and whatever its Round is doing - moderation cannot
+   * wait for a Round to be open.
+   *
+   * **Matching nothing is a success and there is no "already gone" sentence to write** (FR5 ->
+   * Validation). That is the opposite of the author delete's answer above, and deliberately so: the
+   * author path must say *which* of "not yours" and "the round has ended" refused it, while here
+   * the requested end state is simply the one that already holds. The success answers for what is
+   * true at the address the request named, not for the Post-it id everywhere - a removal aimed at
+   * the wrong Round or Session matches nothing and succeeds with the row still stored elsewhere.
+   *
+   * **The Discard trace goes with the row, and nothing here mentions it.** S05's
+   * `post_it_discard … ON DELETE CASCADE` removes it, so an already-Discarded Post-it needs no
+   * special case on this path and no pending restore survives it.
+   */
+  app.post(
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/post-its/:postItId/permanent-removal',
+    {
+      schema: { params: postItParamsSchema },
+      handler: withAuth(async (request, caller) => {
+        const { conferenceId, sessionId, roundId, postItId } = request.params as PostItParams;
+
+        // Sorting authority first, so a caller with no standing learns nothing further.
+        await authorization.requireConferenceRole(caller, conferenceId, 'PresenterFacilitator', {
+          sessionId,
+        });
+        // Then conference-wide Admin, which a Session Assignment does not confer.
+        if (!(await holdsConferenceAdmin(caller, conferenceId))) {
+          throw onlyAnAdminMayRemovePermanently();
+        }
+
+        const conference = await loadConference(conferenceId);
+        assertEditable(conference);
+        const session = await loadSession(conferenceId, sessionId);
+
+        await permanentRemovals.remove(session.conferenceId, session.id, roundId, postItId);
+
+        /*
+         * `true` whether a row went or the statement matched nothing. What it states is what is
+         * true **at the address this request named** - nothing is stored on that Board under that
+         * id - and not that this particular request was the one that removed it.
+         *
+         * It is deliberately not the stronger claim "that Post-it no longer exists anywhere". A
+         * removal naming the right Post-it against the wrong Round, Session or Conference matches
+         * nothing and answers this same way, with the row still stored under its own address. The
+         * seam's module note carries the full reading; `permanent-removal.integration.test.ts` ->
+         * "touches no post-it on another round of the same session" is that case, pinned.
+         */
+        return { removed: true };
+      }),
+    },
+  );
+
+  /**
+   * The Display Link on a Post-it Round: read the live one, issue one, take it back (FR7, US01,
+   * US07).
+   *
+   * **Three routes, one authority, and it is S02's gate consumed unchanged** - a Session Assignment
+   * on this Round's Session, or conference-wide Admin, resolved from the database per request with
+   * nothing carried between them. Handing a room a way to read named Post-its is running the
+   * Session, so it is deliberately the same authority as the run controls rather than an authority
+   * of its own (`prd.md#fr6-sorting-authority`).
+   *
+   * **The acting identity is the credential and nothing else** (Binding Constraint FR6). The issuer
+   * written to the row is `caller.sub`; no route below reads a body at all, so there is no field a
+   * request could name an actor through even by accident, and no schema that would have to refuse
+   * one.
+   *
+   * **The token reaches exactly one audience: a holder of sorting authority on its own Round.** It
+   * is never logged (`redactDisplayToken` in `api/src/routes/display.ts` keeps it out of the request
+   * line), never put in an error message, and never returned by any other endpoint - the Session
+   * read carries no display-link field, so a Member of the Conference cannot learn that a Board is
+   * being projected, let alone where.
+   *
+   * A Board is **fully usable with no link ever issued**: nothing on any Board surface asks for one,
+   * and `null` here is an ordinary answer rather than a state to recover from.
+   */
+  const DISPLAY_LINK_URL =
+    '/api/conferences/:conferenceId/sessions/:sessionId/rounds/:roundId/display-link';
+
+  /**
+   * The authority these three share, without the editability check.
+   *
+   * `authorizeWrite` refuses on an Archived Conference, which is right for issuing - archiving makes
+   * a Conference read-only and minting a new way in is a write. It is the wrong sentence for
+   * *reading* what is already issued, and it would be an actively bad one for **revoking**: taking
+   * access back must never be refused because the Conference has gone read-only. Withdrawal is
+   * always available.
+   */
+  async function authorizeDisplayLink(
+    request: FastifyRequest,
+    caller: AuthenticatedCaller,
+  ): Promise<Session> {
+    const { conferenceId, sessionId } = request.params as SessionParams;
+    // Authority first, so a caller without it learns nothing further - not whether the Session
+    // exists, not what state the Conference is in, and certainly not whether a link exists.
+    await authorization.requireConferenceRole(caller, conferenceId, 'PresenterFacilitator', {
+      sessionId,
+    });
+    await loadConference(conferenceId);
+    return loadSession(conferenceId, sessionId);
+  }
+
+  /**
+   * `no-store`, on every response that carries a Display Link value.
+   *
+   * A route-level hook rather than a line in each handler, because `withAuth` hands the inner
+   * handler a caller instead of a `reply` - deliberately, so nothing downstream builds its own
+   * response shape. These three routes are the ones that **hand out** the bearer credential, and
+   * confApp is used on shared hardware by design; Fastify sends no default directive, so without
+   * this the body holding a live token is left to whatever heuristic a browser or an intermediary
+   * applies (review 2026-08-31, L8). The anonymous resolution route sets the same header for the
+   * same reason.
+   */
+  const noStore = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    void reply.header('cache-control', 'no-store');
+  };
+
+  /**
+   * The live link, or `null`. A Round with no link is not an error and never has been.
+   *
+   * `no-store`, like the two below and like the anonymous resolution route: these are the responses
+   * that **hand out** the credential, and confApp is used on shared hardware by design (review
+   * 2026-08-31, L8). Fastify sends no default directive, so without this the body carrying a bearer
+   * token is left to whatever heuristic a browser or an intermediary applies.
+   */
+  app.get(DISPLAY_LINK_URL, {
+    schema: { params: roundParamsSchema },
+    onRequest: noStore,
+    handler: withAuth(async (request, caller) => {
+      const session = await authorizeDisplayLink(request, caller);
+      const { roundId } = request.params as RoundParams;
+
+      const link = await displayLinks.current(session.conferenceId, session.id, roundId);
+      return { displayLink: link };
+    }),
+  });
+
+  /**
+   * Issue, which is also how a link is **replaced**.
+   *
+   * A Round holds at most one live link, so issuing again revokes the current one in the same
+   * transaction and inserts the new one - and the request names no link, because there is never
+   * more than one to mean. The value that comes back is different every time and the previous one
+   * stops resolving at the next poll, wherever it had been pasted.
+   *
+   * Refused on an Archived Conference through `authorizeWrite`: a Conference that has gone
+   * read-only does not get a new way in.
+   */
+  app.post(DISPLAY_LINK_URL, {
+    schema: { params: roundParamsSchema },
+    onRequest: noStore,
+    handler: withAuth(async (request, caller) => {
+      const { session } = await authorizeWrite(request, caller);
+      const { roundId } = request.params as RoundParams;
+
+      const issued = await displayLinks.issue(
+        session.conferenceId,
+        session.id,
+        roundId,
+        // The issuer is the verified credential. There is no parameter here a body could reach.
+        caller.sub,
+        mintDisplayLinkToken(),
+      );
+      if (issued.outcome !== 'issued') throw roundNotFound();
+
+      return { displayLink: issued.link };
+    }),
+  });
+
+  /**
+   * Revoke, which **names the Round and not a link**.
+   *
+   * There is at most one live link per Round, so there is nothing to disambiguate and no identifier
+   * for a Facilitator to have kept. Revoking twice succeeds twice - the end state is the same and a
+   * second press is not a mistake - and no path anywhere can move a link back to live.
+   *
+   * The room machine finds out at its next poll, within the near-live window, with nobody touching
+   * it: the resolution route re-reads the row on every request and nothing between the two is
+   * allowed to answer from a copy (`Cache-Control: no-store`, and the service worker refuses the
+   * path outright).
+   */
+  app.delete(DISPLAY_LINK_URL, {
+    schema: { params: roundParamsSchema },
+    onRequest: noStore,
+    handler: withAuth(async (request, caller) => {
+      const session = await authorizeDisplayLink(request, caller);
+      const { roundId } = request.params as RoundParams;
+
+      await displayLinks.revoke(session.conferenceId, session.id, roundId);
+      return { displayLink: null };
+    }),
+  });
 }

@@ -27,6 +27,7 @@
 - **StrictMode double-mount races a one-shot OIDC redirect handler** – guard with a `useRef`; make the liveness flag a ref too, as cleanup clears a `let active` before the first call resolves.
 - **No jest-dom in the web workspace** – `.toBeDisabled()`/`.toBeInTheDocument()` throw "not a function"; assert plain DOM props (`.disabled`, `.value`, `queryByTestId() === null`).
 - **A `waitFor` on synchronously-set state resolves too early** – an `online` event dispatched on it hits a window where the poll listener is down. Wait on content only the settled phase renders.
+- **`findBy*` resolves before `useEffect` bodies have run, and wrapping the dispatch in `act` does not fix it** – `findBy*` returns on the microtask that follows the commit, while passive effects flush on a later task, so an event dispatched right after it can reach a listener that is not registered yet; `act` runs its callback *before* it flushes anything, so the house `await act(async () => { dispatch })` pattern has the same hole. Put an empty `await act(async () => {})` in front to flush the commit that already happened. Measured on a 250-iteration replica of `OrganizerLiveEditing` -> "refetches when the watermark moves": bare and `act`-wrapped dispatch each failed 1 in 250 with **zero** focus listeners registered and no request ever issued; with the flush, 250 of 250 registered, in ~60 ms.
 
 ## PostgreSQL Date/Time via node-postgres
 
@@ -63,6 +64,9 @@
 - **A SQL-scanning guard must read all three quote styles** – Prettier's `singleQuote` leaves strings containing `'open'` in double quotes, so a per-author count hid there and passed S05's guard.
 - **An unfiltered `pg_locks` wait proves nothing** – and a `relation` filter hangs forever: a blocked `FOR UPDATE` waits on a `transactionid` lock whose relation is null. Wait on its `tuple` lock.
 - **A revert that silently matches nothing is a false green in the one step whose job is doubt.** A `perl -pe` strip matched nothing; the suite passed and read as proof. Check the guard count fell.
+- **A guard on a decision's tabulated approximation passes while its stated rule breaks** – S07's tier table was green as a skewed Board pushed 39 Post-its off-tile. Test the rule, not the table.
+- **A jsdom "geometry" fixture measures nothing, and a sized one under the cliff proves nothing** – S01's 20-per-region capture had no boxes; the sized run stopped at 11, the overflow cliff was ~13.
+- **`vi.waitFor` is not Testing Library's `waitFor`, and `configure({ asyncUtilTimeout })` does not reach it** – `web/test/setup.ts` raises RTL's budget to 15 s precisely so a wait can outlast a skipped tick of the 5 s poll, but `vi.waitFor` keeps its own 1 s default and expires four seconds short. Any wait that might have to survive a missed tick has to be RTL's; a wait that must *not* be rescued by the shipped interval has to stay under it, deliberately, and say so.
 
 ## React State & Refusals
 
@@ -96,6 +100,7 @@
 
 - **`docker: command not found` on the Windows side does not mean Docker is absent** – the engine lives in the `Ubuntu` distro, not on the Windows PATH and not in `docker-desktop` (which sits Stopped). Reach it with `wsl -d Ubuntu -e bash -lc 'cd /mnt/c/git/confApp && docker compose …'`; the published ports forward to Windows, so `127.0.0.1:8082` works from either side. This has now cost twice: an erroneous S13 execution hold (2026-08-20, corrected 08-21) and a visual suite left unrun (2026-08-29). Probe the distro before recording a Docker blocker.
 - **WSL OOM can surface as `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`** – it looks like a broken install; freeing host memory fixed it. First sign: the distro shuts down mid-session, taking dockerd.
+- **`127.0.0.1:5434` refusing does not mean the database is down** – WSL2's localhost forwarding to Windows breaks periodically while the container is perfectly healthy on the distro's own interface. Get the address with `wsl -d Ubuntu -e bash -lc "hostname -I"` (first entry) and use `TEST_DATABASE_URL="postgres://confapp:local-dev-only@<that-ip>:5434/confapp_test"`. This cost S08 a whole run's integration and visual coverage on 2026-09-01, recorded as "no Docker daemon and no reachable TEST_DATABASE_URL" while both were up. Probe the interface IP before recording a database blocker, exactly as the Docker entry above says to probe the distro.
 
 ## Remediation Sequences
 

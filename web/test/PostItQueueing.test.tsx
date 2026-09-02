@@ -62,13 +62,21 @@ function postIt(overrides: Partial<PostIt> & { id: string; text: string }): Post
   };
 }
 
+/**
+ * A Board with no Category yet, which is what every Round starts as.
+ *
+ * Every Post-it is in **Uncategorised**, and `uncategorised` is on the payload whether or not any
+ * Category is - that is the Board read contract this surface renders from
+ * (`prd.md#fr2-the-uncategorised-holding-area`).
+ */
 function board(state: 'open' | 'closed', postIts: PostIt[]): Round {
   return {
     id: ROUND_ID,
     kind: 'PostItRound',
     prompt: 'What slowed us down?',
     state,
-    postIts,
+    categories: [],
+    uncategorised: { postIts, postItCount: postIts.length },
     textMaxLength: SERVER_CAP,
   };
 }
@@ -104,6 +112,7 @@ function payload(rounds: Round[], activityWatermark = FIRST_WATERMARK): SessionW
     },
     rounds,
     canRun: true,
+    canRemovePermanently: false,
     activityWatermark,
   };
 }
@@ -774,5 +783,269 @@ describe('a post-it typed with no connection', () => {
     expect(heldOnScreen()).toEqual([]);
     // Nothing of hers was ever sent under his credential either.
     expect(sent('POST', BOARD)).toBe(1);
+  });
+
+  // ---------- S08 TI01, TI05: where a pending post-it sits, and where it lands ----------
+
+  /**
+   * A Board the Facilitator has already sorted: one Category holding everything the room wrote, and
+   * Uncategorised empty. Counts are the **server's**, stated separately from the lists.
+   */
+  function sortedBoard(
+    state: 'open' | 'closed',
+    tooling: PostIt[],
+    uncategorised: PostIt[],
+    toolingCount: number = tooling.length,
+  ): Round {
+    return {
+      id: ROUND_ID,
+      kind: 'PostItRound',
+      prompt: 'What slowed us down?',
+      state,
+      categories: [
+        {
+          id: 'cat-tooling',
+          name: 'Tooling',
+          postIts: tooling,
+          // Separately stated so a fixture can make the two disagree, which is the only way to tell
+          // a surface that consumes the server's count from one that counts the cards it was sent.
+          postItCount: toolingCount,
+        },
+      ],
+      uncategorised: { postIts: uncategorised, postItCount: uncategorised.length },
+      textMaxLength: SERVER_CAP,
+    };
+  }
+
+  /** The payload as a Member with no sorting authority receives it (S08). */
+  function attendeePayload(rounds: Round[]): SessionWithRounds {
+    return { ...payload(rounds), canRun: false };
+  }
+
+  function textsIn(testId: string): string[] {
+    return [...screen.getByTestId(testId).querySelectorAll('[data-testid^="post-it-text-"]')].map(
+      (node) => node.textContent ?? '',
+    );
+  }
+
+  /**
+   * **A pending post-it is drawn inside Uncategorised, and is counted by nobody** (S08 TI01, OC03).
+   *
+   * It is where the item lands when it sends, so it is where it is shown while it waits - not in a
+   * fourth list below the Board, which would read as a fourth place a Post-it can be. The number in
+   * the region head stays the **server's**: this device is the only one holding this item, and a
+   * count that ticked up for it would be a client-side derivation disagreeing with the projected
+   * screen and with every other Member's phone.
+   *
+   * The Facilitator has already sorted every other Post-it into "Tooling", which is the state
+   * Acceptance Scenario S04 actually describes.
+   */
+  it('draws a pending post-it inside uncategorised, without adding it to the server’s count', async () => {
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+      [`GET ${BASE}`]: {
+        status: 200,
+        body: attendeePayload([
+          sortedBoard(
+            'open',
+            [
+              postIt({ id: 'p-build', text: 'The build takes 22 minutes', mine: false }),
+              postIt({ id: 'p-signoff', text: 'Sign-off takes a week', mine: false }),
+            ],
+            [],
+            // Five, against two cards: a count re-derived on the device would fail here.
+            5,
+          ),
+        ]),
+      },
+      [`POST ${BOARD}`]: 'unreachable',
+    });
+
+    await compose(IDEA);
+
+    const [queued] = await listQueuedPostIts(NADIA);
+    const region = screen.getByTestId(`uncategorised-${ROUND_ID}`);
+    // Inside Uncategorised, and inside nothing else.
+    expect(region.contains(screen.getByTestId(`board-held-${ROUND_ID}`))).toBe(true);
+    expect(region.contains(screen.getByTestId(`held-post-it-${queued!.submissionId}`))).toBe(true);
+    // And not in the returned-to-author list below the Board: this one is still on its way.
+    expect(screen.queryByTestId(`board-returned-${ROUND_ID}`)).toBeNull();
+    expect(
+      screen.getByTestId('category-cat-tooling').querySelectorAll('[data-testid^="held-post-it-"]')
+        .length,
+    ).toBe(0);
+    // It is not on the panel's returned-to-author list either: that one is for an item with no
+    // board to sit on, and this board is right here.
+    expect(screen.queryByTestId('held-post-its')).toBeNull();
+
+    // Neither count moved: both are the server's, and the server has never seen this item.
+    expect(screen.getByTestId(`uncategorised-count-${ROUND_ID}`).textContent).toBe('0 post-its');
+    expect(screen.getByTestId('category-count-cat-tooling').textContent).toBe('5 post-its');
+    // And the card says so, rather than leaving the discrepancy to be read as a bug.
+    expect(screen.getByTestId(`held-pending-${queued!.submissionId}`).textContent).toMatch(
+      /isn’t in the count above yet/i,
+    );
+  });
+
+  /**
+   * **A post-it that came back refused is not drawn inside Uncategorised** (S08 TI01, and
+   * `docs/UBIQUITOUS_LANGUAGE.md` -> Discard).
+   *
+   * The region is for post-its that are on their way there. This one is going nowhere: the
+   * Conference was archived while it sat on the device, so the contribution is refused for good.
+   * Drawing it in the region would say the opposite of what is true - and it carries the one
+   * pressable thing a held post-it offers, worded **Discard it**, which is the Facilitator's
+   * sorting act and a word that must not appear on a Board region at all, least of all on the
+   * surface S08 makes read-only.
+   *
+   * The Round stays on the payload throughout, which is what makes this case reachable and distinct
+   * from the deleted-Round one below: there *is* a Board for the card to be drawn on, and it still
+   * must not be drawn on it.
+   */
+  it('keeps a refused post-it below the board rather than inside uncategorised', async () => {
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+      [`GET ${BASE}`]: {
+        status: 200,
+        body: attendeePayload([
+          sortedBoard(
+            'open',
+            [postIt({ id: 'p-build', text: 'The build takes 22 minutes', mine: false })],
+            [],
+          ),
+        ]),
+      },
+      [`POST ${BOARD}`]: [
+        // Held first, because only a request that never landed is held at all.
+        'unreachable',
+        // Then the drain reaches the API and is refused for good: the Conference is archived.
+        refusal(
+          'CONFERENCE_NOT_EDITABLE',
+          'This conference has been archived, so it is read-only and can no longer be changed.',
+        ),
+      ],
+    });
+
+    await compose(IDEA);
+    const [queued] = await listQueuedPostIts(NADIA);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await settle();
+
+    const card = screen.getByTestId(`held-post-it-${queued!.submissionId}`);
+    expect(card.getAttribute('data-held')).toBe('refused');
+
+    // Below the Board, in the returned-to-author list - and not in the region.
+    const region = screen.getByTestId(`uncategorised-${ROUND_ID}`);
+    expect(region.contains(card)).toBe(false);
+    expect(screen.getByTestId(`board-returned-${ROUND_ID}`).contains(card)).toBe(true);
+    expect(screen.queryByTestId(`board-held-${ROUND_ID}`)).toBeNull();
+    // The Round is still on the payload, so this is not the deleted-Round path.
+    expect(screen.getByTestId(`board-${ROUND_ID}`)).not.toBeNull();
+    expect(screen.queryByTestId('held-post-its')).toBeNull();
+
+    // No sorting word anywhere inside the Board's regions - the one control this card carries is
+    // below them, beside the server's reason, where "Discard it" means "take it off this device".
+    expect(screen.getByTestId(`regions-${ROUND_ID}`).textContent).not.toMatch(
+      /discard|restore|set aside/i,
+    );
+    // And the count-discrepancy sentence rides only the pending state, which this is not.
+    expect(screen.queryByTestId(`held-pending-${queued!.submissionId}`)).toBeNull();
+    expect(screen.getByTestId(`held-refusal-${queued!.submissionId}`).textContent).toMatch(
+      /archived/i,
+    );
+  });
+
+  /**
+   * **It drains into Uncategorised and into no Category, long after the sorting started**
+   * (Acceptance Scenario S04, OC03).
+   *
+   * The contribution path writes no placement, so Uncategorised follows structurally - but only the
+   * *server's* answer decides it, and this is the reading that proves the client shows that answer
+   * rather than remembering where the pending card was. Uncategorised rises by one; "Tooling", which
+   * the Facilitator had already filled, does not move.
+   */
+  it('lands a drained post-it in uncategorised and in no category, leaving every category count alone', async () => {
+    const placed = [
+      postIt({ id: 'p-build', text: 'The build takes 22 minutes', mine: false }),
+      postIt({ id: 'p-signoff', text: 'Sign-off takes a week', mine: false }),
+    ];
+    const drained = postIt({ id: 'p-drained', text: IDEA });
+
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+      [`GET ${BASE}`]: [
+        { status: 200, body: attendeePayload([sortedBoard('open', placed, [])]) },
+        { status: 200, body: attendeePayload([sortedBoard('open', placed, [])]) },
+        { status: 200, body: attendeePayload([sortedBoard('open', placed, [drained])]) },
+      ],
+      [`POST ${BOARD}`]: ['unreachable', { status: 200, body: { postIt: drained } }],
+    });
+
+    await compose(IDEA);
+    expect(heldOnScreen()).toEqual([IDEA]);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    /*
+     * Waited on the **re-read the delivered drain triggers**, which is a request count the defect
+     * under test cannot produce - never on the text the next line asserts
+     * (`docs/LEARNINGS.md#testing`). A drain that landed the Post-it in the wrong region still
+     * issues this read, so the assertions below are what decide the test.
+     */
+    await waitFor(() => expect(sent('GET', BASE)).toBe(3));
+    await settle();
+
+    expect(textsIn(`uncategorised-${ROUND_ID}`)).toEqual([IDEA]);
+    expect(textsIn('category-cat-tooling')).toEqual([placed[0]!.text, placed[1]!.text]);
+    expect(screen.getByTestId(`uncategorised-count-${ROUND_ID}`).textContent).toBe('1 post-it');
+    expect(screen.getByTestId('category-count-cat-tooling').textContent).toBe('2 post-its');
+    // The pending copy left the device: it is on the board now, and in one place only.
+    expect(heldOnScreen()).toEqual([]);
+    expect(await queuedKeys()).toEqual([]);
+  });
+
+  /**
+   * **And the same when the Round closed before the drain** (Acceptance Scenario S04, second half).
+   *
+   * A Round that has ended is still the Round this Post-it belongs to, so it lands in Uncategorised
+   * exactly as it would have while the Round was open - never auto-placed into whichever Category
+   * the Facilitator happened to be filling. The shipped late-arrival marking rides with it, and it
+   * is the **server's** answer: this device cannot know what the Round was doing when its queued
+   * item finally landed.
+   */
+  it('lands a post-it drained after the round closed in uncategorised, marked late', async () => {
+    const placed = [postIt({ id: 'p-build', text: 'The build takes 22 minutes', mine: false })];
+    const late = postIt({ id: 'p-late', text: IDEA, arrivedAfterClose: true });
+
+    await renderPanel({
+      [`GET ${WATERMARK}`]: watermarkAnswer(FIRST_WATERMARK),
+      [`GET ${BASE}`]: [
+        { status: 200, body: attendeePayload([sortedBoard('open', placed, [])]) },
+        { status: 200, body: attendeePayload([sortedBoard('closed', placed, [])]) },
+        { status: 200, body: attendeePayload([sortedBoard('closed', placed, [late])]) },
+      ],
+      [`POST ${BOARD}`]: ['unreachable', { status: 200, body: { postIt: late } }],
+    });
+
+    await compose(IDEA);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await waitFor(() => expect(sent('GET', BASE)).toBe(3));
+    await settle();
+
+    expect(textsIn(`uncategorised-${ROUND_ID}`)).toEqual([IDEA]);
+    expect(textsIn('category-cat-tooling')).toEqual([placed[0]!.text]);
+    expect(screen.getByTestId(`uncategorised-count-${ROUND_ID}`).textContent).toBe('1 post-it');
+    expect(screen.getByTestId('category-count-cat-tooling').textContent).toBe('1 post-it');
+    expect(screen.getByTestId('post-it-late-p-late').textContent).toMatch(
+      /arrived after this round closed/i,
+    );
+    expect(heldOnScreen()).toEqual([]);
   });
 });

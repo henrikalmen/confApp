@@ -68,6 +68,25 @@ function relativeTo(root: string, path: string): string {
   return path.replace(root, '').replace(/\\/g, '/');
 }
 
+/**
+ * An expression with one level of same-file `const` binding substituted in.
+ *
+ * A count sentence is sometimes handed a name rather than the count itself – the projected wall
+ * adds the server's per-region counts into a Board-wide total and binds it first – and a guard that
+ * only read the call site would see a bare identifier and have nothing to judge. Resolving it once
+ * is enough for that, and stopping at one level keeps this a readable rule rather than an evaluator.
+ *
+ * A name whose binding is not found comes back unchanged, so the caller's assertion fails on it
+ * rather than passing on an absence: a resolution that quietly returned nothing would make every
+ * later assertion vacuous (`docs/LEARNINGS.md#testing`).
+ */
+function resolvedInSameFile(source: string, expression: string): string {
+  const name = expression.trim();
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return expression;
+  const binding = new RegExp(`\\bconst ${name}\\s*=([\\s\\S]*?);`).exec(source);
+  return binding === null ? expression : binding[1]!;
+}
+
 // ---------- the migration (TI01, TI02) ----------
 
 describe('the post-it migration', () => {
@@ -301,7 +320,31 @@ describe('the post-it write path', () => {
   it('deletes rather than flags, and keeps no per-author or per-round count', () => {
     expect(repository).not.toMatch(/deleted_at|is_deleted|tombstone|soft/i);
     expect(repository).not.toMatch(/per_author|tally|quota/i);
-    expect(routes).not.toMatch(/postItCount|contributionCount|perAuthor/i);
+    /*
+     * `postItCount` used to be forbidden outright here. The facilitator-board bundle's Board
+     * projection needs one - a Category's own count, and Uncategorised's, both computed
+     * server-side and consumed rather than re-derived (prd.md#fr1, #fr2) - and that count is a
+     * different thing from the per-Member limit FR3 says does not exist: it counts what sits in
+     * one bucket on one Board, it groups by nothing about an author, and no contribution path
+     * consults it. So the ban becomes a shape, exactly as the `count(` ban below did: every
+     * `postItCount` in this module is produced by the Board projection, and a per-author count or
+     * a per-Round quota still fails.
+     */
+    expect(routes).not.toMatch(/contributionCount|perAuthor|postItQuota|authorCount/i);
+    /*
+     * The projection moved to `rounds/board-wire.ts` when S04 needed it on the anonymous Display
+     * Link route without dragging `routes/rounds.ts`'s vote repository onto that route's module
+     * graph. The claim is unchanged: every `postItCount` written anywhere on the board path is
+     * produced by that one function.
+     */
+    const boardWire = withoutComments(read(apiSrc, 'rounds', 'board-wire.ts'));
+    const projection = /function toBoardWire\([\s\S]*?^\}/m.exec(boardWire)?.[0];
+    expect(projection, 'the board projection should be found').toBeDefined();
+    expect(boardWire).not.toMatch(/contributionCount|perAuthor|postItQuota|authorCount/i);
+    expect([...routes.matchAll(/postItCount/g)].length).toBe(0);
+    expect([...boardWire.matchAll(/postItCount/g)].length).toBe(
+      [...projection!.matchAll(/postItCount/g)].length,
+    );
 
     /*
      * `count(` used to be forbidden outright here. S05's contribution-safe Session deletion (FR7)
@@ -511,6 +554,287 @@ describe('this story widens offline support by nothing at all', () => {
   });
 });
 
+// ---------- S08: the boundaries the Attendee's Board must not cross (TI08) ----------
+
+/**
+ * The Attendee's live Board adds no read, no route, no shape and no cadence – and these are the
+ * guards that keep it that way.
+ *
+ * Every one of them is a property of the *source*, which is the point: each guards a decision a
+ * later story could undo by writing perfectly working code – a second Board projection just for the
+ * phone, a `discarded` flag on the wire "so the author knows", a `setInterval` to keep the age
+ * ticking. None of those would fail a behavioural test on its own.
+ *
+ * **Each is paid for behaviourally somewhere that does not know this list**
+ * (`docs/LEARNINGS.md#testing`): the route enumeration below is a real application answering for
+ * itself; `post-it.integration.test.ts` drives the refusals and the author's own read through real
+ * PostgreSQL; `web/test/PostItBoard.test.tsx` reads the rendered Board and the age off the shipped
+ * poll; and `web/test/PostItPlacement.test.tsx` seeds the device's queue and proves it *unchanged*
+ * after a placement that could not be delivered.
+ */
+describe('the attendee’s board crosses none of its boundaries', () => {
+  /**
+   * The modules that produce or carry the Board an Attendee reads – server side and client side.
+   *
+   * `routes/rounds.ts` is not in this list, and that is a **scoping** decision rather than an
+   * exemption: it legitimately serves the Poll surface too, so it names the vote repository from
+   * end to end, and asserting the whole file carries no vote word would be a guard about the wrong
+   * file that could never go green. But the file is also where the Board is assembled into the
+   * Session payload the Attendee actually renders, so leaving it out entirely made this guard's
+   * name broader than what it checked (S08 quick-review C05). The Post-it branch of its wire
+   * builder is covered by the assertion below, and the whole assembled payload is covered
+   * behaviourally, by a read that knows no file list, in
+   * `post-it.integration.test.ts` -> "names no vote data anywhere on an attendee's session read".
+   */
+  const boardModules = [
+    join(apiSrc, 'rounds', 'board-wire.ts'),
+    join(apiSrc, 'rounds', 'category-repository.ts'),
+    join(apiSrc, 'rounds', 'post-it-repository.ts'),
+    join(apiSrc, 'rounds', 'post-it-discard-repository.ts'),
+    join(webSrc, 'api', 'board.ts'),
+  ];
+
+  const VOTE_SHAPED = /\bvote|ballot|tally|hasVoted|option_id|\boption\b/i;
+
+  it('reads, joins to and exposes no vote data anywhere on the board’s own path', () => {
+    for (const path of boardModules) {
+      const source = withoutComments(readFileSync(path, 'utf8'));
+      expect(source, path).not.toMatch(VOTE_SHAPED);
+    }
+
+    /*
+     * And the branch of the route that builds a **Post-it** Round's wire shape, which is where a
+     * per-Member field on the Session read - a `hasVoted`, a per-voter marker - would land if it
+     * were ever attached to the Board's own Round rather than to the Poll's.
+     *
+     * `toRoundWire` splits on `round.kind === 'VotingRound'`, so the Poll's half is everything
+     * before `: board === undefined` and the Board's half is everything after it. The slice is
+     * asserted to have been found and to be non-trivial before it is searched: a guard whose
+     * extraction quietly returned an empty string would pass for the rest of time
+     * (`docs/LEARNINGS.md#testing`).
+     */
+    const route = withoutComments(read(apiSrc, 'routes', 'rounds.ts'));
+    const wire = /function toRoundWire\([\s\S]*?\n\}/.exec(route)?.[0];
+    expect(wire, 'toRoundWire should be found in routes/rounds.ts').toBeDefined();
+    const split = wire!.indexOf(': board === undefined');
+    expect(split, 'toRoundWire should still split on the board branch').toBeGreaterThan(0);
+    const boardBranch = wire!.slice(split);
+    expect(boardBranch.length, 'the board branch should not be empty').toBeGreaterThan(40);
+    expect(boardBranch, 'the post-it branch of toRoundWire').not.toMatch(VOTE_SHAPED);
+  });
+
+  /**
+   * **One Board shape, not one per surface** (Structural Criterion 2).
+   *
+   * The Facilitator's phone, the Attendee's phone and the projected wall render the same
+   * `categories` / `uncategorised` projection, built once server-side and typed once client-side.
+   * A second declaration is how the three would come to describe one Round differently, and the
+   * first sorting change is the one it would get wrong.
+   */
+  it('declares the board projection exactly once on each side, with no attendee-specific copy', () => {
+    const declaringWire = sourcesUnder(apiSrc)
+      .filter((path) => /export function toBoardWire/.test(readFileSync(path, 'utf8')))
+      .map((path) => relativeTo(apiSrc, path));
+    expect(declaringWire).toEqual(['/rounds/board-wire.ts']);
+
+    for (const shape of ['Category', 'Uncategorised', 'PostIt']) {
+      const declaring = sourcesUnder(webSrc)
+        .filter((path) =>
+          new RegExp(`export interface ${shape}\\s*\\{`).test(readFileSync(path, 'utf8')),
+        )
+        .map((path) => relativeTo(webSrc, path));
+      expect(declaring, `${shape} should be declared once`).toEqual(['/api/board.ts']);
+    }
+
+    /*
+     * And nothing under `web/` groups, sorts or re-derives what the Board holds. The grouping is
+     * the payload's and the order is the payload's: a client that re-sorted the Categories would
+     * disagree with the projected screen the moment a Facilitator reordered them.
+     *
+     * **All three surfaces this block's own doc comment names**, which now includes the projected
+     * wall: `web/src/display/**` was outside the sweep while the comment above claimed to protect
+     * it, and it holds its own count sentence (`countWord`) and its own `detailTier(postItCount)`
+     * (S08 quick-review C06; `docs/LEARNINGS.md#testing` - "a file-list grep is only as good as its
+     * longest omission").
+     */
+    const surface = sourcesUnder(join(webSrc, 'activities'))
+      .concat(sourcesUnder(join(webSrc, 'display')))
+      .concat([join(webSrc, 'api', 'board.ts')]);
+    for (const path of surface) {
+      const source = withoutComments(readFileSync(path, 'utf8'));
+      expect(source, path).not.toMatch(/groupBy|\.sort\(|\.toSorted\(/);
+    }
+
+    /*
+     * **Every rendered count is the server's.**
+     *
+     * Asserted on the argument each call is given rather than on the absence of the string
+     * `postIts.length` - which appears legitimately as an emptiness test on the list a region is
+     * about to render, and as the CSS row count for a grid that is sizing what it draws, and
+     * forbidding it outright would make this guard about the wrong thing. What must never happen is
+     * a *count sentence* derived here, and these calls are where one would have to appear.
+     *
+     * Both spellings: `countLabel` on the phone surfaces and `countWord` on the projected wall.
+     *
+     * The argument is judged after one level of same-file `const` is resolved, because the wall
+     * legitimately renders a Board-wide total it adds up from the server's per-region counts and
+     * binds first (`totalPostIts`). Resolving it is what lets the assertion be the strict one:
+     * **no `.length` may reach a count sentence, at one remove or none**, which rejects both
+     * `countWord(postIts.length)` and the `countLabel(uncategorised.postItCount + held.length)`
+     * this story's own Constraints & Gotchas call out as Critical.
+     */
+    for (const path of surface) {
+      const source = withoutComments(readFileSync(path, 'utf8'));
+      // Skipping their own declarations, which are not calls and take no count.
+      for (const [, argument] of source.matchAll(
+        /(?<!function )\bcount(?:Label|Word)\(([^)]*(?:\([^)]*\)[^)]*)*)\)/g,
+      )) {
+        const counted = resolvedInSameFile(source, argument ?? '');
+        expect(counted, `${path}: a count sentence should be given the server's count`).toMatch(
+          /postItCount/,
+        );
+        expect(
+          counted,
+          `${path}: a count sentence should never be derived from a list length`,
+        ).not.toMatch(/\.length\b/);
+      }
+    }
+  });
+
+  /**
+   * **A Discard leaves nothing an Attendee could read it from** (Structural Criterion 3).
+   *
+   * The exclusion is S05's anti-join in the read statement, so there is no client-side filter to
+   * write and no flag for one to filter on. This asserts the *shape*: neither the wire builder nor
+   * the client's types carry a removal-shaped field, so there is nothing on the payload from which a
+   * Post-it's absence could be explained – which is what "no marker, no notification" means once
+   * somebody opens the network tab.
+   */
+  it('carries no discard-shaped field on the post-it wire, and no filter on the client', () => {
+    const wire = withoutComments(read(apiSrc, 'rounds', 'board-wire.ts'));
+    expect(wire).not.toMatch(/discarded|removed|deleted|hidden|tombstone|setAside/i);
+
+    const shapes = withoutComments(read(webSrc, 'api', 'board.ts'));
+    expect(shapes).not.toMatch(/discarded|removed|deleted|hidden|tombstone|setAside/i);
+
+    // Uncategorised is not a Category and carries nothing that addresses it - no id, no name, no
+    // position - so no control offered to a Category can be offered to it by accident.
+    const uncategorised = /export interface Uncategorised \{[\s\S]*?\n\}/.exec(shapes)?.[0];
+    expect(uncategorised, 'the Uncategorised shape should be found').toBeDefined();
+    expect(uncategorised).not.toMatch(/\bid\b|\bname\b|\bposition\b/);
+  });
+
+  /**
+   * **No second cadence, and no timer on this surface at all** (Structural Criterion 4, TI06).
+   *
+   * The age beside the Board has to advance while nothing is arriving, and the obvious way to do
+   * that is a `setInterval` – which would be the second mechanism the plan's shared decision
+   * forbids. It hangs off `tick/foreground-tick.ts` instead: one cadence, one interval, one more
+   * consumer. `web/test/watermark-poll.test.tsx` holds the other half of this, that the loop itself
+   * is declared once and registered once.
+   */
+  it('owns no interval, timer or cursor of its own on the attendee board path', () => {
+    const surface = sourcesUnder(join(webSrc, 'activities'))
+      .concat(sourcesUnder(join(webSrc, 'tick')))
+      .concat([join(webSrc, 'attendee', 'staleness.ts')]);
+
+    for (const path of surface) {
+      const source = withoutComments(readFileSync(path, 'utf8'));
+      expect(source, path).not.toMatch(/setInterval|setTimeout|requestAnimationFrame/);
+      // No cadence constant either: five seconds is stated once, in the loop that owns it.
+      expect(source, path).not.toMatch(/POLL_INTERVAL|INTERVAL_MS|_MS\s*=\s*\d/);
+    }
+
+    /*
+     * And no second cursor. The Session's `activityWatermark` is the one change signal this surface
+     * reads; a per-Round or per-Board cursor would be the second mechanism under another name.
+     */
+    const panel = withoutComments(read(webSrc, 'activities', 'SessionActivitiesPanel.tsx'));
+    expect(panel).toMatch(/activityWatermark/);
+    /*
+     * Case-**sensitive** and header-named rather than `/etag/i`, which matched `setAge` and made
+     * this guard fail on the staleness label it is meant to sit beside. A conditional-request
+     * change signal would show up as the request header, not as a stray identifier.
+     */
+    expect(panel).not.toMatch(/boardWatermark|boardCursor|lastSeenAt|sinceVersion|If-None-Match/);
+  });
+
+  /**
+   * **Offline scope is unwidened: a contribution is the only thing this device defers.**
+   *
+   * Asserted as "who may write to the store", which is the property that matters - the queue's own
+   * module and the hook over it, and nothing on the Board surface. A placement, a Discard, a restore
+   * or a Category write that could not be delivered is a refusal on screen and nothing on the
+   * device; `web/test/PostItPlacement.test.tsx` proves that by seeding the store first and reading
+   * it back unchanged, which is a stronger reading than proving it empty.
+   */
+  it('lets nothing but a post-it contribution reach the device’s queue store', () => {
+    const writers = sourcesUnder(webSrc)
+      .filter((path) =>
+        /\b(holdPostIt|dropQueuedPostIt|markQueuedPostItRefused)\s*\(/.test(
+          withoutComments(readFileSync(path, 'utf8')),
+        ),
+      )
+      .map((path) => relativeTo(webSrc, path))
+      .sort();
+    // The store itself, which declares them, and the one hook over it. Nothing else - and in
+    // particular nothing on the Board surface, which reads the store and never writes to it.
+    expect(writers).toEqual(['/offline/post-it-queue.ts', '/offline/use-post-it-queue.ts']);
+
+    // The Board surface reads the store and mints an identity; it writes nothing to it directly,
+    // and it holds no store, cache or outbox of its own.
+    for (const path of sourcesUnder(join(webSrc, 'activities'))) {
+      const source = withoutComments(readFileSync(path, 'utf8'));
+      expect(source, path).not.toMatch(/localStorage|indexedDB|caches\.|openDatabase/);
+      expect(source, path).not.toMatch(/outbox|replay|pendingWrite|syncQueue/i);
+    }
+  });
+
+  /**
+   * **There is no Attendee-specific Board read, and the real application says so for itself.**
+   *
+   * A route enumeration rather than a file list: this builds the application and asks it what it
+   * registered, so a second read added under any name and in any module would appear here. The
+   * Board reaches a phone through the Membership-gated Session read and a room machine through the
+   * Display Link, and there is no third way in.
+   */
+  it('registers no attendee-specific board route, and every board write behind authentication', async () => {
+    const app = buildApp({ db: fakeDatabase(), auth: fakeAuth() });
+    try {
+      const routes = app.confappRoutes;
+      for (const route of routes) {
+        expect(route.url, 'no route names a surface rather than a resource').not.toMatch(
+          /attendee|board|my-|mine/i,
+        );
+      }
+
+      /*
+       * The two reads that can answer with a Board, and only these. The Session read is
+       * authenticated; the Display Link deliberately is not, because a room machine has no
+       * Workspace session and must not acquire one (S07, FR7).
+       */
+      const sessionRead = routes.find(
+        (route) =>
+          route.method === 'GET' &&
+          route.url === '/api/conferences/:conferenceId/sessions/:sessionId',
+      );
+      expect(sessionRead?.authenticated).toBe(true);
+
+      // Every Board write is a write, behind authentication, on the Session's own path - the
+      // sorting-authority gate then decides, and `post-it.integration.test.ts` proves it does.
+      const writes = routes.filter((route) =>
+        /post-its\/:postItId\/(placement|discard|restore|permanent-removal)$/.test(route.url),
+      );
+      expect(
+        writes.map((route) => `${route.method} ${route.url.split('/').at(-1)}`).sort(),
+      ).toEqual(['PATCH placement', 'POST discard', 'POST permanent-removal', 'POST restore']);
+      for (const route of writes) expect(route.authenticated, route.url).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 // ---------- registration and authentication (TI04, TI05, TI07) ----------
 
 describe('the post-it routes are registered and authenticated', () => {
@@ -525,6 +849,14 @@ describe('the post-it routes are registered and authenticated', () => {
         `POST ${board}`,
         `PATCH ${board}/:postItId`,
         `DELETE ${board}/:postItId`,
+        /*
+         * S03's placement route. Its url extends into this block's matcher, so the authentication
+         * assertion below began covering it the moment it was registered - and it is listed here
+         * as well so that **registration** is asserted too, not only authentication. A route that
+         * silently stopped being registered would otherwise leave this loop with nothing to check
+         * and pass.
+         */
+        `PATCH ${board}/:postItId/placement`,
         `GET ${base}/activities/watermark`,
       ]) {
         expect(urls).toContain(url);

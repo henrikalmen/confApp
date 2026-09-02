@@ -1,7 +1,66 @@
+# The Display Link token must never reach a log line (S04, FIS Structural Criterion 4).
+#
+# The API goes to real lengths for this: `redactDisplayToken` rewrites the request line before
+# Fastify's serializer sees it, and the token is carried in the path rather than a query string
+# precisely because query strings are where credentials habitually end up in logs. None of that
+# helps here. This container sits in front of the API and, left alone, falls through to
+# nginx:alpine's default `access_log /var/log/nginx/access.log main` – whose `main` format
+# contains `"$request"`, the full request line, path included. Both the projected page load and
+# every poll of the board through the /api/ proxy would write a live bearer credential over
+# named post-its to container stdout, and from there to whatever aggregates it, retained by that
+# system's policy and long outliving revocation (review 2026-08-31, finding 1).
+#
+# So the URI is rewritten before it is logged, in the same shape and with the same placeholder
+# the API uses, so the two halves read as one decision. `access_log off` was the alternative and
+# is worse: it would erase the fact that a projected board was served at all, which is exactly
+# what an operator needs when a room says the wall has gone blank.
+#
+# `$request_uri` carries the query string too, so the patterns end at the first `?` or `/`.
+# The patterns are case-insensitive (`~*`) and tolerate the separators nginx will happily serve
+# but a canonical prefix will not match. `/DISPLAY/<token>` returned 200 and wrote the raw token
+# to this log; `//display/<token>` and `/api//display/<token>` wrote it too. Three of four
+# spellings leaked past the first version of this map (gap re-review 2026-09-02, G29).
+#
+# Leading `/+` covers duplicate slashes, `(\.?/+)*` absorbs `.` segments and further slashes
+# between the parts, and `%2f`/`%2F` is matched as a literal because nginx does not decode it in
+# `$request_uri`. Over-matching only costs a log line that says `<token>` when nothing secret was
+# there; under-matching writes a live credential to disk, so these lean deliberately wide.
+map $request_uri $confapp_logged_uri {
+    default                                              $request_uri;
+    "~*^/+(\.?/+)*api(/+|%2f)+(\.?/+)*display(/+|%2f)+"   /api/display/<token>;
+    "~*^/+(\.?/+)*display(/+|%2f)+"                       /display/<token>;
+}
+
+# `combined`, with $request replaced by its redacted parts. Kept field-for-field identical so
+# anything already parsing nginx's default output keeps working.
+log_format confapp '$remote_addr - $remote_user [$time_local] '
+                   '"$request_method $confapp_logged_uri $server_protocol" '
+                   '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+
 server {
     listen       80;
     server_name  _;
     root         /usr/share/nginx/html;
+
+    # Every request line this container writes goes through the redacting format above. Declared
+    # at server level rather than per location so a location added later cannot opt out of it by
+    # omission – the same reasoning as the API's `ANONYMOUS_ROUTES` being a literal allow-list.
+    access_log /var/log/nginx/access.log confapp;
+
+    # **The error log cannot be redacted, so it is silenced above `crit`.**
+    #
+    # `log_format` applies to the access log alone; `error_log` takes no variables and no format,
+    # so the `map` above cannot reach it. When the API is unreachable nginx writes, at `[error]`
+    # level, `connect() failed … request: "GET /api/display/<token> HTTP/1.1", upstream:
+    # "http://api:8080/api/display/<token>"` – the live credential twice in one line, once per
+    # poll from every room machine, for as long as the outage lasts (gap review 2026-09-02, G30).
+    # Confirmed against `nginx:alpine` with a refusing upstream before this was written.
+    #
+    # `crit` is the lowest level that excludes `[error]`. What is given up is a duplicate of a
+    # signal the access log already carries: an unreachable API still appears there as a run of
+    # 502s, with the path redacted to `/display/<token>`, so an operator sees that the room
+    # screens are failing and how often. What is given up is the uncensored copy of it.
+    error_log /var/log/nginx/error.log crit;
 
     # Runtime configuration must never be cached, or a container restart with a new
     # API_BASE_URL would keep serving the previous environment's value from the browser.
@@ -29,6 +88,38 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # The projected Board (S04, FR7): /display/<token> is its OWN document, not a route of the
+    # app. A room machine has no Workspace session and must not acquire one, so this URL must
+    # never resolve to index.html – which is exactly what the SPA fallback below would do,
+    # silently, and only in the built image.
+    #
+    # ^~ is load-bearing. Without it this is an ordinary prefix location, so the regex-free
+    # match still wins over `location /` – but a regex location added later (an asset or
+    # caching rule, say) would take precedence and the token URL would fall through to the app
+    # document again. The `^~` says "stop searching", which is what makes this rule survive the
+    # next edit to this file.
+    #
+    # `try_files $uri` first, so a real file under the path – a fingerprinted asset, if the
+    # build ever emits one there – is still served as itself rather than as HTML.
+    #
+    # Placed after `location /api/` so it cannot shadow the API proxy: the two prefixes do not
+    # overlap, and the order states that intent for a reader.
+    location ^~ /display/ {
+        try_files $uri /display.html;
+    }
+
+    # `try_files` above performs an *internal redirect* to /display.html, and add_header does not
+    # survive one – a directive written in the block above would never reach the response, which
+    # is where an earlier version of this file made a claim it did not keep. The exact-match
+    # location below is what the internal redirect lands in, so this is where the directive has
+    # to be.
+    #
+    # The board data itself comes from /api/display/:token, which the API stamps no-store; this
+    # covers the shell document, which is behind a bearer token in its own URL.
+    location = /display.html {
+        add_header Cache-Control "no-store" always;
     }
 
     # Single-page app history fallback: a deep link serves index.html rather than 404.

@@ -1,58 +1,22 @@
-import { resolveApiBaseUrl } from '../config.ts';
+import { resolveWebBaseUrl } from '../config.ts';
 import type { ServerNow } from '../clock/effective-clock.ts';
+import { ApiError, apiRequest } from './request.ts';
+import type { Category, PostIt, Uncategorised } from './board.ts';
 
-/** Mirrors the API's error envelope – the shared contract in api/src/errors.ts. */
-export interface ApiErrorEnvelope {
-  error: {
-    code: string;
-    message: string;
-    details?: { field: string; message: string }[];
-  };
-}
-
-export interface ApiErrorDetail {
-  field: string;
-  message: string;
-}
-
-export class ApiError extends Error {
-  readonly code: string;
-  readonly status: number;
-  /**
-   * Field-level messages, when the refusal was about particular inputs. The create form attaches
-   * each one to its own control, which is what "rejected inline" in FR1 means – a form-level
-   * banner would leave the organizer hunting for which field to fix.
-   */
-  readonly details: ApiErrorDetail[];
-  /**
-   * What the refused thing looks like **now**, present only on a version conflict (S09 TI04).
-   *
-   * This is what makes "re-apply your edit onto the current version" a real recovery path rather
-   * than advice: the organizer's typed values stay in the form and the server's newer values are
-   * shown beside them, so nothing has to be retyped from memory.
-   */
-  readonly current: unknown;
-
-  constructor(
-    code: string,
-    message: string,
-    status = 0,
-    details: ApiErrorDetail[] = [],
-    current: unknown = undefined,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-    this.code = code;
-    this.status = status;
-    this.details = details;
-    this.current = current;
-  }
-
-  /** The message for one field, or undefined when the refusal did not name it. */
-  messageFor(field: string): string | undefined {
-    return this.details.find((detail) => detail.field === field)?.message;
-  }
-}
+/*
+ * **The transport and the Board projection live next door, and are re-exported from here.**
+ *
+ * S07 lifted them out (2026-08-31, review H2): the projected Board View is downloaded by a room
+ * machine with no Workspace session, and importing this module for one anonymous `GET` handed that
+ * machine `castVote`, the Join Code helpers and every other authenticated endpoint in the chunk it
+ * serves. The display surface now imports `./request.ts` and `./board.ts` directly and reaches
+ * nothing it cannot call.
+ *
+ * Everything they export is re-exported here unchanged, so every existing importer of
+ * `api/client.ts` keeps working and no other file had to move.
+ */
+export * from './request.ts';
+export * from './board.ts';
 
 export interface Health {
   status: string;
@@ -66,128 +30,6 @@ export interface Me {
   email: string;
   displayName: string;
   hd: string;
-}
-
-function isEnvelope(body: unknown): body is ApiErrorEnvelope {
-  if (typeof body !== 'object' || body === null) return false;
-  const error = (body as { error?: unknown }).error;
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    typeof (error as { code?: unknown }).code === 'string' &&
-    typeof (error as { message?: unknown }).message === 'string'
-  );
-}
-
-/**
- * How a credential is obtained for a request. Supplied by the session rather than read from
- * storage here, so this module never has to know where a token lives or when it expires –
- * and so a test can drive request behaviour without a session at all.
- */
-export type TokenSource = () => Promise<string | null>;
-
-let tokenSource: TokenSource = async () => null;
-
-export function setTokenSource(source: TokenSource): void {
-  tokenSource = source;
-}
-
-/**
- * Told when an authenticated request could not be issued for want of a credential.
- *
- * **A notification, not a decision.** This module knows the fact — something needed a token and
- * there wasn't one — and knows nothing about what to do with it; renewing is a top-level
- * navigation and belongs to the auth layer, which registers here. Keeping the decision out of
- * `apiRequest` is deliberate: a request function that can navigate the page away is a surprising
- * thing to call.
- *
- * It exists because the credential accessor stopped renewing (`offline-session-expiry` TI01) and
- * for a while nothing took over: renewal was reachable from one branch of the attendee panel, so
- * an attendee reading a live schedule, and every organizer surface, silently lost API access an
- * hour after signing in and never got it back.
- */
-export type CredentialMissingListener = () => void;
-
-let credentialMissing: CredentialMissingListener = () => {};
-
-export function setCredentialMissingListener(listener: CredentialMissingListener): void {
-  credentialMissing = listener;
-}
-
-export interface RequestOptions {
-  signal?: AbortSignal;
-  /** Anonymous routes (`/health`) skip the credential entirely rather than sending an empty one. */
-  authenticated?: boolean;
-  method?: string;
-  body?: unknown;
-}
-
-/**
- * Every refusal arrives in one envelope, so the UI can always show `error.message` rather
- * than inventing its own wording per endpoint.
- */
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { signal, authenticated = true, method = 'GET', body } = options;
-
-  const headers: Record<string, string> = { accept: 'application/json' };
-
-  if (authenticated) {
-    const token = await tokenSource();
-    /*
-     * **Not sent at all**, rather than sent anonymously.
-     *
-     * An authenticated route with no `Authorization` header is answered with a 401 – an *answer*,
-     * and callers that fall back to a cache are built to treat an answer as authoritative. So a
-     * lapsed ID token used to read as "the server says you may not have this", and the attendee's
-     * cached Schedule was forgotten on the strength of a request that was never entitled to be
-     * made (`offline-session-expiry` TI07).
-     *
-     * Status 0 is the shape of a request that never reached the network – the same case as a
-     * transport failure, which is what this is – so the caller's existing "unreachable" branch
-     * handles it with no new classification to keep in step.
-     */
-    if (token === null) {
-      // Announced before it is thrown, so a listener sees every refusal rather than only the ones
-      // whose caller happens to inspect the error.
-      credentialMissing();
-      throw new ApiError(
-        'CREDENTIAL_UNAVAILABLE',
-        'Your sign-in has expired, so this could not be requested. Anything already saved on ' +
-          'this device stays readable.',
-        0,
-      );
-    }
-    headers.authorization = `Bearer ${token}`;
-  }
-  if (body !== undefined) headers['content-type'] = 'application/json';
-
-  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
-    method,
-    headers,
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(signal ? { signal } : {}),
-  });
-
-  const payload: unknown = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    if (isEnvelope(payload)) {
-      throw new ApiError(
-        payload.error.code,
-        payload.error.message,
-        response.status,
-        payload.error.details ?? [],
-        (payload.error as { current?: unknown }).current,
-      );
-    }
-    throw new ApiError(
-      'UNEXPECTED_RESPONSE',
-      `The server responded with status ${response.status} and no readable error.`,
-      response.status,
-    );
-  }
-
-  return payload as T;
 }
 
 /**
@@ -790,42 +632,11 @@ export interface RoundOption {
 }
 
 /**
- * One Post-it on a Round's board, as the Session read returns it.
- *
- * `authorName` is joined from `app_user.display_name` server-side on every read, so a rename
- * reaches every Post-it its owner ever wrote. `mine` is the **server's** answer to "may I change
- * this one", consumed rather than re-derived - the same discipline as `canRun`, and the reason no
- * client-side opinion about authorship exists to drift out of step with the write predicate that
- * actually enforces it.
- *
- * There is no author `sub` and no timestamp here. The `sub` is an identity confApp has no reason to
- * publish to the room, and an instant is something this client could only render by converting a
- * timezone the product does not carry - `edited` is the flag the board shows instead.
- */
-export interface PostIt {
-  id: string;
-  text: string;
-  authorName: string;
-  /** Whether the signed-in viewer wrote it. The server's answer. */
-  mine: boolean;
-  edited: boolean;
-  /**
-   * Whether it reached the board after its Round had closed - a Post-it composed with no
-   * connection and sent when the signal returned (FR6).
-   *
-   * The **server's** answer, decided from the Round's state at the instant the row was written.
-   * There is no client-side rule about lateness and none could exist here: the device does not
-   * know what the Round was doing when its queued item finally landed.
-   */
-  arrivedAfterClose: boolean;
-}
-
-/**
  * One Round as the Session read returns it.
  *
  * `purpose` is present exactly on a `VotingRound` and `options` exactly on one too – the payload
- * says the same thing the table's own constraint says. `postIts` and `textMaxLength` are present
- * exactly on a `PostItRound`, for the same reason.
+ * says the same thing the table's own constraint says. The Board – `categories`, `uncategorised`
+ * and `textMaxLength` – is present exactly on a `PostItRound`, for the same reason.
  *
  * **There is no cursor here, of any name.** Near-live propagation for Rounds is
  * `round.activity_watermark`, and it reaches this client as one Session-level scalar
@@ -840,8 +651,23 @@ export interface Round {
   prompt: string;
   state: RoundState;
   options?: RoundOption[];
-  /** The whole board, oldest first, in the same response as the Round. */
-  postIts?: PostIt[];
+  /**
+   * The Board's Categories, **in the Facilitator's order**, each with the Post-its it holds.
+   *
+   * The order is the payload's order and nothing here re-sorts them - the same discipline as a
+   * Poll's options. Present exactly on a `PostItRound` the Session read loaded a board for; `[]`
+   * on a Board nobody has sorted yet, which is a real state and not a missing one.
+   */
+  categories?: Category[];
+  /**
+   * The holding area every Post-it arrives in, **always present beside `categories`** - including
+   * when it is empty and when the Board has no Category at all.
+   *
+   * It carries no `id`, no `name` and no `position`, deliberately: Uncategorised is not a Category
+   * and nothing addresses it, so there is no rename, reorder or remove for this client to offer and
+   * no identifier it could send if there were.
+   */
+  uncategorised?: Uncategorised;
   /**
    * How long a Post-it may be, **as the server states it**.
    *
@@ -900,6 +726,21 @@ export interface SessionWithRounds {
   session: Session;
   rounds: Round[];
   canRun: boolean;
+  /**
+   * Whether this caller may **permanently remove** a Post-it here (S06 FR5) – the server's answer,
+   * consumed and never re-derived.
+   *
+   * A second flag rather than a widening of `canRun`, because `canRun` is true for an assigned
+   * Facilitator and for an Admin alike and this act is the one they differ on. It folds the
+   * Conference's editability in exactly as `canRun` does, so it means "this control will work"
+   * rather than "you would be allowed if anything here were writable".
+   *
+   * The client holds no opinion about who is an Admin: there is no role name, no rank comparison
+   * and no Admin test anywhere under `web/`. It renders from this and the API enforces the same
+   * decision again on the write, which is what makes the rule server-side rather than hidden in a
+   * UI (Binding Constraint FR5).
+   */
+  canRemovePermanently: boolean;
   /**
    * The Session's activity cursor, beside the payload it describes.
    *
@@ -961,6 +802,82 @@ export async function fetchSessionActivities(
     `/conferences/${conferenceId}/sessions/${sessionId}`,
     signal ? { signal } : {},
   );
+}
+
+/**
+ * The live Display Link on one Post-it Round, as its own Facilitator reads it back.
+ *
+ * `null` where the Round has none, which is an ordinary state and not a failure: a Board is fully
+ * usable with no link ever issued.
+ */
+export interface DisplayLink {
+  /** The value itself. Copied, never typed - 43 base64url characters. */
+  token: string;
+  issuedAt: string;
+}
+
+function displayLinkPath(conferenceId: string, sessionId: string, roundId: string): string {
+  return `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/display-link`;
+}
+
+/**
+ * The URL to hand a projector, or `null` where this build cannot state one.
+ *
+ * Built here rather than sent by the API, because it is a fact about *where this SPA is served*
+ * and the API does not know that - the same reason `/config.js` carries the API base URL rather
+ * than the reverse. The token is a path segment, never a query parameter (see `fetchDisplayBoard`).
+ *
+ * **Not `window.location.origin`.** Inside the Capacitor shells that is `capacitor://localhost` or
+ * `https://localhost`, so a link issued from a Facilitator's phone - the device the acceptance
+ * scenario names - would come out unopenable by any room machine, in a field that looks fine
+ * (review 2026-08-31, finding 2). `resolveWebBaseUrl` returns `null` there instead, and the caller
+ * says so rather than showing a URL nobody can use.
+ */
+export function displayLinkUrl(token: string): string | null {
+  const base = resolveWebBaseUrl();
+  return base === null ? null : `${base}/display/${encodeURIComponent(token)}`;
+}
+
+export async function fetchDisplayLink(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  signal?: AbortSignal,
+): Promise<DisplayLink | null> {
+  const body = await apiRequest<{ displayLink: DisplayLink | null }>(
+    displayLinkPath(conferenceId, sessionId, roundId),
+    signal ? { signal } : {},
+  );
+  return body.displayLink;
+}
+
+/**
+ * Issues a link, **replacing** whatever live one the Round had.
+ *
+ * No body: a Round holds at most one live link, so there is nothing to name and nothing to choose.
+ * The acting identity is the credential and is never sent.
+ */
+export async function issueDisplayLink(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+): Promise<DisplayLink> {
+  const body = await apiRequest<{ displayLink: DisplayLink }>(
+    displayLinkPath(conferenceId, sessionId, roundId),
+    { method: 'POST' },
+  );
+  return body.displayLink;
+}
+
+/** Revokes this Round's live link. Names the Round, not a link; succeeds when there was none. */
+export async function revokeDisplayLink(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+): Promise<void> {
+  await apiRequest<{ displayLink: null }>(displayLinkPath(conferenceId, sessionId, roundId), {
+    method: 'DELETE',
+  });
 }
 
 export async function createRound(
@@ -1115,6 +1032,39 @@ export async function updatePostIt(
   return body.postIt;
 }
 
+/**
+ * Sorting: moving a Post-it into a Category, or back into Uncategorised (FR3).
+ *
+ * **`categoryId: null` is Uncategorised** - the absence of a placement, sent as an absence rather
+ * than as a reserved id. There is no sentinel value anywhere on this path, which is why moving a
+ * Post-it *out* of a Category needs no second function and no direction flag.
+ *
+ * The body carries `categoryId` and nothing else. Who is acting is the bearer credential and is
+ * decided entirely server-side, so there is no parameter here for an actor - the client half of
+ * "actor identity is taken from the authenticated credential, never from the request body" (Binding
+ * Constraint FR6). This client carries no opinion about *who may* place either: it asks, and renders
+ * the refusal if there is one.
+ *
+ * **Nothing on this path is ever queued.** Sorting is online-only (`docs/PRODUCT.md` -> Anti-Goals,
+ * Binding Constraint FR3): a placement that cannot be delivered rejects here, the caller says so,
+ * and the Post-it stays visibly where it was. There is no submission identity, no hold and no drain
+ * - unlike `contributePostIt` above, which is the one write on this surface that has somewhere to
+ * go.
+ */
+export async function placePostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+  categoryId: string | null,
+): Promise<PostIt> {
+  const body = await apiRequest<{ postIt: PostIt }>(
+    `${postItPath(conferenceId, sessionId, roundId, postItId)}/placement`,
+    { method: 'PATCH', body: { categoryId } },
+  );
+  return body.postIt;
+}
+
 export async function deletePostIt(
   conferenceId: string,
   sessionId: string,
@@ -1124,4 +1074,188 @@ export async function deletePostIt(
   await apiRequest<{ removed: boolean }>(postItPath(conferenceId, sessionId, roundId, postItId), {
     method: 'DELETE',
   });
+}
+
+/**
+ * One discarded Post-it as the Facilitator's reversal surface reads it (S05 FR4).
+ *
+ * Two names, because the trace is what makes this not an author deletion: whose idea it was, and who
+ * took it off the board. `discardedAt` is a **display string the server formatted** - the product
+ * carries no venue timezone, so nothing here parses it, converts it or constructs a `Date` from it
+ * (`web/src/schedule/wall-clock-time.ts` holds the same line for the schedule's times).
+ *
+ * There is no `mine`, no `edited` and no permanent-removal field: this is not a board, and the
+ * irreversible act is Admin-only and belongs to another story.
+ */
+export interface DiscardedPostIt {
+  id: string;
+  text: string;
+  authorName: string;
+  discardedByName: string;
+  discardedAt: string;
+}
+
+/**
+ * Discard, restore, and the one list a restore is made from (FR4).
+ *
+ * **None of these sends who is acting**: the discarder is the bearer credential and nothing else
+ * (Binding Constraint FR6), so neither write carries a body at all. **And restore names no
+ * destination** - a restore always returns a Post-it to Uncategorised, so there is no parameter here
+ * one could arrive through even by mistake.
+ *
+ * **Nothing on this path is ever queued.** Discard and restore are online-only (`docs/PRODUCT.md` ->
+ * Anti-Goals, Binding Constraint FR3): a request that cannot be delivered rejects here, the caller
+ * says so, and the board stays exactly as it was. There is no submission identity, no hold and no
+ * drain - unlike `contributePostIt` above, which is the one write on this surface with somewhere to
+ * go.
+ */
+export async function fetchDiscardedPostIts(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  signal?: AbortSignal,
+): Promise<DiscardedPostIt[]> {
+  const body = await apiRequest<{ discarded: DiscardedPostIt[] }>(
+    `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/discarded-post-its`,
+    signal ? { signal } : {},
+  );
+  return body.discarded;
+}
+
+export async function discardPostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+): Promise<void> {
+  await apiRequest<{ discarded: boolean }>(
+    `${postItPath(conferenceId, sessionId, roundId, postItId)}/discard`,
+    { method: 'POST' },
+  );
+}
+
+export async function restorePostIt(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+): Promise<void> {
+  await apiRequest<{ restored: boolean }>(
+    `${postItPath(conferenceId, sessionId, roundId, postItId)}/restore`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * **Permanent Removal**: the Admin act that takes a Post-it off every surface for good (S06 FR5).
+ *
+ * Its own address - `/permanent-removal` - and emphatically not `deletePostIt` above. That one is
+ * the *author's* own deletion of their *own* Post-it while the Round is open; this one is an
+ * Admin's, on anybody's Post-it, at any Round state, and it cannot be undone by anyone. Two
+ * functions because they are two acts, and a shared one is how a client comes to send the wrong
+ * one.
+ *
+ * **It sends no body at all.** The acting Admin is the bearer credential and nothing else (Binding
+ * Constraint FR6), and nothing about the act is recorded anywhere in any case - FR5's "no trace"
+ * leaves no "removed by" for a request to name.
+ *
+ * **Nothing on this path is ever queued.** Permanent Removal is online-only (`docs/PRODUCT.md` ->
+ * Anti-Goals, Binding Constraint FR3): a request that cannot be delivered rejects here, the caller
+ * says so, and the Post-it stays visibly where it was. There is no submission identity, no hold and
+ * no drain.
+ *
+ * **Removing a Post-it that is already gone resolves rather than rejects.** The server treats the
+ * requested end state as the answer, so a second removal - or one racing an author's own delete -
+ * is a success with nothing to report.
+ */
+export async function removePostItPermanently(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  postItId: string,
+): Promise<void> {
+  await apiRequest<{ removed: boolean }>(
+    `${postItPath(conferenceId, sessionId, roundId, postItId)}/permanent-removal`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * The Category writes, all four of them, on one address per Category.
+ *
+ * None of these sends who is acting: the actor is the bearer credential and nothing else (Binding
+ * Constraint FR6). None of them touches the offline queue either - sorting is online-only, so a
+ * Category write that cannot be delivered fails loudly and the Board stays as it was
+ * (`docs/PRODUCT.md` → Anti-Goals).
+ */
+function categoryPath(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  categoryId?: string,
+): string {
+  const base = `/conferences/${conferenceId}/sessions/${sessionId}/rounds/${roundId}/categories`;
+  return categoryId === undefined ? base : `${base}/${categoryId}`;
+}
+
+/**
+ * What a Category write answers with: the row as it now stands, and a warning where there is one.
+ *
+ * `warning` rides a **success**. Two Categories on one Board may share a name - names are labels,
+ * not identifiers - so the server stores the duplicate and says so, and this surface shows the
+ * sentence rather than treating it as a refusal.
+ */
+export interface CategoryWritten {
+  category: { id: string; name: string; position: number };
+  warning?: string;
+}
+
+export async function createCategory(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  name: string,
+): Promise<CategoryWritten> {
+  return apiRequest<CategoryWritten>(categoryPath(conferenceId, sessionId, roundId), {
+    method: 'POST',
+    body: { name },
+  });
+}
+
+/** Renaming, moving in the order, or both. The server clamps a position outside the range. */
+export async function updateCategory(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  categoryId: string,
+  change: { name?: string; position?: number },
+): Promise<CategoryWritten> {
+  return apiRequest<CategoryWritten>(categoryPath(conferenceId, sessionId, roundId, categoryId), {
+    method: 'PATCH',
+    body: change,
+  });
+}
+
+/**
+ * Removing a Category, and where its Post-its go.
+ *
+ * `destinationCategoryId: null` is **Uncategorised** - the absence of a placement, sent as an
+ * absence rather than as a reserved id. Omitting `destination` altogether is the empty-Category
+ * case; against an occupied one the server refuses and names the count, which is what the surface
+ * turns into the "say where these go" prompt.
+ */
+export async function deleteCategory(
+  conferenceId: string,
+  sessionId: string,
+  roundId: string,
+  categoryId: string,
+  destination?: { categoryId: string | null },
+): Promise<void> {
+  await apiRequest<{ removed: boolean }>(
+    categoryPath(conferenceId, sessionId, roundId, categoryId),
+    {
+      method: 'DELETE',
+      body: destination === undefined ? {} : { destinationCategoryId: destination.categoryId },
+    },
+  );
 }

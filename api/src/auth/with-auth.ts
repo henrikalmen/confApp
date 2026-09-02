@@ -120,6 +120,20 @@ export const ANONYMOUS_ROUTES: readonly { method: string; url: string; because: 
       'would make sign-in impossible. It is not a trust decision: it verifies the resulting ' +
       'ID token through the same module every other route does before answering.',
   },
+  {
+    method: 'GET',
+    url: '/api/display/:token',
+    because:
+      'The projected Board (S04, FR7). A room machine has no Workspace session to present and ' +
+      'must not acquire one: signing in on shared hardware in a conference room is the exact ' +
+      'thing the Display Link exists to avoid. This is the FIRST anonymous route over domain ' +
+      "content - post-its carry their authors' names - so unlike the two above its cost is not " +
+      'bounded by the payload being empty. It is bounded by the token, which is 256 bits of ' +
+      'CSPRNG output derived from no Conference, Session, Round or Post-it identifier, and by ' +
+      "the scope, which is one Post-it Round's Board, read-only, dead once its Session day has " +
+      'passed or its Facilitator revokes it. It reaches no Vote data in any response it can ' +
+      'produce (ADR-006).',
+  },
 ];
 
 function isAnonymous(method: string, url: string): boolean {

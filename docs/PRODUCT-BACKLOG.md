@@ -22,14 +22,14 @@
 | REQ-012 | Attendees self-select their workshop group | Must | – | Planned |
 | REQ-013 | Attendees add post-it notes during a post-it round | Must | – | Planned |
 | REQ-014 | Post-its always display the author's name | Must | – | Planned |
-| REQ-015 | An organizer categorizes collected post-its by dragging them between categories | Must | – | Planned |
-| REQ-016 | An organizer can delete or discard a post-it | Must | – | Planned |
+| REQ-015 | An organizer categorizes collected post-its by dragging them between categories | Must | – | Clarified 2026-08-30 – `facilitator-board-and-categorisation`. Reinterpreted: not a separate later sorting pass but the same Board at a later moment; sorting is Facilitator-only and drag is one affordance, not the required interaction |
+| REQ-016 | An organizer can delete or discard a post-it | Must | – | Clarified 2026-08-30 – `facilitator-board-and-categorisation`. **Both halves are now covered**: Discard (Facilitator, leaves a trace, restorable until archival) and Permanent Removal (Admin, no trace, irreversible — the moderation path). Both distinct from an author deleting their own Post-it, which needs an open Round and leaves none |
 | REQ-017 | Voting is available in both presentations and workshops | Must | – | Planned |
 | REQ-018 | Votes are anonymous — unlinkable to the voter in storage, not merely hidden in the UI | Must | – | Planned |
 | REQ-019 | Voting supports live polls during a session | Must | – | Planned |
 | REQ-020 | Voting supports prioritizing post-its / ideas | Must | – | Planned |
 | REQ-021 | Voting supports feedback and rating on sessions | Should | – | Planned |
-| REQ-022 | A facilitator can project a big-screen board view of the post-its to the room | Must | – | Planned |
+| REQ-022 | A facilitator can project a big-screen board view of the post-its to the room | Must | – | Clarified 2026-08-30 – `facilitator-board-and-categorisation`. Read-only, any Post-it Round in either Session kind, reached by an unauthenticated revocable display link |
 | REQ-023 | A report is produced per conference for the owner and leadership | Must | – | Planned |
 | REQ-024 | The report carries action points, follow-ups, poll results, and workshop output | Must | – | Planned |
 | REQ-025 | Three roles are distinguished: Admin, Presenter/Facilitator, Attendee | Must | – | Planned |
@@ -41,6 +41,8 @@
 | REQ-035 | Sessions have a location | Must | – | Planned |
 | REQ-036 | A conference moves through draft → published → archived | Must | – | Planned |
 | REQ-037 | A published schedule can be edited, notifying affected attendees | Should | – | Planned |
+| REQ-031 | A Category is a named bucket on one Post-it Round's Board, created by the Facilitator during or after the Session | Must | – | Clarified 2026-08-30 – `facilitator-board-and-categorisation`. Resolved: per-Board definition is the whole story. Conference-level default sets are **rejected**, see `docs/OUT-OF-SCOPE.md` |
+| REQ-038 | A Board can be split into Categories, and Post-its placed into them | Must | – | Clarified 2026-08-30 – `facilitator-board-and-categorisation`. **The original "editable only while the Board holds no Post-its" clause is superseded**: the lock is keyed on Category occupancy, not Board occupancy, and rename/reorder are always free. "Column" is the layout, not the term |
 
 ## Active (Under Discussion)
 <!-- Requirements being refined or awaiting validation. -->
@@ -48,10 +50,8 @@
 | REQ-ID  | Description | Priority | Open Questions |
 |---------|-------------|----------|----------------|
 | REQ-030 | Report export format | Should | PDF, shareable in-app link, or both? |
-| REQ-031 | Post-it category definition | Must | Owner input 2026-08-29 answers this with a third option neither alternative anticipated: a category is a named **column on the Board**, defined on the Board itself during the Session rather than at conference setup or during a later sorting pass. See REQ-038, which carries the capability. Remaining question: do categories still need a conference-level default set, or is per-Board definition the whole story? |
 | REQ-032 | Workshop group capacity | Could | Do groups have size limits, and what happens when one is full? |
 | REQ-034 | Poll result visibility | Should | Can attendees see results, or only the facilitator and the report? |
-| REQ-038 | A Board can be split into named columns (categories), and Post-its placed into them. The Board's layout is editable during a Session **only while the Board holds no Post-its**. | Must | Owner-stated 2026-08-29 during the session-activities exec-plan run; recorded verbatim, not yet clarified. What happens to the layout once the first Post-it lands – locked for the Session, or unlocked again if the Board is emptied? Does a Post-it have to be in a column, or is there an uncategorised default? Does the contributor choose the column, or the Organizer place it afterwards? How does this relate to the deferred Organizer sorting pass, which assumed categorisation happened after collection? |
 
 ## Out of Scope
 <!-- Explicitly excluded requirements – useful to prevent scope creep. See `docs/PRODUCT.md` → Anti-Goals. -->

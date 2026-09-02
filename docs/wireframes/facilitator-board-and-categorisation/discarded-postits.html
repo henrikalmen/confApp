@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wireframe — Discarded post-its</title>
+    <style>
+      /*
+       * Grayscale structural wireframe. No colour, no external asset, no network request.
+       *
+       * A place, not a moment. The undo window for a Discard runs to archival
+       * (prd.md#fr4-discard-and-restore), so this cannot be a toast or a timed undo: it is a surface
+       * the Facilitator navigates to, and back to, at any point until the conference is archived.
+       */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #f5f5f5;
+        color: #222;
+        font-family: system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.45;
+        overflow-wrap: break-word;
+      }
+
+      .box {
+        background: #fff;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .wf-banner {
+        border: 2px dashed #999;
+        background: #ebebeb;
+        color: #444;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.8rem;
+        margin: 0 0 12px;
+      }
+
+      h1 {
+        font-size: 1.15rem;
+        margin: 0 0 2px;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 0;
+      }
+
+      .muted {
+        color: #666;
+        font-size: 0.82rem;
+      }
+
+      .btn {
+        font: inherit;
+        font-size: 0.82rem;
+        min-height: 44px;
+        padding: 0 12px;
+        border-radius: 6px;
+        border: 2px solid #999;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+        display: inline-block;
+        line-height: 40px;
+        text-decoration: none;
+      }
+      .btn--primary {
+        background: #666;
+        border-color: #666;
+        color: #fff;
+      }
+
+      /* The way back. Always here — this surface is reached and left deliberately. */
+      .backlink {
+        display: inline-block;
+        margin: 0 0 12px;
+        min-width: min(14rem, 100%);
+        text-align: center;
+      }
+
+      .head {
+        margin: 0 0 12px;
+      }
+
+      /*
+       * The three facts that shape this surface, stated on it rather than left to be discovered:
+       * where a restore puts a post-it, how long the window lasts, and that these post-its are
+       * absent from every other surface.
+       */
+      .rules {
+        border: 2px solid #999;
+        border-radius: 8px;
+        background: #ebebeb;
+        padding: 10px 12px;
+        margin: 0 0 14px;
+      }
+      .rules ul {
+        margin: 6px 0 0;
+        padding-left: 1.1rem;
+        font-size: 0.85rem;
+      }
+      .rules li {
+        margin: 0 0 4px;
+      }
+
+      .discarded {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+        gap: 10px;
+      }
+
+      .discarded__item {
+        min-width: 0;
+        border: 2px dashed #999;
+        border-radius: 6px;
+        background: #fafafa;
+        padding: 10px;
+      }
+      .discarded__text {
+        margin: 0;
+        font-size: 0.9rem;
+      }
+      .discarded__by {
+        margin: 4px 0 0;
+      }
+      /* Who discarded it and when — the trace that makes a Discard different from a deletion. */
+      .discarded__trace {
+        margin: 8px 0 0;
+        border-top: 2px dotted #ddd;
+        padding: 8px 0 0;
+      }
+      .discarded__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+      }
+      .discarded__actions .btn {
+        min-width: min(11rem, 100%);
+      }
+
+      .annotations {
+        margin: 16px 0 0;
+        border: 2px dashed #999;
+        border-radius: 8px;
+        background: #ebebeb;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        color: #444;
+      }
+      .annotations h2 {
+        font-size: 0.85rem;
+        margin: 0 0 6px;
+      }
+      .annotations ul {
+        margin: 0;
+        padding-left: 1.1rem;
+      }
+      .annotations li {
+        margin: 0 0 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <p class="wf-banner">
+      WIREFRAME — The Facilitator's discarded post-its. Validated at 375 / 768 / 1280 px. Grayscale
+      and structural; not a visual design.
+    </p>
+
+    <a class="btn backlink" href="facilitator-sorting.html">← Back to sorting this board</a>
+
+    <div class="head">
+      <h1>Discarded post-its</h1>
+      <p class="muted">
+        Autumn conference 2026 · Workshop: What slows us down · Post-it round “Ideas we should act on
+        next quarter” · 3 discarded
+      </p>
+    </div>
+
+    <main class="box">
+      <div class="rules">
+        <h2>What happens when you put one back</h2>
+        <ul>
+          <li>
+            A restored post-it returns to <strong>Uncategorised</strong> — never to the category it
+            was in. The discard decision is undone; the sorting decision is not assumed.
+          </li>
+          <li>
+            You can restore one <strong>at any time until this conference is archived</strong>. This
+            page keeps them until then; nothing here expires and there is no countdown.
+          </li>
+          <li>
+            While they are here they are on no other surface. They are not on the board, not on the
+            projected screen, not on anyone's phone, and not on their own author's — with no marker
+            and no notification anywhere.
+          </li>
+        </ul>
+      </div>
+
+      <ul class="discarded">
+        <li class="discarded__item">
+          <p class="discarded__text">asdfasdf</p>
+          <p class="muted discarded__by">Mia Holm</p>
+          <p class="muted discarded__trace">Discarded by Ana Ruiz · 12 Nov 2026, 14:32</p>
+          <p class="discarded__actions">
+            <button class="btn btn--primary" type="button">Restore to Uncategorised</button>
+          </p>
+        </li>
+
+        <li class="discarded__item">
+          <p class="discarded__text">test post ignore this one</p>
+          <p class="muted discarded__by">Jonas Lind</p>
+          <p class="muted discarded__trace">Discarded by Ana Ruiz · 12 Nov 2026, 14:33</p>
+          <p class="discarded__actions">
+            <button class="btn btn--primary" type="button">Restore to Uncategorised</button>
+          </p>
+        </li>
+
+        <li class="discarded__item">
+          <p class="discarded__text">
+            Same point as Priya's about the build — writing it twice doesn't make it truer.
+          </p>
+          <p class="muted discarded__by">Erik Sandberg</p>
+          <p class="muted discarded__trace">Discarded by Tomas Berg · 12 Nov 2026, 15:07</p>
+          <p class="discarded__actions">
+            <button class="btn btn--primary" type="button">Restore to Uncategorised</button>
+          </p>
+        </li>
+      </ul>
+    </main>
+
+    <div class="annotations">
+      <h2>Interaction notes (annotation, not part of the surface)</h2>
+      <ul>
+        <li>
+          <strong>This is a page, not an undo.</strong> It has an address, it is linked from the
+          sorting surface's toolbar whether or not anything was just discarded, and it can be left
+          and returned to. Nothing on it disappears on a timer.
+        </li>
+        <li>
+          <strong>Every entry carries its trace</strong> — who discarded it and when — beside the
+          post-it's own author. That trace is the whole difference between a Discard and an author
+          deleting their own post-it, which leaves nothing at all.
+        </li>
+        <li>
+          <strong>Restore is per post-it and states its destination in the control itself</strong>,
+          so the rule that a restore goes to Uncategorised is read before it is exercised, not
+          discovered afterwards.
+        </li>
+        <li>
+          <strong>Permanent removal is offered here, to an admin only.</strong> Amended 2026-08-31
+          (see <code>design-decisions.md</code> &rarr; &ldquo;The discarded Post-its surface&rdquo;
+          &rarr; the 2026-08-31 amendment). This wireframe was drawn on 2026-08-30, when the settled
+          decision was that no permanent-removal control appears here, and it is left as drawn. The
+          shipped surface renders a per-post-it permanent-removal control beside – never
+          instead of – the restore control, gated on the server-supplied
+          <code>canRemovePermanently</code> flag: a facilitator without conference-wide admin is
+          answered <code>false</code> and sees exactly the page drawn here. The reason for the
+          change is that discarded post-its had left the board, so the only route to removing one
+          was to restore it first, putting the content back in front of the room in order to take
+          it away.
+        </li>
+      </ul>
+    </div>
+  </body>
+</html>

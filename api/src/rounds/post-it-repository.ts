@@ -1,4 +1,5 @@
 import type { Database, Queryable } from '../db.ts';
+import { NOT_DISCARDED } from './post-it-discard-repository.ts';
 import { instantExpression } from '../sessions/wall-clock-time.ts';
 
 /**
@@ -66,6 +67,18 @@ export interface PostIt {
    * Post-it as an ordinary contribution, with this `false`.
    */
   arrivedAfterClose: boolean;
+  /**
+   * Where it sits on the Board: the Category holding it, or `null` for **Uncategorised**.
+   *
+   * `null` is not a sentinel and names nothing. Uncategorised is the *state of having no
+   * placement* (`prd.md#fr2-the-uncategorised-holding-area`), which is why there is no id, no
+   * reserved value and no row for it anywhere - and why a Post-it that has never been sorted needs
+   * no write at all to be in it.
+   *
+   * It does not reach the wire. The Board read groups by it server-side and sends Categories with
+   * their Post-its, so no client re-derives the grouping and the Post-it wire shape is unchanged.
+   */
+  categoryId: string | null;
 }
 
 interface PostItRow {
@@ -77,6 +90,7 @@ interface PostItRow {
   created_at: string;
   edited_at: string | null;
   arrived_after_close: boolean;
+  category_id: string | null;
 }
 
 /**
@@ -92,6 +106,31 @@ export type PostItWriteOutcome =
   | { outcome: 'missing' }
   | { outcome: 'not-author' }
   | { outcome: 'round-closed' };
+
+/**
+ * What a placement did, or why it matched nothing (S03 FR3).
+ *
+ * Its own union rather than a reuse of `PostItWriteOutcome`, because the two writes refuse for
+ * different reasons and a shared union would carry members neither of them can produce. A placement
+ * is never refused for authorship - it is not the author's write - and never for the Round being
+ * closed, because sorting is exactly what happens *after* a Round closes
+ * (`prd.md#fr3-placing-post-its-into-categories`).
+ *
+ * `destination-missing` is the cross-Board refusal and the vanished-Category one, which are the same
+ * sentence: the Category named is not on this Post-it's Board.
+ *
+ * `discarded` is S05's, and it is a **third** member rather than a reuse of either of the other two.
+ * A Facilitator whose stale Board still shows a Post-it somebody has discarded has a next move
+ * nobody else has - restore it first (FR3 -> Validation) - and folding it into
+ * `destination-missing` would tell them their perfectly valid destination is not on the board.
+ * Returned rather than thrown so the error envelope stays in the route, where the rest of this API's
+ * refusals are built.
+ */
+export type PlacementOutcome =
+  | { outcome: 'written'; postIt: PostIt }
+  | { outcome: 'missing' }
+  | { outcome: 'discarded' }
+  | { outcome: 'destination-missing' };
 
 /**
  * Why a contribution matched no Round to hang off - or why it needed no Round at all.
@@ -144,6 +183,16 @@ export interface PostItRepository {
    * Session and everything in it.
    */
   listForSession(conferenceId: string, sessionId: string): Promise<Map<string, PostIt[]>>;
+  /**
+   * One Board's Post-its, oldest first - the order `post_it_by_round` already carries.
+   *
+   * The Session read never uses this; it asks `listForSession` once for every Board at once. This
+   * exists for the Display Link resolution route, which is scoped to one Round and must read
+   * exactly that. On confApp's only anonymous route "scoped" is an acceptance property, so the
+   * narrowing is the statement's own predicate rather than a filter applied to a wider result
+   * (S04, FR7 -> NFR).
+   */
+  listForRound(conferenceId: string, roundId: string): Promise<PostIt[]>;
   contribute(
     conferenceId: string,
     sessionId: string,
@@ -167,6 +216,22 @@ export interface PostItRepository {
     postItId: string,
     authorSub: string,
   ): Promise<PostItWriteOutcome>;
+  /**
+   * Where a Post-it sits on its Board: a Category of **this** Round, or `null` for Uncategorised.
+   *
+   * **No `sub` parameter, and that is the point.** Placement is not attributed to anybody: there is
+   * no actor column on `post_it` for one to reach and no argument here one could arrive through, so
+   * "the actor is the credential" is a property of the seam rather than a rule the route remembers
+   * (Binding Constraint FR6). Who *may* place is the route's question and is answered by the
+   * sorting-authority gate before this is called.
+   */
+  place(
+    conferenceId: string,
+    sessionId: string,
+    roundId: string,
+    postItId: string,
+    categoryId: string | null,
+  ): Promise<PlacementOutcome>;
 }
 
 /**
@@ -184,6 +249,7 @@ const COLUMNS = [
   instantExpression('p.created_at', 'created_at'),
   instantExpression('p.edited_at', 'edited_at'),
   'p.arrived_after_close',
+  'p.category_id',
 ].join(', ');
 
 function toPostIt(row: PostItRow): PostIt {
@@ -196,6 +262,7 @@ function toPostIt(row: PostItRow): PostIt {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     arrivedAfterClose: row.arrived_after_close,
+    categoryId: row.category_id,
   };
 }
 
@@ -235,7 +302,47 @@ export function createPostItRepository(db: Database): PostItRepository {
     return { outcome: 'missing' };
   }
 
-  /** The one row a write produced, with its author's name joined on. */
+  /**
+   * Why a placement matched nothing, asked once and only after it did.
+   *
+   * A *diagnosis*, never a pre-check, exactly as `diagnose` above is: the write has already failed
+   * to match by the time this runs, so nothing it reads can change what was written. Two conditions
+   * can have refused it and they are two different sentences - the Post-it is not on this Board, or
+   * the destination Category is not. Asking which afterwards is what keeps both out of the
+   * statement's own predicate as separate round trips.
+   *
+   * The destination is deliberately not re-read here. If the Post-it is on the Board and carries no
+   * Discard, the only other conjunct that could have refused is the destination - and re-reading it
+   * would only be able to disagree with the snapshot the write already took.
+   *
+   * **This is the second of the placement path's two refusal sites, and it moves with the first.**
+   * Before S05 it answered `destination-missing` for *every* case in which the `post_it` row was
+   * found, which was exact while identity and destination were the only conjuncts. Adding the
+   * not-discarded conjunct to the write without adding this branch would make a discarded Post-it
+   * match no rows while this SELECT still found it, and the Facilitator would be told "that category
+   * is not on this board" about a destination that was perfectly valid. The two sites are one rule
+   * and are changed together; the test that names the discarded case explicitly is what holds them
+   * together, because neither `tsc` nor the structure guards can.
+   */
+  async function diagnosePlacement(
+    conferenceId: string,
+    sessionId: string,
+    roundId: string,
+    postItId: string,
+  ): Promise<PlacementOutcome> {
+    const rows = await db.query<{ discarded: boolean }>(
+      `select not (${NOT_DISCARDED}) as discarded
+         from post_it p
+         join round r on r.id = p.round_id
+        where p.id = $4 and p.round_id = $3 and p.conference_id = $1
+          and r.session_id = $2 and r.kind = 'PostItRound'`,
+      [conferenceId, sessionId, roundId, postItId],
+    );
+    const row = rows[0];
+    if (row === undefined) return { outcome: 'missing' };
+    return row.discarded ? { outcome: 'discarded' } : { outcome: 'destination-missing' };
+  }
+
   /**
    * Runs a write whose foreign keys point at a Round, and treats that Round disappearing underneath
    * it as "no rows" rather than as an error.
@@ -257,6 +364,37 @@ export function createPostItRepository(db: Database): PostItRepository {
     }
   }
 
+  /**
+   * Runs the placement write, and treats the destination Category vanishing underneath it as "no
+   * rows" rather than as an error.
+   *
+   * SQLSTATE 23503 on `post_it_placed_on_its_own_round` means exactly one thing here: the Category
+   * was on this Board when the statement's predicate was evaluated and gone by the time the
+   * constraint was checked - an Organizer removing a Category while a Facilitator sorts into it,
+   * which is an ordinary race in a room with two devices in it. Routing it to no rows lets the
+   * diagnosis above produce the sentence that is true either way; the alternative was an unmapped
+   * 23503 reaching the error handler as `INTERNAL_ERROR`, which tells a Facilitator the API broke.
+   *
+   * **Matched on the constraint name, not on the SQLSTATE alone.** Other rules in this schema raise
+   * 23503 and mean different things - the Round disappearing, for one - and matching the class while
+   * guessing the rule is how a refusal comes to name the wrong thing.
+   */
+  async function placeOrDiagnose<T>(write: () => Promise<T[]>): Promise<T[]> {
+    try {
+      return await write();
+    } catch (error) {
+      const violation = (error ?? {}) as { code?: unknown; constraint?: unknown };
+      if (
+        violation.code === '23503' &&
+        violation.constraint === 'post_it_placed_on_its_own_round'
+      ) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /** The one row a write produced, with its author's name joined on. */
   async function hydrate(id: string): Promise<PostIt | null> {
     const rows = await db.query<PostItRow>(
       `select ${COLUMNS} from post_it p join app_user u on u.sub = p.author_sub where p.id = $1`,
@@ -268,12 +406,24 @@ export function createPostItRepository(db: Database): PostItRepository {
 
   return {
     async listForSession(conferenceId: string, sessionId: string): Promise<Map<string, PostIt[]>> {
+      /*
+       * **A discarded Post-it is not on this Board, for anybody** - including its own author, who
+       * finds it simply absent with no marker and no notification (S05 FR4). The exclusion is the
+       * statement's own anti-join and not a filter applied afterwards, so the counts the Board
+       * projection computes are counts of what is actually there: a handler that dropped rows after
+       * reading them would have to be repeated on every surface, and the first one to forget would
+       * put a discarded idea back in front of the room.
+       *
+       * `NOT_DISCARDED` is the single definition, shared with `listForRound` below and with the
+       * placement predicate that refuses to move one (`post-it-discard-repository.ts`).
+       */
       const rows = await db.query<PostItRow>(
         `select ${COLUMNS}
            from post_it p
            join app_user u on u.sub = p.author_sub
            join round r on r.id = p.round_id
           where p.conference_id = $1 and r.session_id = $2
+            and ${NOT_DISCARDED}
           order by p.created_at, p.id`,
         [conferenceId, sessionId],
       );
@@ -286,6 +436,23 @@ export function createPostItRepository(db: Database): PostItRepository {
         else existing.push(postIt);
       }
       return byRound;
+    },
+
+    async listForRound(conferenceId: string, roundId: string): Promise<PostIt[]> {
+      // Same projection and same order as the Session-wide read above - including the
+      // `app_user` join that supplies the author's display name, which is what the room reads, and
+      // the Discard exclusion, which is why a discarded Post-it is absent from the projected screen
+      // as well as from every phone (S05 TI05; S07 consumes this rather than filtering again).
+      const rows = await db.query<PostItRow>(
+        `select ${COLUMNS}
+           from post_it p
+           join app_user u on u.sub = p.author_sub
+          where p.conference_id = $1 and p.round_id = $2
+            and ${NOT_DISCARDED}
+          order by p.created_at, p.id`,
+        [conferenceId, roundId],
+      );
+      return rows.map(toPostIt);
     },
 
     async contribute(
@@ -475,7 +642,23 @@ export function createPostItRepository(db: Database): PostItRepository {
       /*
        * Both guards inside the UPDATE's predicate: `p.author_sub = $5` and `r.state = 'open'`.
        * Neither is checked in the route first, so neither carries a round-trip window - the check
-       * *is* the write. The one-statement residual the module note sets out applies here too and is
+       * *is* the write.
+       *
+       * **There is deliberately no not-discarded condition here, and the omission is a decision
+       * rather than an oversight** (owner, 2026-08-31; S05 review). `place` refuses a discarded
+       * Post-it and `remove` does not, and `edit` follows `remove`: an author owns their own words
+       * whether or not a Facilitator has set the Post-it aside, exactly as an author's deletion
+       * already wins its race against a Discard. The consequence is accepted rather than hidden -
+       * an author whose client read the Board before the Discard can still commit a correction, so
+       * the text in the Facilitator's discarded list, and the text a restore puts back in front of
+       * the room, can change under them. The alternative was refusing the edit for consistency with
+       * `place`; author ownership was judged the stronger rule, since the Post-it is still the
+       * author's and Discard is not deletion. Pinned by
+       * `api/test/discard.integration.test.ts` ("lets the author correct a discarded post-it, and
+       * the discarded list shows the new text"), which asserts all four halves: the edit returns
+       * 200, the discarded list shows the new text, the Post-it is not restored, and no Board read
+       * returns it.
+       * The one-statement residual the module note sets out applies here too and is
        * accepted for the same reasons: a close committing during this statement is outside its
        * snapshot, and the locks that would change that either do not conflict with a close or
        * deadlock two people editing one Round.
@@ -549,6 +732,98 @@ export function createPostItRepository(db: Database): PostItRepository {
       }
       return { outcome: 'removed' };
     },
+
+    async place(
+      conferenceId: string,
+      sessionId: string,
+      roundId: string,
+      postItId: string,
+      categoryId: string | null,
+    ): Promise<PlacementOutcome> {
+      /*
+       * **One guarded statement, whose predicate is a flat conjunction of independently named
+       * placement conditions.** That shape is the extension point this story owes its successors
+       * (S03 -> Architecture Decision): a later refusal is one more conjunct appended here, with no
+       * restructuring of the statement, no second guard site and no pre-check read. S05 appends the
+       * not-discarded condition - an anti-join or `NOT EXISTS` against `post_it_discard`, consistent
+       * with the read-exclusion mechanism it establishes. A discarded Post-it cannot be placed;
+       * restore it first (FR3 -> Validation), and that rule lands here.
+       *
+       * **"Nothing else moves" is not quite true, and the exception is load-bearing.** The
+       * predicate is one of *two* sites: `diagnosePlacement` decides which refusal a zero-row
+       * result gets, and it answers `destination-missing` for **every** case in which the
+       * `post_it` row is still found. Append the not-discarded conjunct here alone and a
+       * discarded Post-it matches no rows while the diagnosis SELECT still finds it, so the
+       * caller is refused with `CATEGORY_NOT_FOUND` - "that category is not on this board" - about
+       * a destination that was perfectly valid. `PlacementOutcome` also carries no member for the
+       * discarded case, so S05 widens the union as well. Neither `tsc`, `eslint` nor the structure
+       * guards catch this: the structure test asserts only the predicate's conjuncts.
+       *
+       * The three conditions in force today:
+       *
+       *   - **identity** - this Post-it, on this Round, of this Session, in this Conference;
+       *   - **the destination is a Category of this Round's own Board** - checked in the statement
+       *     rather than by a read taken first, so two replicas cannot each pass it. The composite
+       *     foreign key `post_it_placed_on_its_own_round` is the guarantee underneath, and a
+       *     destination deleted between this statement's snapshot and its constraint check is
+       *     caught below rather than surfacing as an internal error;
+       *   - **the Post-it is still placeable** - which since S05 means it carries no Discard trace.
+       *     `NOT_DISCARDED` is the *same* fragment every Board read excludes through
+       *     (`post-it-discard-repository.ts`), so "invisible" and "unplaceable" cannot drift apart:
+       *     a Post-it that is off the Board cannot be moved on it, and a Facilitator working from a
+       *     Board read taken a moment before the Discard is refused by this predicate rather than by
+       *     a read taken first. Without it a Post-it could be placed while invisible and a later
+       *     restore would hand it back to that Category - which FR4 and OC02 forbid.
+       *
+       * **Deliberately absent, and each absence is a rule.** No author condition: sorting is not
+       * the author's write, and a Facilitator places other people's ideas. No Round-state
+       * condition: placement is permitted while the Round is open, after it closes, and after a
+       * reopen (FR3), so there is nothing to compare `r.state` against. No version predicate:
+       * concurrent placements are **last write wins per Post-it with no conflict UI**
+       * (`prd.md#edge-cases`), so optimistic concurrency is the wrong tool here even though
+       * `docs/LEARNINGS.md#concurrency` is right about where it would belong if it were needed.
+       *
+       * **And no "currently somewhere else" condition**, which is the trap this write is easiest to
+       * get wrong. A statement conditioned on the Post-it not already being in the destination
+       * matches zero rows on a repeat - indistinguishable from "the Post-it is gone" - where FR3
+       * says the repeat **succeeds**. The row is written either way; the requested end state is the
+       * one that holds.
+       *
+       * The `AFTER UPDATE` trigger on this table advances the Round's activity watermark, so a
+       * placement reaches every open Board on the next tick of the one shared poll. There is no
+       * second cursor and no trigger of this story's own.
+       */
+      const placed = await placeOrDiagnose(() =>
+        db.query<{ id: string }>(
+          `update post_it p
+              set category_id = $5::uuid
+             from round r
+            where p.id = $4 and p.round_id = $3 and p.conference_id = $1
+              and r.id = p.round_id and r.session_id = $2 and r.kind = 'PostItRound'
+              and ($5::uuid is null
+                   or exists (select 1 from category c
+                               where c.id = $5::uuid and c.round_id = p.round_id))
+              and ${NOT_DISCARDED}
+           returning p.id`,
+          [conferenceId, sessionId, roundId, postItId, categoryId],
+        ),
+      );
+
+      const row = placed[0];
+      if (row === undefined) {
+        return diagnosePlacement(conferenceId, sessionId, roundId, postItId);
+      }
+
+      const postIt = await hydrate(row.id);
+      /*
+       * Placed, and gone before it could be read back - its author removed it from another device
+       * between the two statements. `missing` is the honest answer and the route already has the
+       * sentence for it: the Post-it is not where the caller thinks it is, which is what the Board
+       * re-read the surface makes next will find anyway.
+       */
+      if (postIt === null) return { outcome: 'missing' };
+      return { outcome: 'written', postIt };
+    },
   };
 }
 
@@ -565,6 +840,27 @@ export function createPostItRepository(db: Database): PostItRepository {
  *
  * The Round's own open/closed state is deliberately not a condition. A closed Post-it Round still
  * holds its Board, and that Board is exactly what the deletion guard exists to protect.
+ *
+ * **Neither is a Discard, and that is a decision rather than an omission (S05 TI07, FR4).** A
+ * Facilitator's Discard takes a Post-it off every Board and leaves its text, its author and its
+ * attribution entirely intact, restorable until the Conference is archived - so a Session whose only
+ * Post-it is discarded still holds a named colleague's contribution, and deleting the Session would
+ * destroy something recoverable with no way back. It therefore still counts and still refuses the
+ * deletion.
+ *
+ * **A Permanent Removal is the counter-case, and it needs no condition here (S06 TI06, FR5).** An
+ * Admin's permanent removal takes the `post_it` row itself, so the count falls because there is
+ * nothing left to count - the Session that held one permanently removed Post-it becomes deletable
+ * again, while the Session that held one merely discarded still refuses. Two opposite answers from
+ * one unconditional count, which is precisely why neither act is named in this statement: adding a
+ * state condition for either would be a second definition of "still holds something worth
+ * protecting". Both halves are pinned by test (`permanent-removal.integration.test.ts`).
+ *
+ * The delivery record chose the **opposite** for a withdrawn submission
+ * (`db/migrations/20260901090000000_post-it-delivery-record.sql` -> "Not a contribution"), and the
+ * two are the same rule applied to different facts: there the `post_it` row is already gone and
+ * nothing remains to protect, here the row is still there in full. Pinned by test so a later state
+ * condition cannot be added silently.
  */
 export async function countPostItsForSession(
   tx: Queryable,

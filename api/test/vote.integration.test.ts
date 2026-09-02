@@ -108,7 +108,9 @@ interface WireRound {
   options?: WireOption[];
   hasVoted?: boolean;
   tally?: { optionId: string; votes: number }[];
-  postIts?: unknown[];
+  /** A Post-it Round's Board, grouped (facilitator-board S02). Never present on a Poll. */
+  categories?: unknown[];
+  uncategorised?: unknown;
 }
 
 interface SessionPayload {

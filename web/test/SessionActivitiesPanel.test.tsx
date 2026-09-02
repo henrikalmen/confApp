@@ -71,6 +71,7 @@ function payload(
     },
     rounds,
     canRun,
+    canRemovePermanently: false,
     activityWatermark,
   };
 }

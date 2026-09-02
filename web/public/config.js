@@ -10,6 +10,11 @@
 // configured, which is a clearer first-run experience than a redirect to Google that fails.
 window.__CONFAPP_CONFIG__ = {
   apiBaseUrl: '/api',
+  // Where a *room machine* reaches this SPA, for building Display Link URLs (S04).
+  // Empty is correct for a browser served at this origin - it can name itself. The
+  // Capacitor shells (S11) must set it: their WebView origin is capacitor://localhost
+  // or https://localhost, which no other machine can open.
+  webBaseUrl: '',
   auth: {
     clientId: '',
     hostedDomain: '',
