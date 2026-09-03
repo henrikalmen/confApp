@@ -1,0 +1,15 @@
+# Shell scripts are executed inside Linux containers, so they must be checked out with LF
+# whatever the host does.
+#
+# `core.autocrlf=true` is the default on Windows here, and with no rule it rewrote
+# `web/docker-entrypoint.d/40-runtime-config.sh` to CRLF on checkout. The kernel then looks for
+# an interpreter named `/bin/sh\r`, nginx's entrypoint reports "not found", and the web container
+# restart-loops with exit 127 - while `git status` stays clean, because the index holds LF and the
+# conversion is exactly what autocrlf is supposed to do. Cost a rebuilt stack to find (2026-09-03).
+*.sh    text eol=lf
+*.envsh text eol=lf
+
+# Same reason: read by the container's shell, not by a Windows editor.
+Dockerfile      text eol=lf
+*.template      text eol=lf
+docker-compose*.yml text eol=lf
