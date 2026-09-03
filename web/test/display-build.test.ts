@@ -206,6 +206,40 @@ describe('the served image', () => {
     expect(patterns.some((x) => /api/i.test(x) && /display/i.test(x))).toBe(true);
   });
 
+  /*
+   * The token must not reach the container's **error** log either, and that is a separate
+   * mechanism from the access log above.
+   *
+   * `log_format` applies only to the access log; `error_log` takes no format and no variables,
+   * so the redacting map cannot reach it. With the API unreachable, nginx writes at `[error]`
+   * level `connect() failed ... request: "GET /api/display/<token> HTTP/1.1", upstream:
+   * "http://api:8080/api/display/<token>"` - the live credential twice in one line, once per
+   * poll from every room machine, for as long as the outage lasts. Confirmed against a real
+   * `nginx:alpine` with a refusing upstream before the directive was added, and confirmed silent
+   * after (gap review 2026-09-02, G30).
+   *
+   * Raising the level is the only lever available, so the level is what this asserts. The
+   * directive itself went in without a test, which meant deleting the line left the whole suite
+   * green - the gap this closes (gap re-review 2026-09-02).
+   */
+  it('silences the served image’s error log above crit, where the token cannot be redacted', () => {
+    const template = readFileSync(join(webRoot, 'nginx', 'default.conf.template'), 'utf8');
+
+    const directive = /error_log\s+\S+\s+(\w+);/.exec(template);
+    expect(directive, 'an explicit error_log directive should be declared').not.toBeNull();
+
+    /*
+     * nginx orders these emerg < alert < crit < error < warn < notice < info < debug, and logs
+     * the named level *and above*. Anything from `error` down still writes the request line, so
+     * only the three above it will do. Asserted as a set rather than as the literal 'crit' so a
+     * deliberate move to `alert` is not a false failure.
+     */
+    expect(['crit', 'alert', 'emerg']).toContain(directive![1]);
+
+    // At server level, so a location added later cannot inherit a noisier default by omission.
+    const server = /server\s*{[\s\S]*}/.exec(template)?.[0] ?? template;
+    expect(server, 'the directive belongs inside the server block').toContain('error_log');
+  });
   it('routes the display prefix ahead of the SPA fallback and behind the API proxy', () => {
     const template = readFileSync(join(webRoot, 'nginx', 'default.conf.template'), 'utf8');
 

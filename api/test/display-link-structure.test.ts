@@ -427,37 +427,64 @@ describe('the display link reaches no vote data', () => {
       [...source.matchAll(/`([^`]*)`/g)].map((m) => m[1]!);
 
     /*
-     * A quoted string is only treated as SQL if it opens like a statement.
+     * A quoted string counts as SQL when it **references a table**, which is precisely what this
+     * guard is looking for.
      *
-     * Widening to every quoted string is what closes G31, and it also drags in prose:
-     * `errors.ts` carries "Your sign-in did not come from Google.", which read as SQL names
-     * a table called `google`. Requiring a leading statement verb keeps the three
-     * single-quoted statements in `category-repository.ts` - they start `select` and
-     * `update` - and drops sentences that merely contain the word "from". Backticked strings
-     * stay unfiltered, exactly as before, so this narrows only the half that is new.
+     * The first attempt required a leading statement verb. That excluded the prose it was written
+     * to exclude, and also every SQL *fragment* - including the codebase's own `NOT_DISCARDED`
+     * in `post-it-discard-repository.ts`, a single-quoted `not exists (select 1 from
+     * post_it_discard ...)` sitting on this route's reachable closure. A guard blind to the
+     * fragments its own modules are built from is worse than no guard, because it reads as one
+     * (gap re-review 2026-09-02, G31).
+     *
+     * The match is deliberately **case-sensitive**: SQL identifiers in this codebase are lower
+     * snake_case, while prose capitalises its nouns. That is what separates `from post_it_discard`
+     * from `errors.ts`'s "Your sign-in did not come from Google." without needing an exception.
      */
+    const REFERENCES_A_TABLE = /\b(from|join|into|update)\s+[a-z_][a-z0-9_]*\b/;
     const quotedSql = (source: string): string[] =>
       [...source.matchAll(/'([^'\n]*)'/g), ...source.matchAll(/"([^"\n]*)"/g)]
         .map((m) => m[1]!)
-        .filter((text) => /^\s*(with|select|insert\s+into|update|delete\s+from)\b/i.test(text));
-
+        .filter((text) => REFERENCES_A_TABLE.test(text));
     const statementsIn = (source: string): string[] => [
       ...backticked(source),
       ...quotedSql(source),
     ];
 
     /*
-     * The extractor's own self-test: a guard that silently stopped finding statements would go
-     * green by reading nothing, which is the failure mode this whole family is prone to.
+     * The quoted extractor's own self-test, asserted against `quotedSql` and never against the
+     * combined `statementsIn`.
+     *
+     * The previous version asked whether `statementsIn` could see `from category` in
+     * `category-repository.ts`. It could - from seven *backticked* statements in the same file -
+     * so deleting the entire quoted half, a complete revert of the fix this test exists to
+     * protect, left it green. A self-test that passes without the thing it tests is worse than
+     * none (gap re-review 2026-09-02, G31).
+     *
+     * Both shapes are pinned: a single-quoted whole statement, and a single-quoted *fragment*
+     * with no leading verb, which is the case the first fix was blind to.
      */
     const categoryRepository = withoutComments(
       readFileSync(join(apiSrc, 'rounds', 'category-repository.ts'), 'utf8'),
     );
+    const discardRepository = withoutComments(
+      readFileSync(join(apiSrc, 'rounds', 'post-it-discard-repository.ts'), 'utf8'),
+    );
     expect(
-      statementsIn(categoryRepository).some((sql) => /\bfrom category\b/i.test(sql)),
-      'the extractor must see single-quoted SQL in category-repository.ts',
+      quotedSql(categoryRepository).some((sql) => /from category/.test(sql)),
+      'the quoted extractor must see a single-quoted statement',
     ).toBe(true);
-
+    /*
+     * Asserted through `statementsIn`, not `quotedSql`, and that distinction is the point: a test
+     * that only exercises the quoted extractor still passes when nothing calls it. This string
+     * exists in the codebase exactly once, single-quoted, and in no backticked statement - so it
+     * can only be found if the quoted half is actually wired into the combined extractor.
+     */
+    const quotedOnly = 'not exists (select 1 from post_it_discard';
+    expect(
+      statementsIn(discardRepository).some((sql) => sql.includes(quotedOnly)),
+      'the quoted extractor must be wired in, and must see a fragment with no leading verb',
+    ).toBe(true);
     const named = new Map<string, string>();
     for (const path of reachableFromDisplayRoute()) {
       const source = withoutComments(readFileSync(path, 'utf8'));

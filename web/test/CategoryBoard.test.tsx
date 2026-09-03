@@ -297,19 +297,51 @@ describe('the facilitator’s categories and the uncategorised holding area', ()
   it('names the category each management control acts on, in the accessibility tree', async () => {
     await renderPanel(only(payload([round([TOOLING, PROCESS], [WAITING])])));
 
-    for (const name of ['Tooling', 'Process']) {
-      expect(screen.getByRole('button', { name: `Rename the category “${name}”` })).not.toBeNull();
-      expect(screen.getByRole('button', { name: `Move the category “${name}” up` })).not.toBeNull();
-      expect(
-        screen.getByRole('button', { name: `Move the category “${name}” down` }),
-      ).not.toBeNull();
-      expect(screen.getByRole('button', { name: `Remove the category “${name}”` })).not.toBeNull();
+    /*
+     * Two properties at once, and the second is the one a previous fix broke.
+     *
+     * The name must identify the Category - four controls per region reading "Rename"/"Move up"
+     * on every region is what the assistive-technology criterion was failing on. And the name
+     * must *contain the visible text*, because an `aria-label` replaces it: labelling the button
+     * "Move the category X up" meant a screen-reader user stopped hearing "to position 3", the
+     * destination the wireframe decision requires be announced. WCAG 2.5.3, Label in Name.
+     */
+    for (const [id, name] of [
+      ['cat-tooling', 'Tooling'],
+      ['cat-process', 'Process'],
+    ] as const) {
+      for (const control of [
+        `category-rename-${id}`,
+        `category-up-${id}`,
+        `category-down-${id}`,
+        `category-remove-${id}`,
+      ]) {
+        const button = screen.getByTestId(control);
+        const accessibleName = button.getAttribute('aria-label') ?? button.textContent ?? '';
+        const visible = (button.textContent ?? '').trim();
+
+        // Identifies which Category it acts on.
+        expect(accessibleName, control).toContain(name);
+        // And still speaks the words on the button, destination position included.
+        expect(accessibleName, `${control} must contain its visible text`).toContain(visible);
+      }
     }
 
     /*
-     * `getByRole` throws on more than one match, so the loop above already proves the names are
-     * unique across a two-Category board - which is the property that was missing.
+     * The position each move announces is part of the visible text, so it has to survive into
+     * the accessible name. Asserted explicitly rather than left to the containment check above,
+     * because that check would still pass if the button rendered no position at all.
      */
+    expect(screen.getByTestId('category-down-cat-tooling').getAttribute('aria-label')).toContain(
+      'to position 2',
+    );
+    expect(screen.getByTestId('category-up-cat-process').getAttribute('aria-label')).toContain(
+      'to position 1',
+    );
+
+    // Unique across the board: getByRole throws when a name matches more than one element.
+    expect(screen.getByRole('button', { name: 'Rename – Tooling' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Rename – Process' })).not.toBeNull();
   });
   it('offers no category control at all to a viewer the server says does not run the session', async () => {
     await renderPanel(only(payload([round([TOOLING], [WAITING])], false)));

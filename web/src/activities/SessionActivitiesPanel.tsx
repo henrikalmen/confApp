@@ -2407,6 +2407,24 @@ function Board({
           const first = index === 0;
           const last = index === categories.length - 1;
           const busy = writeInFlight(`category:${category.id}`);
+
+          /*
+           * The button's visible words, hoisted so the accessible name can be built *from* them.
+           *
+           * An `aria-label` replaces the visible text rather than adding to it, so labelling
+           * these `Move the category "Tooling" up` stopped a screen reader from ever hearing
+           * `to position 3` - the destination the wireframe decision requires be announced. That
+           * is WCAG 2.5.3 (Label in Name, Level A), and it was introduced by the fix that added
+           * the category name (gap re-review 2026-09-02, G03). Deriving both from one value is
+           * what keeps them in step through the busy and first/last states, where the visible
+           * text changes and a hand-written label would quietly stop matching.
+           */
+          const upText = busy ? 'Moving…' : first ? 'Move up' : `Move up – to position ${index}`;
+          const downText = busy
+            ? 'Moving…'
+            : last
+              ? 'Move down'
+              : `Move down – to position ${index + 2}`;
           const renaming = categoryEditor?.categoryId === category.id;
           const removing = categoryRemoval?.categoryId === category.id;
 
@@ -2435,7 +2453,7 @@ function Board({
                     className="button"
                     type="button"
                     data-testid={`category-rename-${category.id}`}
-                    aria-label={`Rename the category “${category.name}”`}
+                    aria-label={`Rename – ${category.name}`}
                     onClick={() =>
                       onCategoryEditorChange({
                         categoryId: category.id,
@@ -2459,7 +2477,7 @@ function Board({
                     className="button"
                     type="button"
                     data-testid={`category-up-${category.id}`}
-                    aria-label={`Move the category “${category.name}” up`}
+                    aria-label={`${upText} – ${category.name}`}
                     aria-disabled={first ? 'true' : undefined}
                     disabled={busy}
                     onClick={() => {
@@ -2467,13 +2485,13 @@ function Board({
                       onMoveCategory(category.id, index);
                     }}
                   >
-                    {busy ? 'Moving…' : first ? 'Move up' : `Move up – to position ${index}`}
+                    {upText}
                   </button>
                   <button
                     className="button"
                     type="button"
                     data-testid={`category-down-${category.id}`}
-                    aria-label={`Move the category “${category.name}” down`}
+                    aria-label={`${downText} – ${category.name}`}
                     aria-disabled={last ? 'true' : undefined}
                     disabled={busy}
                     onClick={() => {
@@ -2481,7 +2499,7 @@ function Board({
                       onMoveCategory(category.id, index + 2);
                     }}
                   >
-                    {busy ? 'Moving…' : last ? 'Move down' : `Move down – to position ${index + 2}`}
+                    {downText}
                   </button>
                   {/*
                    * An empty Category goes with no prompt; an occupied one opens the destination
@@ -2492,7 +2510,7 @@ function Board({
                     className="button"
                     type="button"
                     data-testid={`category-remove-${category.id}`}
-                    aria-label={`Remove the category “${category.name}”`}
+                    aria-label={`Remove – ${category.name}`}
                     disabled={busy}
                     onClick={() => {
                       if (category.postItCount === 0) {
